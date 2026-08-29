@@ -56,6 +56,9 @@ def build_envelope(
         for span in finished
         for event in span.events
     ]
+    plan = session.plan.model_dump(mode="json") if session.plan else {}
+    if "goal" in plan:
+        plan["goal"] = telemetry.protect_content("plan_goal", plan["goal"])
     return TraceEvaluationEnvelope(
         run=run,
         session=SessionIdentity(
@@ -78,6 +81,14 @@ def build_envelope(
             governance_decisions=[item.model_dump(mode="json") for item in session.governance_decisions],
             validations=validations or [],
         ),
-        conversation=[message.model_dump(mode="json") for message in session.conversation],
-        plan=session.plan.model_dump(mode="json") if session.plan else {},
+        conversation=[
+            {
+                "role": message.role,
+                "turn_index": message.turn_index,
+                "content_hash": message.content_hash,
+                **telemetry.protect_content("conversation", message.content),
+            }
+            for message in session.conversation
+        ],
+        plan=plan,
     )

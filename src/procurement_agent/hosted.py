@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import inspect
 import json
+from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
@@ -84,6 +85,34 @@ def _hash_payload(value: Any) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def _normalized_specifications(value: dict[str, Any]) -> dict[str, str]:
+    return {
+        str(key).strip().casefold(): str(item).strip().casefold()
+        for key, item in value.items()
+    }
+
+
+def _select_catalog_candidate(
+    search_response: ToolResponse,
+    required_specifications: dict[str, str],
+) -> dict[str, Any]:
+    candidates = list(search_response.result.get("candidates", []))
+    if not candidates:
+        raise ValueError("search_catalog returned no candidates")
+    required = _normalized_specifications(required_specifications)
+    if required:
+        for candidate in candidates:
+            actual = _normalized_specifications(
+                candidate.get("item", {}).get("specifications", {})
+            )
+            if all(actual.get(key) == value for key, value in required.items()):
+                return candidate
+    # Preserve the strongest search result when no candidate meets every
+    # requested specification. Deterministic validation then blocks output and
+    # reports the unmet constraint instead of returning a semantic SUCCESS.
+    return candidates[0]
+
+
 class ExecutionSupport:
     """Governed tool and skill execution shared by Single and specialists."""
 
@@ -100,7 +129,19 @@ class ExecutionSupport:
         self.middleware = GovernanceMiddleware(governance)
         self.telemetry = telemetry
         self.script_runner = script_runner
-        self.ledger = ledger
+        self._ledger_var: ContextVar[RunLedger] = ContextVar(
+            f"procurement_run_ledger_{id(self)}", default=ledger
+        )
+
+    @property
+    def ledger(self) -> RunLedger:
+        return self._ledger_var.get()
+
+    def bind_ledger(self, ledger: RunLedger) -> Token[RunLedger]:
+        return self._ledger_var.set(ledger)
+
+    def reset_ledger(self, token: Token[RunLedger]) -> None:
+        self._ledger_var.reset(token)
 
     def call_tool(
         self,
@@ -166,6 +207,8 @@ class ExecutionSupport:
             },
         ):
             response = operation()
+        provider_call_id = response.call_id
+        response = response.model_copy(update={"call_id": call_record["call_id"]})
         with self.telemetry.span(
             "governance.post_tool",
             {"poc.agent.role": role, "poc.tool.name": tool_name, "poc.plan.id": plan_id},
@@ -192,6 +235,7 @@ class ExecutionSupport:
         self.ledger.tool_outputs.append(
             {
                 "call_id": response.call_id,
+                "provider_call_id": provider_call_id,
                 "tool_name": tool_name,
                 "http_status": response.http_status,
                 "technical_status": response.technical_status.value,
@@ -287,7 +331,9 @@ class ProcurementSpecialistHandler:
         search = call(
             "search_catalog", {"query": request.query}, lambda: self.support.adapter.search_catalog(request.query)
         )
-        product_code = search.result["candidates"][0]["item"]["product_code"]
+        product_code = _select_catalog_candidate(
+            search, request.constraints.specifications
+        )["item"]["product_code"]
         item_response = call(
             "get_catalog_item",
             {"product_code": product_code},
@@ -384,6 +430,7 @@ class DraftingSpecialistHandler:
                 quantity=snapshot.request.quantity or 0,
                 unit_price=snapshot.selected_item.unit_price,
                 currency=snapshot.selected_item.currency,
+                specifications=snapshot.selected_item.specifications,
             ),
             amount=calculation,
             delivery=snapshot.delivery_estimate,
@@ -396,6 +443,7 @@ class DraftingSpecialistHandler:
                 account_code=snapshot.account_code.account_code,
                 label=snapshot.account_code.label,
             ),
+            request_constraints=snapshot.request.constraints,
             evidence_refs=list(
                 dict.fromkeys(snapshot.evidence_refs + calculation_response.evidence_refs)
             ),
@@ -781,6 +829,7 @@ class HostedProcurementApplication:
                 "business_status": result.business_status.value,
             }
         )
+        result.result.setdefault("tool_call_ids", []).append(call_id)
         return result
 
     @staticmethod
@@ -796,7 +845,19 @@ class HostedProcurementApplication:
         session: AgentSession | None = None,
         resume: bool = False,
     ) -> HostedRunOutcome:
-        self.support.ledger = RunLedger()
+        token = self.support.bind_ledger(RunLedger())
+        try:
+            return await self._run_bound(request, session=session, resume=resume)
+        finally:
+            self.support.reset_ledger(token)
+
+    async def _run_bound(
+        self,
+        request: ProcurementRequest,
+        *,
+        session: AgentSession | None = None,
+        resume: bool = False,
+    ) -> HostedRunOutcome:
         session = session or AgentSession()
         user_text = request.model_dump_json()
         session.begin_turn(user_text)
@@ -910,6 +971,36 @@ class HostedProcurementApplication:
                     }
                 )
             session.governance_decisions.append(decision)
+            if not validation.valid:
+                reason = "deterministic validation failed: " + "; ".join(
+                    validation.violations
+                )
+                executor.block(session.plan.steps[-1].step_id, reason)
+                with self.support.telemetry.span(
+                    "response.generate", {"poc.response.validated": False}
+                ):
+                    status = self._status_summary(session, trace_id, resumed)
+                    response_text = json.dumps(
+                        {
+                            "business_status": BusinessStatus.VALIDATION_FAILED.value,
+                            "validated": False,
+                            "violations": validation.violations,
+                            "observability": status,
+                        },
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        default=str,
+                    )
+                self.context.after_invocation(session, response_text=response_text)
+                return self._outcome(
+                    session,
+                    response_text,
+                    run_id,
+                    trace_id,
+                    resumed,
+                    validation=validation,
+                    active_span=root_span,
+                )
             await self._step(
                 executor,
                 session.plan.steps[-1].step_id,
@@ -948,19 +1039,17 @@ class HostedProcurementApplication:
     async def _run_single(self, session, executor, request) -> ValidationResult:
         decisions = session.governance_decisions
 
-        def governed(step, name, arguments, operation):
-            return self._success(
-                self.support.call_tool(
-                    role=AgentRole.PROCUREMENT_ASSISTANT,
-                    tool_name=name,
-                    plan_id=session.plan.plan_id,
-                    step_id=step,
-                    arguments=arguments,
-                    operation=operation,
-                    decisions=decisions,
-                ),
-                name,
+        def governed(step, name, arguments, operation, *, require_success=True):
+            response = self.support.call_tool(
+                role=AgentRole.PROCUREMENT_ASSISTANT,
+                tool_name=name,
+                plan_id=session.plan.plan_id,
+                step_id=step,
+                arguments=arguments,
+                operation=operation,
+                decisions=decisions,
             )
+            return self._success(response, name) if require_success else response
 
         search = await self._step(
             executor,
@@ -971,7 +1060,9 @@ class HostedProcurementApplication:
                 "search.candidates",
             ),
         )
-        product_code = search.result["candidates"][0]["item"]["product_code"]
+        product_code = _select_catalog_candidate(
+            search, request.constraints.specifications
+        )["item"]["product_code"]
         item_response = await self._step(
             executor,
             "S04",
@@ -1037,11 +1128,19 @@ class HostedProcurementApplication:
         evidence = list(dict.fromkeys(ref for response in records for ref in response.evidence_refs))
         draft = ApplicationDraft(
             request_id=request.request_id,
-            item=DraftItem(product_code=item.product_code, name=item.name, quantity=request.quantity or 0, unit_price=item.unit_price, currency=item.currency),
+            item=DraftItem(
+                product_code=item.product_code,
+                name=item.name,
+                quantity=request.quantity or 0,
+                unit_price=item.unit_price,
+                currency=item.currency,
+                specifications=item.specifications,
+            ),
             amount=calculation,
             delivery=delivery,
             applicant=DraftApplicant(employee_id=applicant.employee_id, name=applicant.name, department_code=department.department_code),
             account=DraftAccount(account_code=account.account_code, label=account.label),
+            request_constraints=request.constraints,
             evidence_refs=evidence,
             warnings=delivery.warnings,
         )
@@ -1056,7 +1155,13 @@ class HostedProcurementApplication:
             "S11",
             {"draft_hash": _hash_payload(draft.model_dump(mode="json"))},
             lambda: self._step_tool_result(
-                governed("S11", "validate_application", {"draft_hash": _hash_payload(draft.model_dump(mode="json"))}, lambda: self.support.validate_with_skill(draft)),
+                governed(
+                    "S11",
+                    "validate_application",
+                    {"draft_hash": _hash_payload(draft.model_dump(mode="json"))},
+                    lambda: self.support.validate_with_skill(draft),
+                    require_success=False,
+                ),
                 "validation",
             ),
         )
@@ -1147,7 +1252,20 @@ class HostedProcurementApplication:
             executor,
             "S07",
             {"draft_hash": _hash_payload(draft.model_dump(mode="json"))},
-            lambda: self._step_tool_result(self.support.validate_with_skill(draft), "validation"),
+            lambda: self._step_tool_result(
+                self.support.call_tool(
+                    role=AgentRole.COORDINATOR,
+                    tool_name="validate_application",
+                    plan_id=session.plan.plan_id,
+                    step_id="S07",
+                    arguments={
+                        "draft_hash": _hash_payload(draft.model_dump(mode="json"))
+                    },
+                    operation=lambda: self.support.validate_with_skill(draft),
+                    decisions=session.governance_decisions,
+                ),
+                "validation",
+            ),
         )
         validation = ValidationResult.model_validate(validation_response.result["validation"])
         self.support.ledger.validations.append(validation.model_dump(mode="json"))
@@ -1197,8 +1315,16 @@ class HostedProcurementApplication:
         active_span: Any | None = None,
     ) -> HostedRunOutcome:
         role = self.role
+        current_user_input = next(
+            (
+                message.content
+                for message in reversed(session.conversation)
+                if message.role == "user"
+            ),
+            "",
+        )
         protected_user = self.support.telemetry.protect_content(
-            "user_input", session.conversation[-1].content if session.conversation else ""
+            "user_input", current_user_input
         )
         protected_response = self.support.telemetry.protect_content("response", response_text)
         run = RunIdentity(
@@ -1221,7 +1347,13 @@ class HostedProcurementApplication:
             user_input=[{"role": "user", "turn_index": session.turn_index, **protected_user}],
             response={
                 "technical_status": "SUCCESS",
-                "business_status": "SUCCESS" if validation and validation.valid else session.plan.status.value,
+                "business_status": (
+                    BusinessStatus.SUCCESS.value
+                    if validation and validation.valid
+                    else BusinessStatus.VALIDATION_FAILED.value
+                    if validation
+                    else session.plan.status.value
+                ),
                 **protected_response,
             },
             retrieved_contexts=self.support.ledger.retrieved_contexts

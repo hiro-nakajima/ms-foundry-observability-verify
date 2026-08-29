@@ -43,7 +43,11 @@ ROLE_ALLOWLIST: dict[AgentRole, set[str]] = {
         "validate_application",
         "skill.request_check",
     },
-    AgentRole.COORDINATOR: {"procurement_specialist", "drafting_specialist"},
+    AgentRole.COORDINATOR: {
+        "procurement_specialist",
+        "drafting_specialist",
+        "validate_application",
+    },
     AgentRole.PROCUREMENT_SPECIALIST: DATA_TOOLS,
     AgentRole.DRAFTING_SPECIALIST: {
         "calculate_request",

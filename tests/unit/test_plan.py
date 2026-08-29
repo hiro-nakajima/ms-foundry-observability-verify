@@ -129,3 +129,23 @@ def test_changed_input_invalidates_only_dependent_steps() -> None:
     assert plan.steps[0].status == PlanStatus.PENDING
     assert plan.steps[1].status == PlanStatus.PENDING
     assert plan.steps[2].status == PlanStatus.COMPLETED
+
+
+def test_block_marks_unpresented_step_and_plan_blocked() -> None:
+    plan = ExecutionPlan(
+        plan_id="plan-blocked",
+        plan_version=1,
+        goal="do not present an invalid draft",
+        status=PlanStatus.RUNNING,
+        steps=[
+            PlanStep(
+                step_id="S1",
+                step_type="present_draft",
+                owner=AgentRole.PROCUREMENT_ASSISTANT,
+            )
+        ],
+    )
+    step = PlanExecutor(plan).block("S1", "deterministic validation failed")
+    assert step.status == PlanStatus.BLOCKED
+    assert step.completion_reason == "deterministic validation failed"
+    assert plan.status == PlanStatus.BLOCKED

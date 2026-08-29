@@ -67,6 +67,15 @@ def test_allowlisted_single_agent_tool_is_allowed() -> None:
     assert decision.outcome == GovernanceOutcome.ALLOW
 
 
+def test_coordinator_final_validation_is_allowlisted() -> None:
+    decision = _pre_tool(
+        GovernanceAdapter(POLICY, mode=GovernanceMode.ENFORCE),
+        AgentRole.COORDINATOR,
+        "validate_application",
+    )
+    assert decision.outcome == GovernanceOutcome.ALLOW
+
+
 def test_successful_tool_without_evidence_is_would_deny_in_shadow() -> None:
     response = ToolResponse(
         call_id="tool-1",

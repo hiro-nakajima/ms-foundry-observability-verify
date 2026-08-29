@@ -44,6 +44,39 @@ def validate_request(draft: dict[str, Any]) -> dict[str, Any]:
     if not evidence_ok:
         violations.append("evidence_refs is empty")
 
+    constraints = draft.get("request_constraints", {})
+    requested_specs = {
+        str(key).strip().casefold(): str(value).strip().casefold()
+        for key, value in constraints.get("specifications", {}).items()
+    }
+    actual_specs = {
+        str(key).strip().casefold(): str(value).strip().casefold()
+        for key, value in draft.get("item", {}).get("specifications", {}).items()
+    }
+    unmet_specs = [
+        f"{key}={value}"
+        for key, value in requested_specs.items()
+        if actual_specs.get(key) != value
+    ]
+    specifications_ok = not unmet_specs
+    if not specifications_ok:
+        violations.append(
+            "constraint.specifications unmet: " + ", ".join(unmet_specs)
+        )
+
+    budget_limit = constraints.get("budget_limit")
+    budget_ok = True
+    if budget_limit is not None:
+        try:
+            budget_ok = Decimal(str(amount["total"])) <= Decimal(str(budget_limit))
+        except (KeyError, ValueError, ArithmeticError):
+            budget_ok = False
+        if not budget_ok:
+            violations.append(
+                "constraint.budget_limit exceeded: "
+                f"total={amount.get('total')} limit={budget_limit}"
+            )
+
     return {
         "valid": not violations,
         "violations": violations,
@@ -52,6 +85,8 @@ def validate_request(draft: dict[str, Any]) -> dict[str, Any]:
             "arithmetic": arithmetic_ok,
             "calculation_provenance": calculated_by_ok,
             "evidence_present": evidence_ok,
+            "specifications": specifications_ok,
+            "budget_limit": budget_ok,
         },
         "evidence_refs": evidence,
     }

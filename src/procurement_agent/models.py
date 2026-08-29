@@ -248,6 +248,7 @@ class DraftItem(StrictModel):
     quantity: int = Field(gt=0)
     unit_price: Decimal = Field(ge=0)
     currency: Literal["JPY"]
+    specifications: dict[str, str] = Field(default_factory=dict)
 
 
 class DraftApplicant(StrictModel):
@@ -269,6 +270,7 @@ class ApplicationDraft(StrictModel):
     delivery: DeliveryEstimate
     applicant: DraftApplicant
     account: DraftAccount
+    request_constraints: RequestConstraints = Field(default_factory=RequestConstraints)
     evidence_refs: list[str] = Field(min_length=1)
     warnings: list[str] = Field(default_factory=list)
 

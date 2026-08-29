@@ -69,6 +69,32 @@ def test_hosted_local_plan_execute_produces_validated_draft(pattern: LogicalPatt
         span for span in outcome.envelope.agent_trace.spans if span["name"].startswith("governance.")
     ]
     assert all("poc.policy.version" in span["attributes"] for span in governance_spans)
+    call_ids = {item["call_id"] for item in outcome.envelope.tool_calls}
+    output_ids = {item["call_id"] for item in outcome.envelope.tool_output}
+    step_call_ids = {
+        call_id
+        for step in outcome.session.plan.steps
+        for call_id in step.tool_call_ids
+    }
+    assert call_ids == output_ids
+    assert step_call_ids <= call_ids
+    assert all(
+        item["provider_call_id"].startswith("tool-")
+        for item in outcome.envelope.tool_output
+        if "provider_call_id" in item
+    )
+
+
+@pytest.mark.integration
+def test_default_trace_envelope_protects_conversation_content() -> None:
+    bundle = build_local_hosted_bundle(LogicalPattern.HOSTED_SINGLE)
+    outcome = asyncio.run(bundle.application.run(complete_request()))
+    serialized = outcome.envelope.model_dump_json()
+    assert "山田太郎" not in serialized
+    assert "開発用ノートPC" not in serialized
+    assert all("content" not in item for item in outcome.envelope.conversation)
+    assert all(item["raw_recorded"] is False for item in outcome.envelope.conversation)
+    assert all(item["ref"].startswith("protected:conversation:") for item in outcome.envelope.conversation)
 
 
 @pytest.mark.integration
@@ -90,6 +116,105 @@ def test_hosted_multi_uses_two_real_agent_tools_with_isolated_sessions() -> None
     span_names = {span["name"] for span in outcome.envelope.agent_trace.spans}
     assert "agent_as_tool.procurement_specialist" in span_names
     assert "agent_as_tool.drafting_specialist" in span_names
+    assert "tool.validate_application" in span_names
+    validation_calls = [
+        item for item in outcome.envelope.tool_calls if item["tool_name"] == "validate_application"
+    ]
+    assert len(validation_calls) == 1
+    assert validation_calls[0]["agent_role"] == "coordinator"
+    assert any(
+        item.tool_name == "validate_application" and item.agent_role.value == "coordinator"
+        for item in outcome.session.governance_decisions
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("pattern", [LogicalPattern.HOSTED_SINGLE, LogicalPattern.HOSTED_MULTI])
+def test_requested_specification_selects_matching_catalog_item(pattern: LogicalPattern) -> None:
+    bundle = build_local_hosted_bundle(pattern)
+    request = complete_request(quantity=1).model_copy(
+        update={
+            "query": "ノートPC",
+            "constraints": RequestConstraints(
+                requested_by=date(2026, 9, 30),
+                budget_limit="150000",
+                specifications={"memory": "16GB"},
+            ),
+        }
+    )
+    outcome = asyncio.run(bundle.application.run(request))
+    response = json.loads(outcome.response_text)
+    assert response["business_status"] == "SUCCESS"
+    assert response["application_draft"]["item"]["product_code"] == "LAPTOP-OFFICE-13"
+    assert response["application_draft"]["amount"]["total"] == "132000"
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("pattern", [LogicalPattern.HOSTED_SINGLE, LogicalPattern.HOSTED_MULTI])
+@pytest.mark.parametrize(
+    "constraints",
+    [
+        RequestConstraints(requested_by=date(2026, 9, 30), budget_limit="100000"),
+        RequestConstraints(
+            requested_by=date(2026, 9, 30), specifications={"memory": "64GB"}
+        ),
+    ],
+)
+def test_unmet_purchase_constraint_is_business_failure_without_draft_presentation(
+    pattern: LogicalPattern, constraints: RequestConstraints
+) -> None:
+    bundle = build_local_hosted_bundle(pattern)
+    request = complete_request().model_copy(update={"constraints": constraints})
+    outcome = asyncio.run(bundle.application.run(request))
+    response = json.loads(outcome.response_text)
+    assert response["business_status"] == "VALIDATION_FAILED"
+    assert response["validated"] is False
+    assert "application_draft" not in response
+    assert outcome.session.plan.status == PlanStatus.BLOCKED
+    assert outcome.session.plan.steps[-1].status == PlanStatus.BLOCKED
+    assert outcome.envelope.run.technical_status == "SUCCESS"
+    assert outcome.envelope.response["business_status"] == "VALIDATION_FAILED"
+    assert any("constraint." in violation for violation in response["violations"])
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("pattern", [LogicalPattern.HOSTED_SINGLE, LogicalPattern.HOSTED_MULTI])
+def test_concurrent_runs_keep_invocation_local_ledgers(pattern: LogicalPattern) -> None:
+    async def exercise():
+        bundle = build_local_hosted_bundle(pattern)
+        application = bundle.application
+        original_create_plan = application._create_plan
+        both_entered = asyncio.Event()
+        entered = 0
+
+        async def overlapping_create_plan(request):
+            nonlocal entered
+            entered += 1
+            if entered == 2:
+                both_entered.set()
+            await asyncio.wait_for(both_entered.wait(), timeout=2)
+            return await original_create_plan(request)
+
+        application._create_plan = overlapping_create_plan
+        return await asyncio.gather(
+            application.run(complete_request("REQ-CONCURRENT-1", 1)),
+            application.run(complete_request("REQ-CONCURRENT-2", 2)),
+        )
+
+    first, second = asyncio.run(exercise())
+    assert first.session.application_draft.amount.total == 198000
+    assert second.session.application_draft.amount.total == 396000
+    first_ids = {item["call_id"] for item in first.envelope.tool_calls}
+    second_ids = {item["call_id"] for item in second.envelope.tool_calls}
+    assert first_ids
+    assert second_ids
+    assert first_ids.isdisjoint(second_ids)
+    assert [item["order"] for item in first.envelope.tool_calls] == list(
+        range(1, len(first.envelope.tool_calls) + 1)
+    )
+    assert [item["order"] for item in second.envelope.tool_calls] == list(
+        range(1, len(second.envelope.tool_calls) + 1)
+    )
 
 
 @pytest.mark.integration

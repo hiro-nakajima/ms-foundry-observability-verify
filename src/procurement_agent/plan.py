@@ -276,6 +276,14 @@ class PlanExecutor:
         self.plan.status = PlanStatus.WAITING_USER
         return step
 
+    def block(self, step_id: str, reason: str) -> PlanStep:
+        """Block the current plan without marking an unpresented draft complete."""
+
+        step = self._step(step_id)
+        self._transition(step, PlanStatus.BLOCKED, reason)
+        self.plan.status = PlanStatus.BLOCKED
+        return step
+
     def resume_after_user_input(self, step_id: str) -> PlanStep:
         step = self._step(step_id)
         self._transition(step, PlanStatus.PENDING, "required user input supplied")
