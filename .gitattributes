@@ -1,0 +1,2 @@
+# Preserve the handoff document verbatim; its Markdown uses intentional hard-break spaces.
+docs/codex-handoff-foundry-procurement-observability-evaluation-poc-2026-08-28.md whitespace=-trailing-space

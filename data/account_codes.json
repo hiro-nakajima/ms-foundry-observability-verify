@@ -1,0 +1,23 @@
+{
+  "schema_version": "1.0",
+  "data_version": "2026-08-28.1",
+  "synthetic": true,
+  "records": [
+    {
+      "account_code": "7210-EQUIPMENT",
+      "label": "開発用備品（架空科目）",
+      "categories": ["laptop", "monitor"],
+      "purposes": ["開発", "検証", "一般業務"],
+      "valid_from": "2026-01-01",
+      "valid_to": "2026-12-31"
+    },
+    {
+      "account_code": "7310-SUPPLIES",
+      "label": "消耗品（架空科目）",
+      "categories": ["supplies"],
+      "purposes": ["消耗品"],
+      "valid_from": "2026-01-01",
+      "valid_to": "2026-12-31"
+    }
+  ]
+}

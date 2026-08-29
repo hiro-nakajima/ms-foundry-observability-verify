@@ -1,0 +1,9 @@
+{
+  "schema_version": "1.0",
+  "data_version": "2026-08-28.1",
+  "synthetic": true,
+  "records": [
+    {"employee_id": "EMP-001", "name": "山田太郎（架空）", "department_code": "DPT-DEV-01", "active": true, "synthetic": true},
+    {"employee_id": "EMP-002", "name": "佐藤花子（架空）", "department_code": "DPT-OPS-01", "active": true, "synthetic": true}
+  ]
+}

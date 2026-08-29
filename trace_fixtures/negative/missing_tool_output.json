@@ -1,0 +1,36 @@
+{
+  "schema_version": "2.0",
+  "run": {
+    "run_id": "run-fixture-missing-tool-output",
+    "case_id": "TRACE-MISSING-TOOL-OUTPUT",
+    "logical_pattern": "HA-S",
+    "agent_role": "procurement_assistant",
+    "agent_definition_id": "ha-single-v1",
+    "foundry_resource_id": null,
+    "implementation_kind": "local_deterministic",
+    "technical_status": "SUCCESS"
+  },
+  "session": {
+    "session_id_hash": "session-hash",
+    "conversation_id_hash": "conversation-hash",
+    "turn_count": 1,
+    "resumed": false
+  },
+  "user_input": [{"ref": "protected:user_input:negative", "hash": "user-hash"}],
+  "response": {"ref": "protected:response:negative", "status": "DRAFT_READY"},
+  "retrieved_contexts": [{"source_id": "catalog:LAPTOP-DEV-14:2026-08-28.1", "rank": 1}],
+  "system_prompt": {"version": "1.0.0", "hash": "prompt-hash"},
+  "tool_definitions": [{"name": "search_catalog", "version": "1.0", "hash": "tool-schema-hash"}],
+  "tool_calls": [{"call_id": "tool-1", "name": "search_catalog", "order": 1, "status": "SUCCESS"}],
+  "tool_output": [],
+  "agent_trace": {
+    "spans": [{"name": "agent.invoke", "status": "OK"}],
+    "events": [{"name": "plan_created"}],
+    "delegations": [],
+    "governance_decisions": [],
+    "validations": []
+  },
+  "conversation": [{"role": "user", "turn_index": 1, "content_hash": "user-hash"}],
+  "plan": {"plan_id": "plan-1", "version": 1, "status": "COMPLETED", "steps": []},
+  "evaluation": {}
+}
