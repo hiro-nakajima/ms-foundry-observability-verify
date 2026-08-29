@@ -145,7 +145,27 @@ def test_block_marks_unpresented_step_and_plan_blocked() -> None:
             )
         ],
     )
-    step = PlanExecutor(plan).block("S1", "deterministic validation failed")
+    step = PlanExecutor(plan).block(
+        "S1",
+        "deterministic validation failed",
+        evidence_refs=["evidence:1"],
+        tool_call_ids=["logical-1"],
+    )
     assert step.status == PlanStatus.BLOCKED
     assert step.completion_reason == "deterministic validation failed"
+    assert step.evidence_refs == ["evidence:1"]
+    assert step.tool_call_ids == ["logical-1"]
     assert plan.status == PlanStatus.BLOCKED
+
+
+def test_refresh_waiting_replaces_stale_missing_field_reason() -> None:
+    request = ProcurementRequest(request_id="REQ-WAIT-REFRESH", query="PC")
+    plan = StructuredPlanBuilder().build(request, LogicalPattern.HOSTED_SINGLE)
+    waiting = next(step for step in plan.steps if step.status == PlanStatus.WAITING_USER)
+    refreshed = PlanExecutor(plan).refresh_waiting(
+        waiting.step_id, ["applicant_name", "constraints.requested_by"]
+    )
+    assert refreshed.status == PlanStatus.WAITING_USER
+    assert refreshed.completion_reason == (
+        "missing required fields: applicant_name, constraints.requested_by"
+    )

@@ -276,12 +276,38 @@ class PlanExecutor:
         self.plan.status = PlanStatus.WAITING_USER
         return step
 
-    def block(self, step_id: str, reason: str) -> PlanStep:
+    def block(
+        self,
+        step_id: str,
+        reason: str,
+        *,
+        evidence_refs: Iterable[str] = (),
+        tool_call_ids: Iterable[str] = (),
+    ) -> PlanStep:
         """Block the current plan without marking an unpresented draft complete."""
 
         step = self._step(step_id)
         self._transition(step, PlanStatus.BLOCKED, reason)
+        step.evidence_refs = list(evidence_refs)
+        step.tool_call_ids = list(tool_call_ids)
         self.plan.status = PlanStatus.BLOCKED
+        return step
+
+    def refresh_waiting(self, step_id: str, missing_fields: Iterable[str]) -> PlanStep:
+        """Refresh observable WAITING_USER state after a partial request merge."""
+
+        step = self._step(step_id)
+        if step.status != PlanStatus.WAITING_USER:
+            raise PlanStateError(f"step {step_id} is not waiting for user input")
+        step.completion_reason = f"missing required fields: {', '.join(missing_fields)}"
+        self.plan.updated_at = datetime.now(timezone.utc)
+        self.events.append(
+            {
+                "event": "waiting_reason_refreshed",
+                "step_id": step_id,
+                "reason": step.completion_reason,
+            }
+        )
         return step
 
     def resume_after_user_input(self, step_id: str) -> PlanStep:

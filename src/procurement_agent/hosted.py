@@ -127,6 +127,7 @@ class BusinessOperationFailed(RuntimeError):
         warnings: list[str] | None = None,
         tool_call_ids: list[str] | None = None,
         governance_decisions: list[Any] | None = None,
+        delegation_tool_name: str | None = None,
     ) -> None:
         self.tool_name = tool_name
         self.step_id = step_id
@@ -136,6 +137,7 @@ class BusinessOperationFailed(RuntimeError):
         self.warnings = list(warnings or [])
         self.tool_call_ids = list(tool_call_ids or [])
         self.governance_decisions = list(governance_decisions or [])
+        self.delegation_tool_name = delegation_tool_name
         super().__init__(f"{tool_name} returned {business_status.value}")
 
     @classmethod
@@ -980,6 +982,7 @@ class HostedProcurementApplication:
                     executor = session.plan_executor()
                     missing = request.missing_required_fields()
                     if missing:
+                        executor.refresh_waiting(waiting.step_id, missing)
                         self.support.telemetry.add_event(
                             root_span,
                             "plan_still_waiting",
@@ -1222,6 +1225,8 @@ class HostedProcurementApplication:
         executor.block(
             failure.step_id,
             f"{failure.tool_name} returned {failure.business_status.value}",
+            evidence_refs=failure.evidence_refs,
+            tool_call_ids=failure.tool_call_ids,
         )
         self.support.telemetry.add_event(
             root_span,
@@ -1232,15 +1237,18 @@ class HostedProcurementApplication:
                 "poc.business.status": failure.business_status.value,
             },
         )
+        response = {
+            "business_status": failure.business_status.value,
+            "technical_status": "SUCCESS",
+            "failed_tool": failure.tool_name,
+            "warnings": failure.warnings,
+            "evidence_refs": failure.evidence_refs,
+            "observability": self._status_summary(session, trace_id, resumed),
+        }
+        if failure.delegation_tool_name:
+            response["delegation_tool"] = failure.delegation_tool_name
         response_text = json.dumps(
-            {
-                "business_status": failure.business_status.value,
-                "technical_status": "SUCCESS",
-                "failed_tool": failure.tool_name,
-                "warnings": failure.warnings,
-                "evidence_refs": failure.evidence_refs,
-                "observability": self._status_summary(session, trace_id, resumed),
-            },
+            response,
             ensure_ascii=False,
             sort_keys=True,
             default=str,
@@ -1525,12 +1533,13 @@ class HostedProcurementApplication:
         tool_ids = list(result.result.pop("tool_call_ids", []))
         if result.business_status != BusinessStatus.SUCCESS:
             raise BusinessOperationFailed(
-                tool_name=tool.name,
+                tool_name=str(result.result.get("failed_tool") or tool.name),
                 step_id=step_id,
                 business_status=result.business_status,
                 evidence_refs=result.evidence_refs,
                 warnings=result.warnings,
                 tool_call_ids=tool_ids,
+                delegation_tool_name=tool.name,
             )
         return result, [f"agent_tool_result.{result.agent_role.value}"], result.evidence_refs, tool_ids
 

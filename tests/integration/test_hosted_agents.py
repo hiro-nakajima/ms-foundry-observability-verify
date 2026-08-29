@@ -250,12 +250,25 @@ def test_structured_tool_business_failure_blocks_plan_without_exception(
     assert response["business_status"] == expected_status
     assert outcome.session.plan.status == PlanStatus.BLOCKED
     assert any(step.status == PlanStatus.BLOCKED for step in outcome.session.plan.steps)
+    blocked_step = next(
+        step for step in outcome.session.plan.steps if step.status == PlanStatus.BLOCKED
+    )
+    assert blocked_step.tool_call_ids
+    assert set(blocked_step.tool_call_ids) <= {
+        item["call_id"] for item in outcome.envelope.tool_calls
+    }
     assert outcome.envelope.run.technical_status == "SUCCESS"
     assert outcome.envelope.response["business_status"] == expected_status
     assert any(
         item.get("business_status") == expected_status
         for item in outcome.envelope.tool_output
     )
+    if pattern == LogicalPattern.HOSTED_MULTI:
+        expected_tool = (
+            "search_catalog" if expected_status == "NOT_FOUND" else "estimate_delivery"
+        )
+        assert response["failed_tool"] == expected_tool
+        assert response["delegation_tool"] == "procurement_specialist"
 
 
 @pytest.mark.integration
@@ -369,6 +382,13 @@ def test_partial_follow_up_keeps_plan_waiting_for_remaining_fields() -> None:
     assert second.session.active_plan_id == plan_id
     assert second.session.plan.status == PlanStatus.WAITING_USER
     assert second.session.request.purpose == "開発"
+    waiting_step = next(
+        step for step in second.session.plan.steps if step.status == PlanStatus.WAITING_USER
+    )
+    assert waiting_step.completion_reason == (
+        "missing required fields: applicant_name, constraints.requested_by"
+    )
+    assert "quantity" not in waiting_step.completion_reason
     assert second.envelope.tool_calls == [{"status": "not-executed"}]
 
 
