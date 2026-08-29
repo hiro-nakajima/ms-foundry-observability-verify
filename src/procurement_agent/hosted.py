@@ -113,6 +113,52 @@ def _select_catalog_candidate(
     return candidates[0]
 
 
+class BusinessOperationFailed(RuntimeError):
+    """Technically successful operation whose domain result stops the plan."""
+
+    def __init__(
+        self,
+        *,
+        tool_name: str,
+        step_id: str,
+        business_status: BusinessStatus,
+        http_status: int = 200,
+        evidence_refs: list[str] | None = None,
+        warnings: list[str] | None = None,
+        tool_call_ids: list[str] | None = None,
+        governance_decisions: list[Any] | None = None,
+    ) -> None:
+        self.tool_name = tool_name
+        self.step_id = step_id
+        self.business_status = business_status
+        self.http_status = http_status
+        self.evidence_refs = list(evidence_refs or [])
+        self.warnings = list(warnings or [])
+        self.tool_call_ids = list(tool_call_ids or [])
+        self.governance_decisions = list(governance_decisions or [])
+        super().__init__(f"{tool_name} returned {business_status.value}")
+
+    @classmethod
+    def from_tool_response(
+        cls,
+        response: ToolResponse,
+        *,
+        tool_name: str,
+        step_id: str,
+        governance_decisions: list[Any] | None = None,
+    ) -> "BusinessOperationFailed":
+        return cls(
+            tool_name=tool_name,
+            step_id=step_id,
+            business_status=response.business_status,
+            http_status=response.http_status,
+            evidence_refs=response.evidence_refs,
+            warnings=response.warnings,
+            tool_call_ids=[response.call_id],
+            governance_decisions=governance_decisions,
+        )
+
+
 class ExecutionSupport:
     """Governed tool and skill execution shared by Single and specialists."""
 
@@ -309,6 +355,27 @@ class ProcurementSpecialistHandler:
 
     def __call__(self, messages, options) -> str:
         task = AgentToolTask.model_validate_json(messages[-1].text)
+        try:
+            return self._execute(task)
+        except BusinessOperationFailed as failure:
+            result = AgentToolResult(
+                task_id=task.task_id,
+                agent_role=AgentRole.PROCUREMENT_SPECIALIST,
+                business_status=failure.business_status,
+                result={
+                    "failed_tool": failure.tool_name,
+                    "governance_decisions": [
+                        item.model_dump(mode="json")
+                        for item in failure.governance_decisions
+                    ],
+                    "tool_call_ids": failure.tool_call_ids,
+                },
+                evidence_refs=failure.evidence_refs,
+                warnings=failure.warnings,
+            )
+            return result.model_dump_json()
+
+    def _execute(self, task: AgentToolTask) -> str:
         request = task.context_snapshot.request
         decisions: list = []
         tool_records: list[ToolResponse] = []
@@ -325,7 +392,12 @@ class ProcurementSpecialistHandler:
             )
             tool_records.append(response)
             if response.business_status != BusinessStatus.SUCCESS:
-                raise ValueError(f"{name} failed with {response.business_status.value}")
+                raise BusinessOperationFailed.from_tool_response(
+                    response,
+                    tool_name=name,
+                    step_id=task.step_ids[0],
+                    governance_decisions=decisions,
+                )
             return response
 
         search = call(
@@ -719,9 +791,11 @@ class HostedProcurementApplication:
             return value
 
     @staticmethod
-    def _success(response: ToolResponse, tool_name: str) -> ToolResponse:
+    def _success(response: ToolResponse, tool_name: str, step_id: str) -> ToolResponse:
         if response.business_status != BusinessStatus.SUCCESS:
-            raise RuntimeError(f"{tool_name} returned {response.business_status.value}")
+            raise BusinessOperationFailed.from_tool_response(
+                response, tool_name=tool_name, step_id=step_id
+            )
         return response
 
     async def _governed_agent_tool(
@@ -883,17 +957,44 @@ class HostedProcurementApplication:
             if resumed:
                 session.governance_decisions.append(pre_input)
                 with self.support.telemetry.span("plan.resume", {"poc.plan.id": session.active_plan_id or ""}):
-                    changed = session.apply_request_update(request.model_dump(mode="python"))
+                    if session.plan.status == PlanStatus.COMPLETED:
+                        self.support.telemetry.add_event(
+                            root_span,
+                            "completed_plan_reused",
+                            {"poc.plan.id": session.active_plan_id or ""},
+                        )
+                        return self._completed_plan_replay(
+                            session=session,
+                            user_text=user_text,
+                            run_id=run_id,
+                            trace_id=trace_id,
+                            root_span=root_span,
+                        )
+                    changed = session.apply_request_update(
+                        request.model_dump(mode="python", exclude_unset=True)
+                    )
+                    request = session.request
                     waiting = next(
                         step for step in session.plan.steps if step.status == PlanStatus.WAITING_USER
                     )
                     executor = session.plan_executor()
-                    executor.resume_after_user_input(waiting.step_id)
-                    self.support.telemetry.add_event(
-                        root_span,
-                        "plan_resumed",
-                        {"poc.plan.step.id": waiting.step_id, "poc.changed.ref.count": len(changed)},
-                    )
+                    missing = request.missing_required_fields()
+                    if missing:
+                        self.support.telemetry.add_event(
+                            root_span,
+                            "plan_still_waiting",
+                            {
+                                "poc.plan.step.id": waiting.step_id,
+                                "poc.missing.field.count": len(missing),
+                            },
+                        )
+                    else:
+                        executor.resume_after_user_input(waiting.step_id)
+                        self.support.telemetry.add_event(
+                            root_span,
+                            "plan_resumed",
+                            {"poc.plan.step.id": waiting.step_id, "poc.changed.ref.count": len(changed)},
+                        )
             else:
                 plan = await self._create_plan(request)
                 session.start_new_plan(request, plan)
@@ -914,7 +1015,7 @@ class HostedProcurementApplication:
                 response_text = json.dumps(
                     {
                         "business_status": "WAITING_USER",
-                        "missing_required_fields": request.missing_required_fields(),
+                        "missing_required_fields": session.request.missing_required_fields(),
                         "plan_id": session.plan.plan_id,
                         "plan_version": session.plan.plan_version,
                     },
@@ -938,10 +1039,21 @@ class HostedProcurementApplication:
                 {"missing": request.missing_required_fields()},
                 lambda: (True, ["request.complete"], [], []),
             )
-            if self.bundle.pattern == LogicalPattern.HOSTED_SINGLE:
-                validation = await self._run_single(session, executor, request)
-            else:
-                validation = await self._run_multi(session, executor, request)
+            try:
+                if self.bundle.pattern == LogicalPattern.HOSTED_SINGLE:
+                    validation = await self._run_single(session, executor, request)
+                else:
+                    validation = await self._run_multi(session, executor, request)
+            except BusinessOperationFailed as failure:
+                return self._business_failure_outcome(
+                    session=session,
+                    executor=executor,
+                    failure=failure,
+                    run_id=run_id,
+                    trace_id=trace_id,
+                    resumed=resumed,
+                    root_span=root_span,
+                )
             draft = session.application_draft
             if draft is None:
                 raise RuntimeError("validated run did not produce an ApplicationDraft")
@@ -972,8 +1084,9 @@ class HostedProcurementApplication:
                 )
             session.governance_decisions.append(decision)
             if not validation.valid:
-                reason = "deterministic validation failed: " + "; ".join(
-                    validation.violations
+                reason = (
+                    "deterministic validation failed "
+                    f"({len(validation.violations)} violation(s))"
                 )
                 executor.block(session.plan.steps[-1].step_id, reason)
                 with self.support.telemetry.span(
@@ -1036,6 +1149,138 @@ class HostedProcurementApplication:
                 active_span=root_span,
             )
 
+    def _completed_plan_replay(
+        self,
+        *,
+        session: AgentSession,
+        user_text: str,
+        run_id: str,
+        trace_id: str,
+        root_span: Any,
+    ) -> HostedRunOutcome:
+        draft = session.application_draft
+        if draft is None:
+            raise RuntimeError("completed plan has no ApplicationDraft")
+        self.context.before_invocation(session, user_input=user_text, resumed=True)
+        with self.support.telemetry.span(
+            "governance.pre_output", {"poc.agent.role": self.role}
+        ) as governance_span:
+            decision = self.support.middleware.run_pre_output(
+                role=self.role,
+                plan_id=session.plan.plan_id,
+                response_text=draft.model_dump_json(),
+                ungrounded_product_or_code=False,
+                missing_calculation_output=False,
+                validation_not_passed=False,
+                plan_not_ready=False,
+            )
+            governance_span.set_attributes(
+                {
+                    "poc.policy.version": decision.policy_version,
+                    "poc.policy.rule.id": decision.rule_id,
+                    "poc.governance.stage": decision.stage,
+                    "poc.governance.decision": decision.outcome.value,
+                }
+            )
+        session.governance_decisions.append(decision)
+        with self.support.telemetry.span(
+            "response.generate", {"poc.response.validated": True, "poc.response.replayed": True}
+        ):
+            response_text = json.dumps(
+                {
+                    "business_status": BusinessStatus.SUCCESS.value,
+                    "validated": True,
+                    "application_draft": draft.model_dump(mode="json"),
+                    "observability": self._status_summary(session, trace_id, True),
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                default=str,
+            )
+        self.context.after_invocation(session, response_text=response_text)
+        return self._outcome(
+            session,
+            response_text,
+            run_id,
+            trace_id,
+            True,
+            validation=None,
+            active_span=root_span,
+        )
+
+    def _business_failure_outcome(
+        self,
+        *,
+        session: AgentSession,
+        executor,
+        failure: BusinessOperationFailed,
+        run_id: str,
+        trace_id: str,
+        resumed: bool,
+        root_span: Any,
+    ) -> HostedRunOutcome:
+        executor.block(
+            failure.step_id,
+            f"{failure.tool_name} returned {failure.business_status.value}",
+        )
+        self.support.telemetry.add_event(
+            root_span,
+            "business_operation_failed",
+            {
+                "poc.plan.step.id": failure.step_id,
+                "poc.tool.name": failure.tool_name,
+                "poc.business.status": failure.business_status.value,
+            },
+        )
+        response_text = json.dumps(
+            {
+                "business_status": failure.business_status.value,
+                "technical_status": "SUCCESS",
+                "failed_tool": failure.tool_name,
+                "warnings": failure.warnings,
+                "evidence_refs": failure.evidence_refs,
+                "observability": self._status_summary(session, trace_id, resumed),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            default=str,
+        )
+        with self.support.telemetry.span(
+            "governance.pre_output", {"poc.agent.role": self.role}
+        ) as governance_span:
+            decision = self.support.middleware.run_pre_output(
+                role=self.role,
+                plan_id=session.plan.plan_id,
+                response_text=response_text,
+                ungrounded_product_or_code=False,
+                missing_calculation_output=False,
+                validation_not_passed=False,
+                plan_not_ready=False,
+            )
+            governance_span.set_attributes(
+                {
+                    "poc.policy.version": decision.policy_version,
+                    "poc.policy.rule.id": decision.rule_id,
+                    "poc.governance.stage": decision.stage,
+                    "poc.governance.decision": decision.outcome.value,
+                }
+            )
+        session.governance_decisions.append(decision)
+        with self.support.telemetry.span(
+            "response.generate", {"poc.response.validated": False}
+        ):
+            pass
+        self.context.after_invocation(session, response_text=response_text)
+        return self._outcome(
+            session,
+            response_text,
+            run_id,
+            trace_id,
+            resumed,
+            validation=None,
+            active_span=root_span,
+        )
+
     async def _run_single(self, session, executor, request) -> ValidationResult:
         decisions = session.governance_decisions
 
@@ -1049,7 +1294,7 @@ class HostedProcurementApplication:
                 operation=operation,
                 decisions=decisions,
             )
-            return self._success(response, name) if require_success else response
+            return self._success(response, name, step) if require_success else response
 
         search = await self._step(
             executor,
@@ -1196,8 +1441,6 @@ class HostedProcurementApplication:
                 "S03",
             ),
         )
-        if procurement_result.business_status != BusinessStatus.SUCCESS:
-            raise RuntimeError("procurement specialist did not return SUCCESS")
         item = CatalogItem.model_validate(procurement_result.result["item"])
         applicant = Applicant.model_validate(procurement_result.result["applicant"])
         department = Department.model_validate(procurement_result.result["department"])
@@ -1280,6 +1523,15 @@ class HostedProcurementApplication:
             step_id=step_id,
         )
         tool_ids = list(result.result.pop("tool_call_ids", []))
+        if result.business_status != BusinessStatus.SUCCESS:
+            raise BusinessOperationFailed(
+                tool_name=tool.name,
+                step_id=step_id,
+                business_status=result.business_status,
+                evidence_refs=result.evidence_refs,
+                warnings=result.warnings,
+                tool_call_ids=tool_ids,
+            )
         return result, [f"agent_tool_result.{result.agent_role.value}"], result.evidence_refs, tool_ids
 
     @staticmethod
@@ -1327,6 +1579,12 @@ class HostedProcurementApplication:
             "user_input", current_user_input
         )
         protected_response = self.support.telemetry.protect_content("response", response_text)
+        try:
+            response_business_status = json.loads(response_text).get(
+                "business_status", session.plan.status.value
+            )
+        except (TypeError, ValueError):
+            response_business_status = session.plan.status.value
         run = RunIdentity(
             run_id=run_id,
             case_id="healthy-local",
@@ -1347,13 +1605,7 @@ class HostedProcurementApplication:
             user_input=[{"role": "user", "turn_index": session.turn_index, **protected_user}],
             response={
                 "technical_status": "SUCCESS",
-                "business_status": (
-                    BusinessStatus.SUCCESS.value
-                    if validation and validation.valid
-                    else BusinessStatus.VALIDATION_FAILED.value
-                    if validation
-                    else session.plan.status.value
-                ),
+                "business_status": response_business_status,
                 **protected_response,
             },
             retrieved_contexts=self.support.ledger.retrieved_contexts

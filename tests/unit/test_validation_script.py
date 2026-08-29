@@ -38,7 +38,11 @@ def _draft() -> dict:
             "total": "198000",
             "calculated_by": "request-check/scripts/calculate_request.py",
         },
-        "delivery": {"estimated_on": "2026-09-11"},
+        "delivery": {
+            "estimated_on": "2026-09-11",
+            "requested_by": "2026-09-30",
+            "meets_request": True,
+        },
         "applicant": {"employee_id": "EMP-001", "department_code": "D-ENG"},
         "account": {"account_code": "A-100"},
         "request_constraints": {
@@ -68,3 +72,13 @@ def test_validation_rejects_unmet_specification_and_budget() -> None:
     assert result["checks"]["budget_limit"] is False
     assert any("constraint.specifications" in item for item in result["violations"])
     assert any("constraint.budget_limit" in item for item in result["violations"])
+
+
+def test_validation_rejects_unmet_requested_delivery_date() -> None:
+    draft = _draft()
+    draft["delivery"]["requested_by"] = "2026-08-29"
+    draft["delivery"]["meets_request"] = False
+    result = _load_module().validate_request(draft)
+    assert result["valid"] is False
+    assert result["checks"]["requested_by"] is False
+    assert any("constraint.requested_by" in item for item in result["violations"])

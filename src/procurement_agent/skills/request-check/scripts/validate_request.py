@@ -77,6 +77,15 @@ def validate_request(draft: dict[str, Any]) -> dict[str, Any]:
                 f"total={amount.get('total')} limit={budget_limit}"
             )
 
+    delivery = draft.get("delivery", {})
+    delivery_ok = delivery.get("meets_request") is True
+    if not delivery_ok:
+        violations.append(
+            "constraint.requested_by unmet: "
+            f"estimated_on={delivery.get('estimated_on')} "
+            f"requested_by={delivery.get('requested_by')}"
+        )
+
     return {
         "valid": not violations,
         "violations": violations,
@@ -87,6 +96,7 @@ def validate_request(draft: dict[str, Any]) -> dict[str, Any]:
             "evidence_present": evidence_ok,
             "specifications": specifications_ok,
             "budget_limit": budget_ok,
+            "requested_by": delivery_ok,
         },
         "evidence_refs": evidence,
     }

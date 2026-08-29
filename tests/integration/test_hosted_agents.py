@@ -98,6 +98,30 @@ def test_default_trace_envelope_protects_conversation_content() -> None:
 
 
 @pytest.mark.integration
+def test_failed_validation_details_are_protected_in_trace_envelope() -> None:
+    bundle = build_local_hosted_bundle(LogicalPattern.HOSTED_SINGLE)
+    constraints = RequestConstraints(
+        requested_by=date(2026, 9, 30),
+        budget_limit="100000",
+        specifications={"memory": "64GB"},
+    )
+    outcome = asyncio.run(
+        bundle.application.run(
+            complete_request().model_copy(update={"constraints": constraints})
+        )
+    )
+    serialized = outcome.envelope.model_dump_json()
+    assert "100000" not in serialized
+    assert "64GB" not in serialized
+    validation = outcome.envelope.agent_trace.validations[0]
+    assert validation["valid"] is False
+    assert validation["violation_count"] == 2
+    assert "violations" not in validation
+    assert validation["raw_recorded"] is False
+    assert validation["ref"].startswith("protected:validation:")
+
+
+@pytest.mark.integration
 def test_hosted_multi_uses_two_real_agent_tools_with_isolated_sessions() -> None:
     bundle = build_local_hosted_bundle(LogicalPattern.HOSTED_MULTI)
     tools = bundle.coordinator.default_options["tools"]
@@ -175,6 +199,63 @@ def test_unmet_purchase_constraint_is_business_failure_without_draft_presentatio
     assert outcome.envelope.run.technical_status == "SUCCESS"
     assert outcome.envelope.response["business_status"] == "VALIDATION_FAILED"
     assert any("constraint." in violation for violation in response["violations"])
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("pattern", [LogicalPattern.HOSTED_SINGLE, LogicalPattern.HOSTED_MULTI])
+def test_unmet_requested_delivery_date_is_validation_failure(pattern: LogicalPattern) -> None:
+    bundle = build_local_hosted_bundle(pattern)
+    constraints = RequestConstraints(requested_by=date(2026, 8, 29))
+    outcome = asyncio.run(
+        bundle.application.run(
+            complete_request().model_copy(update={"constraints": constraints})
+        )
+    )
+    response = json.loads(outcome.response_text)
+    assert response["business_status"] == "VALIDATION_FAILED"
+    assert response["validated"] is False
+    assert "application_draft" not in response
+    assert any("constraint.requested_by" in item for item in response["violations"])
+    assert "requested delivery date cannot be met" in outcome.session.application_draft.warnings
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("pattern", [LogicalPattern.HOSTED_SINGLE, LogicalPattern.HOSTED_MULTI])
+@pytest.mark.parametrize(
+    ("request_case", "expected_status"),
+    [
+        (
+            ProcurementRequest(
+                request_id="REQ-NOT-FOUND",
+                query="存在しない商品",
+                quantity=1,
+                applicant_name="山田太郎",
+                purpose="開発",
+                constraints=RequestConstraints(requested_by=date(2026, 9, 30)),
+            ),
+            "NOT_FOUND",
+        ),
+        (complete_request("REQ-STOCK", 100), "INSUFFICIENT_STOCK"),
+    ],
+)
+def test_structured_tool_business_failure_blocks_plan_without_exception(
+    pattern: LogicalPattern,
+    request_case: ProcurementRequest,
+    expected_status: str,
+) -> None:
+    bundle = build_local_hosted_bundle(pattern)
+    outcome = asyncio.run(bundle.application.run(request_case))
+    response = json.loads(outcome.response_text)
+    assert response["technical_status"] == "SUCCESS"
+    assert response["business_status"] == expected_status
+    assert outcome.session.plan.status == PlanStatus.BLOCKED
+    assert any(step.status == PlanStatus.BLOCKED for step in outcome.session.plan.steps)
+    assert outcome.envelope.run.technical_status == "SUCCESS"
+    assert outcome.envelope.response["business_status"] == expected_status
+    assert any(
+        item.get("business_status") == expected_status
+        for item in outcome.envelope.tool_output
+    )
 
 
 @pytest.mark.integration
@@ -259,6 +340,67 @@ def test_framework_session_round_trip_resumes_waiting_plan() -> None:
     response = json.loads(second.text)
     assert response["observability"]["session_resumed"] is True
     assert response["application_draft"]["amount"]["total"] == "594000"
+
+
+@pytest.mark.integration
+def test_partial_follow_up_keeps_plan_waiting_for_remaining_fields() -> None:
+    bundle = build_local_hosted_bundle(LogicalPattern.HOSTED_SINGLE)
+    initial = ProcurementRequest(
+        request_id="REQ-PARTIAL-RESUME",
+        query="開発用ノートPC",
+        purpose="開発",
+    )
+    first = asyncio.run(bundle.application.run(initial))
+    plan_id = first.session.active_plan_id
+    partial = ProcurementRequest(
+        request_id="REQ-PARTIAL-RESUME",
+        query="開発用ノートPC",
+        quantity=3,
+    )
+    second = asyncio.run(
+        bundle.application.run(partial, session=first.session, resume=True)
+    )
+    response = json.loads(second.response_text)
+    assert response["business_status"] == "WAITING_USER"
+    assert response["missing_required_fields"] == [
+        "applicant_name",
+        "constraints.requested_by",
+    ]
+    assert second.session.active_plan_id == plan_id
+    assert second.session.plan.status == PlanStatus.WAITING_USER
+    assert second.session.request.purpose == "開発"
+    assert second.envelope.tool_calls == [{"status": "not-executed"}]
+
+
+@pytest.mark.integration
+def test_unchanged_completed_framework_request_reuses_plan_without_tool_reexecution() -> None:
+    bundle = build_local_hosted_bundle(LogicalPattern.HOSTED_SINGLE)
+    framework_session = FrameworkAgentSession()
+    request = complete_request(request_id="REQ-COMPLETED-RETRY")
+    first = asyncio.run(
+        bundle.coordinator.run(request.model_dump_json(), session=framework_session)
+    )
+    first_response = json.loads(first.text)
+    first_serialized = framework_session.state["procurement-execution-context"][
+        "serialized_procurement_session"
+    ]
+    first_session = json.loads(first_serialized)
+    planner_calls = len(bundle.planner_client.calls)
+
+    second = asyncio.run(
+        bundle.coordinator.run(request.model_dump_json(), session=framework_session)
+    )
+    second_response = json.loads(second.text)
+    second_serialized = framework_session.state["procurement-execution-context"][
+        "serialized_procurement_session"
+    ]
+    second_session = json.loads(second_serialized)
+    assert first_response["business_status"] == "SUCCESS"
+    assert second_response["business_status"] == "SUCCESS"
+    assert second_response["observability"]["session_resumed"] is True
+    assert second_session["active_plan_id"] == first_session["active_plan_id"]
+    assert second_session["completed_step_keys"] == first_session["completed_step_keys"]
+    assert len(bundle.planner_client.calls) == planner_calls
 
 
 @pytest.mark.integration

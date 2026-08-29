@@ -190,7 +190,12 @@ class LocalJsonAdapter:
         return self._response(business_status=BusinessStatus.NOT_FOUND)
 
     def lookup_department(self, identifier: str) -> ToolResponse:
-        value = identifier.casefold()
+        value = identifier.casefold().strip()
+        if not value:
+            return self._response(
+                business_status=BusinessStatus.INVALID_INPUT,
+                warnings=["department identifier is required"],
+            )
         for department in self.departments:
             if department.department_code.casefold() == value or value in department.name.casefold():
                 evidence = f"department:{department.department_code}:{self.data_version}"
@@ -202,7 +207,12 @@ class LocalJsonAdapter:
         return self._response(business_status=BusinessStatus.NOT_FOUND)
 
     def get_applicant(self, identifier: str) -> ToolResponse:
-        value = identifier.casefold()
+        value = identifier.casefold().strip()
+        if not value:
+            return self._response(
+                business_status=BusinessStatus.INVALID_INPUT,
+                warnings=["applicant identifier is required"],
+            )
         for applicant in self.applicants:
             if applicant.employee_id.casefold() == value or value in applicant.name.casefold():
                 status = BusinessStatus.SUCCESS if applicant.active else BusinessStatus.BLOCKED
@@ -230,13 +240,16 @@ class LocalJsonAdapter:
         condition = "quantity_lte_stock" if in_stock else "quantity_gt_stock"
         rule = next(rule for rule in self.delivery_rules if rule["condition"] == condition)
         estimated_on = self.as_of_date + timedelta(days=item.lead_time_days + rule["additional_days"])
+        meets_request = requested_by is None or estimated_on <= requested_by
         warnings = [] if in_stock else ["requested quantity exceeds current stock"]
+        if not meets_request:
+            warnings.append("requested delivery date cannot be met")
         estimate = DeliveryEstimate(
             product_code=product_code,
             quantity=quantity,
             requested_by=requested_by,
             estimated_on=estimated_on,
-            meets_request=requested_by is None or estimated_on <= requested_by,
+            meets_request=meets_request,
             rule_id=rule["rule_id"],
             warnings=warnings,
         )

@@ -44,3 +44,16 @@ def test_search_and_structured_get_are_separate(adapter) -> None:
     structured = adapter.get_catalog_item(first["item"]["product_code"])
     assert structured.result["item"]["unit_price"] == "180000"
     assert structured.evidence_refs == ["catalog:LAPTOP-DEV-14:2026-08-28.1"]
+
+
+def test_delivery_tool_warns_when_requested_date_cannot_be_met(adapter) -> None:
+    response = adapter.estimate_delivery("LAPTOP-DEV-14", 1, date(2026, 8, 29))
+    _assert_contract(response)
+    assert response.business_status == BusinessStatus.SUCCESS
+    assert response.result["delivery"]["meets_request"] is False
+    assert "requested delivery date cannot be met" in response.warnings
+
+
+def test_blank_lookup_identifiers_are_business_invalid_input(adapter) -> None:
+    assert adapter.get_applicant("").business_status == BusinessStatus.INVALID_INPUT
+    assert adapter.lookup_department("  ").business_status == BusinessStatus.INVALID_INPUT

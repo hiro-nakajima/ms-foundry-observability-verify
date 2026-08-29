@@ -59,6 +59,17 @@ def build_envelope(
     plan = session.plan.model_dump(mode="json") if session.plan else {}
     if "goal" in plan:
         plan["goal"] = telemetry.protect_content("plan_goal", plan["goal"])
+    protected_validations = []
+    for validation in validations or []:
+        protected_validations.append(
+            {
+                "valid": bool(validation.get("valid")),
+                "violation_count": len(validation.get("violations", [])),
+                "checks": dict(validation.get("checks", {})),
+                "evidence_refs": list(validation.get("evidence_refs", [])),
+                **telemetry.protect_content("validation", validation),
+            }
+        )
     return TraceEvaluationEnvelope(
         run=run,
         session=SessionIdentity(
@@ -79,7 +90,7 @@ def build_envelope(
             events=events,
             delegations=delegations or [],
             governance_decisions=[item.model_dump(mode="json") for item in session.governance_decisions],
-            validations=validations or [],
+            validations=protected_validations,
         ),
         conversation=[
             {

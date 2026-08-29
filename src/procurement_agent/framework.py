@@ -212,12 +212,16 @@ class SerializedProcurementContextProvider(ContextProvider):
         restored: AgentSession | None = None
         if serialized := state.get(self.STATE_KEY):
             restored = AgentSession.restore(serialized)
+        same_request = bool(restored and restored.request == request)
         resume = bool(
             restored
             and restored.request
             and restored.request.request_id == request.request_id
             and restored.plan
-            and restored.plan.status.value == "WAITING_USER"
+            and (
+                restored.plan.status.value == "WAITING_USER"
+                or (restored.plan.status.value == "COMPLETED" and same_request)
+            )
         )
         outcome = self._run_request(request, session=restored, resume=resume)
         if inspect.isawaitable(outcome):
