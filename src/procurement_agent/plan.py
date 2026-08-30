@@ -133,12 +133,16 @@ class StructuredPlanBuilder:
             if proposal_types == expected_types and all(
                 proposal.owner == approved[proposal.step_type][2]
                 and proposal.step_id == approved[proposal.step_type][0]
+                and proposal.input_refs == approved[proposal.step_type][3]
                 for proposal in parsed.steps
             ):
                 proposals = parsed.steps
                 source = PlanGenerationSource.MODEL_STRUCTURED
             else:
-                warnings.append("model plan did not match approved step order/owners; deterministic template used")
+                warnings.append(
+                    "model plan did not match approved step order/owners/input_refs; "
+                    "deterministic template used"
+                )
         elif raw_response is not None:
             source = PlanGenerationSource.EMPTY_RESPONSE_FALLBACK
             warnings.append("empty structured plan response; deterministic template used")

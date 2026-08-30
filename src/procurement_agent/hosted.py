@@ -958,6 +958,10 @@ class HostedProcurementApplication:
             raw = await tool.invoke(arguments={"task": task.model_dump_json()}, skip_parsing=True)
         text = "".join(getattr(item, "text", str(item)) for item in raw) if isinstance(raw, list) else str(raw)
         result = AgentToolResult.model_validate_json(text)
+        child_decisions = result.result.pop("governance_decisions", [])
+        coordinator_session.governance_decisions.extend(
+            self._decision_from_json(item) for item in child_decisions
+        )
         wrapper = self.support.adapter._response(
             business_status=result.business_status,
             result={"agent_tool_result": result.model_dump(mode="json")},
@@ -984,10 +988,6 @@ class HostedProcurementApplication:
                 }
             )
         coordinator_session.governance_decisions.append(after)
-        child_decisions = result.result.pop("governance_decisions", [])
-        coordinator_session.governance_decisions.extend(
-            self._decision_from_json(item) for item in child_decisions
-        )
         self.support.ledger.tool_outputs.append(
             {
                 "call_id": call_id,
@@ -1440,11 +1440,10 @@ class HostedProcurementApplication:
             "failed_tool": failure.tool_name,
             "warnings": failure.warnings,
             "evidence_refs": failure.evidence_refs,
-            "observability": self._status_summary(session, trace_id, resumed),
         }
         if failure.delegation_tool_name:
             response["delegation_tool"] = failure.delegation_tool_name
-        response_text = json.dumps(
+        gate_input_text = json.dumps(
             response,
             ensure_ascii=False,
             sort_keys=True,
@@ -1456,7 +1455,7 @@ class HostedProcurementApplication:
             decision = self.support.middleware.run_pre_output(
                 role=self.role,
                 plan_id=session.plan.plan_id,
-                response_text=response_text,
+                response_text=gate_input_text,
                 ungrounded_product_or_code=False,
                 missing_calculation_output=False,
                 validation_not_passed=False,
@@ -1471,6 +1470,15 @@ class HostedProcurementApplication:
                 }
             )
         session.governance_decisions.append(decision)
+        response["observability"] = self._status_summary(
+            session, trace_id, resumed
+        )
+        response_text = json.dumps(
+            response,
+            ensure_ascii=False,
+            sort_keys=True,
+            default=str,
+        )
         with self.support.telemetry.span(
             "response.generate", {"poc.response.validated": False}
         ):
@@ -1510,13 +1518,13 @@ class HostedProcurementApplication:
                 "poc.validation.violation_count": len(validation.violations),
             },
         )
-        response_text = json.dumps(
-            {
-                "business_status": BusinessStatus.VALIDATION_FAILED.value,
-                "validated": False,
-                "violations": validation.violations,
-                "observability": self._status_summary(session, trace_id, resumed),
-            },
+        response = {
+            "business_status": BusinessStatus.VALIDATION_FAILED.value,
+            "validated": False,
+            "violations": validation.violations,
+        }
+        gate_input_text = json.dumps(
+            response,
             ensure_ascii=False,
             sort_keys=True,
             default=str,
@@ -1527,7 +1535,7 @@ class HostedProcurementApplication:
             decision = self.support.middleware.run_pre_output(
                 role=self.role,
                 plan_id=session.plan.plan_id,
-                response_text=response_text,
+                response_text=gate_input_text,
                 ungrounded_product_or_code=False,
                 missing_calculation_output=False,
                 validation_not_passed=False,
@@ -1542,6 +1550,15 @@ class HostedProcurementApplication:
                 }
             )
         session.governance_decisions.append(decision)
+        response["observability"] = self._status_summary(
+            session, trace_id, resumed
+        )
+        response_text = json.dumps(
+            response,
+            ensure_ascii=False,
+            sort_keys=True,
+            default=str,
+        )
         with self.support.telemetry.span(
             "response.generate", {"poc.response.validated": False}
         ):

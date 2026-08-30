@@ -170,6 +170,29 @@ def test_hosted_multi_uses_two_real_agent_tools_with_isolated_sessions() -> None
         item.tool_name == "validate_application" and item.agent_role.value == "coordinator"
         for item in outcome.session.governance_decisions
     )
+    decisions = outcome.envelope.agent_trace.governance_decisions
+    outer_pre = next(
+        index
+        for index, decision in enumerate(decisions)
+        if decision["stage"] == "pre_tool"
+        and decision["agent_role"] == "coordinator"
+        and decision["tool_name"] == "procurement_specialist"
+    )
+    child_pre = next(
+        index
+        for index, decision in enumerate(decisions)
+        if decision["stage"] == "pre_tool"
+        and decision["agent_role"] == "procurement_specialist"
+        and decision["tool_name"] == "search_catalog"
+    )
+    outer_post = next(
+        index
+        for index, decision in enumerate(decisions)
+        if decision["stage"] == "post_tool"
+        and decision["agent_role"] == "coordinator"
+        and decision["tool_name"] == "procurement_specialist"
+    )
+    assert outer_pre < child_pre < outer_post
 
 
 @pytest.mark.integration
@@ -185,6 +208,10 @@ def test_hosted_multi_propagates_missing_tax_rule_as_business_failure() -> None:
     assert response["failed_tool"] == "calculate_request"
     assert response["delegation_tool"] == "drafting_specialist"
     assert outcome.session.plan.status == PlanStatus.BLOCKED
+    assert response["observability"]["governance_decisions"] == [
+        decision["outcome"]
+        for decision in outcome.envelope.agent_trace.governance_decisions
+    ]
 
 
 @pytest.mark.integration
@@ -460,6 +487,10 @@ def test_unmet_purchase_constraint_is_business_failure_without_draft_presentatio
     assert outcome.envelope.run.technical_status == "SUCCESS"
     assert outcome.envelope.response["business_status"] == "VALIDATION_FAILED"
     assert any("constraint." in violation for violation in response["violations"])
+    assert response["observability"]["governance_decisions"] == [
+        decision["outcome"]
+        for decision in outcome.envelope.agent_trace.governance_decisions
+    ]
 
 
 @pytest.mark.integration

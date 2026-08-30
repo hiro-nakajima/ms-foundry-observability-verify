@@ -62,6 +62,34 @@ def test_response_format_is_pydantic_model_and_machine_readable() -> None:
     assert [step.step_type for step in plan.steps] == [step.step_type for step in default_plan.steps]
 
 
+def test_model_plan_with_incorrect_input_refs_uses_approved_template() -> None:
+    builder = StructuredPlanBuilder()
+    default_plan = builder.build(complete_request(), LogicalPattern.HOSTED_SINGLE)
+    proposal = AgentPlanResponse(
+        goal="Create draft",
+        steps=[
+            PlanStepProposal(
+                step_id=step.step_id,
+                step_type=step.step_type,
+                owner=step.owner,
+                input_refs=[] if step.step_id == "S03" else step.input_refs,
+            )
+            for step in default_plan.steps
+        ],
+    )
+    plan = builder.build(
+        complete_request(),
+        LogicalPattern.HOSTED_SINGLE,
+        raw_response=proposal,
+    )
+    assert plan.generation_source == PlanGenerationSource.DETERMINISTIC_DEFAULT
+    assert next(step for step in plan.steps if step.step_id == "S03").input_refs == [
+        "request.query",
+        "request.constraints.specifications",
+    ]
+    assert "input_refs" in plan.warnings[0]
+
+
 @pytest.mark.parametrize("raw", [None, {}, {"goal": "", "steps": []}])
 def test_empty_plan_has_explicit_deterministic_default(raw) -> None:
     plan = StructuredPlanBuilder().build(
