@@ -62,6 +62,14 @@ def test_expired_catalog_records_are_not_returned() -> None:
     assert structured.business_status == BusinessStatus.NOT_FOUND
 
 
+def test_expired_departments_are_not_returned() -> None:
+    adapter = LocalJsonAdapter(default_data_resource(), as_of_date=date(2027, 1, 1))
+    for identifier in ("DPT-DEV-01", "一部"):
+        response = adapter.lookup_department(identifier)
+        _assert_contract(response)
+        assert response.business_status == BusinessStatus.NOT_FOUND
+
+
 def test_missing_active_tax_rule_is_structured_business_failure() -> None:
     adapter = LocalJsonAdapter(default_data_resource(), as_of_date=date(2027, 1, 1))
     response = adapter.calculate_request(1, "180000")

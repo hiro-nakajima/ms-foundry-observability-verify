@@ -225,15 +225,20 @@ class LocalJsonAdapter:
                 business_status=BusinessStatus.INVALID_INPUT,
                 warnings=["department identifier is required"],
             )
-        exact = [
+        active_departments = [
             department
             for department in self.departments
+            if department.valid_from <= self.as_of_date <= department.valid_to
+        ]
+        exact = [
+            department
+            for department in active_departments
             if department.department_code.casefold() == value
             or department.name.casefold() == value
         ]
         partial = [
             department
-            for department in self.departments
+            for department in active_departments
             if value in department.name.casefold()
         ]
         matches = exact or partial
