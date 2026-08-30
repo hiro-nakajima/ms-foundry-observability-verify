@@ -113,8 +113,12 @@ def _select_catalog_candidate(
             )
             if all(actual.get(key) == value for key, value in required.items()):
                 matches.append(candidate)
-        if matches:
-            eligible = matches
+        if not matches:
+            # The search adapter provides a stable score/product-code ordering.
+            # Preserve its strongest grounded item so deterministic draft
+            # validation can report the unmet specification constraint.
+            return candidates[0]
+        eligible = matches
     top_score = eligible[0].get("score")
     top_candidates = [
         candidate for candidate in eligible if candidate.get("score") == top_score
@@ -1034,7 +1038,6 @@ class HostedProcurementApplication:
     ) -> HostedRunOutcome:
         session = session or AgentSession()
         user_text = request.model_dump_json()
-        session.begin_turn(user_text)
         run_id = f"run-{uuid4()}"
         resumed = bool(resume and session.plan and session.request)
         self.support.ledger.governance_decision_offset = (
@@ -1057,6 +1060,7 @@ class HostedProcurementApplication:
                         "poc.governance.decision": pre_input.outcome.value,
                     }
                 )
+            session.begin_turn(user_text)
             if resumed:
                 session.governance_decisions.append(pre_input)
                 with self.support.telemetry.span("plan.resume", {"poc.plan.id": session.active_plan_id or ""}):

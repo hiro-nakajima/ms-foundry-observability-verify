@@ -10,7 +10,9 @@ from pathlib import Path
 import pytest
 from agent_framework import AgentSession as FrameworkAgentSession
 
+from procurement_agent.governance import GovernanceDenied
 from procurement_agent.hosted import build_local_hosted_bundle
+from procurement_agent.memory import AgentSession
 from procurement_agent.models import (
     GovernanceMode,
     LogicalPattern,
@@ -96,6 +98,23 @@ def test_default_trace_envelope_protects_conversation_content() -> None:
     assert all("content" not in item for item in outcome.envelope.conversation)
     assert all(item["raw_recorded"] is False for item in outcome.envelope.conversation)
     assert all(item["ref"].startswith("protected:conversation:") for item in outcome.envelope.conversation)
+
+
+@pytest.mark.integration
+def test_enforce_pre_input_denial_does_not_mutate_session() -> None:
+    bundle = build_local_hosted_bundle(
+        LogicalPattern.HOSTED_SINGLE,
+        governance_mode=GovernanceMode.ENFORCE,
+    )
+    session = AgentSession()
+    request = complete_request(request_id="REQ-REJECTED-INPUT").model_copy(
+        update={"query": "password=synthetic-test-value"}
+    )
+    with pytest.raises(GovernanceDenied):
+        asyncio.run(bundle.application.run(request, session=session))
+    assert session.turn_index == 0
+    assert session.conversation == []
+    assert "synthetic-test-value" not in session.serialize()
 
 
 @pytest.mark.integration
@@ -441,6 +460,29 @@ def test_unmet_purchase_constraint_is_business_failure_without_draft_presentatio
     assert outcome.envelope.run.technical_status == "SUCCESS"
     assert outcome.envelope.response["business_status"] == "VALIDATION_FAILED"
     assert any("constraint." in violation for violation in response["violations"])
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("pattern", [LogicalPattern.HOSTED_SINGLE, LogicalPattern.HOSTED_MULTI])
+def test_ambiguous_query_with_zero_spec_matches_is_validation_failure(
+    pattern: LogicalPattern,
+) -> None:
+    bundle = build_local_hosted_bundle(pattern)
+    request = complete_request().model_copy(
+        update={
+            "query": "ノートPC",
+            "constraints": RequestConstraints(
+                requested_by=date(2026, 9, 30),
+                specifications={"memory": "64GB"},
+            ),
+        }
+    )
+    outcome = asyncio.run(bundle.application.run(request))
+    response = json.loads(outcome.response_text)
+    assert response["business_status"] == "VALIDATION_FAILED"
+    assert response["validated"] is False
+    assert "clarification" not in response
+    assert any("constraint.specifications unmet" in item for item in response["violations"])
 
 
 @pytest.mark.integration
