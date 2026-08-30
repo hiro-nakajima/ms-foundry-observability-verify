@@ -214,14 +214,50 @@ class LocalJsonAdapter:
                 business_status=BusinessStatus.INVALID_INPUT,
                 warnings=["department identifier is required"],
             )
-        for department in self.departments:
-            if department.department_code.casefold() == value or value in department.name.casefold():
-                evidence = f"department:{department.department_code}:{self.data_version}"
-                return self._response(
-                    business_status=BusinessStatus.SUCCESS,
-                    result={"department": department.model_dump(mode="json")},
-                    evidence_refs=[evidence],
-                )
+        exact = [
+            department
+            for department in self.departments
+            if department.department_code.casefold() == value
+            or department.name.casefold() == value
+        ]
+        partial = [
+            department
+            for department in self.departments
+            if value in department.name.casefold()
+        ]
+        matches = exact or partial
+        if len(matches) > 1:
+            evidence = [
+                f"department:{department.department_code}:{self.data_version}"
+                for department in matches
+            ]
+            return self._response(
+                business_status=BusinessStatus.CLARIFICATION_REQUIRED,
+                result={
+                    "clarification": {
+                        "field": "department_name",
+                        "required_input_refs": ["request.department_name"],
+                        "prompt": "部門コードまたは正式な部門名を指定してください。",
+                        "options": [
+                            {
+                                "department_code": department.department_code,
+                                "name": department.name,
+                            }
+                            for department in matches
+                        ],
+                    }
+                },
+                evidence_refs=evidence,
+                warnings=["department identifier is ambiguous"],
+            )
+        if matches:
+            department = matches[0]
+            evidence = f"department:{department.department_code}:{self.data_version}"
+            return self._response(
+                business_status=BusinessStatus.SUCCESS,
+                result={"department": department.model_dump(mode="json")},
+                evidence_refs=[evidence],
+            )
         return self._response(business_status=BusinessStatus.NOT_FOUND)
 
     def get_applicant(self, identifier: str) -> ToolResponse:
@@ -231,15 +267,51 @@ class LocalJsonAdapter:
                 business_status=BusinessStatus.INVALID_INPUT,
                 warnings=["applicant identifier is required"],
             )
-        for applicant in self.applicants:
-            if applicant.employee_id.casefold() == value or value in applicant.name.casefold():
-                status = BusinessStatus.SUCCESS if applicant.active else BusinessStatus.BLOCKED
-                evidence = f"applicant:{applicant.employee_id}:{self.data_version}"
-                return self._response(
-                    business_status=status,
-                    result={"applicant": applicant.model_dump(mode="json")},
-                    evidence_refs=[evidence],
-                )
+        exact = [
+            applicant
+            for applicant in self.applicants
+            if applicant.employee_id.casefold() == value
+            or applicant.name.casefold() == value
+        ]
+        partial = [
+            applicant
+            for applicant in self.applicants
+            if value in applicant.name.casefold()
+        ]
+        matches = exact or partial
+        if len(matches) > 1:
+            evidence = [
+                f"applicant:{applicant.employee_id}:{self.data_version}"
+                for applicant in matches
+            ]
+            return self._response(
+                business_status=BusinessStatus.CLARIFICATION_REQUIRED,
+                result={
+                    "clarification": {
+                        "field": "applicant_name",
+                        "required_input_refs": ["request.applicant_name"],
+                        "prompt": "社員IDまたは一意な氏名を指定してください。",
+                        "options": [
+                            {
+                                "employee_id": applicant.employee_id,
+                                "name": applicant.name,
+                            }
+                            for applicant in matches
+                        ],
+                    }
+                },
+                evidence_refs=evidence,
+                warnings=["applicant identifier is ambiguous"],
+            )
+        if matches:
+            applicant = matches[0]
+            status = BusinessStatus.SUCCESS if applicant.active else BusinessStatus.BLOCKED
+            evidence = f"applicant:{applicant.employee_id}:{self.data_version}"
+            return self._response(
+                business_status=status,
+                result={"applicant": applicant.model_dump(mode="json")},
+                evidence_refs=[evidence],
+            )
         return self._response(business_status=BusinessStatus.NOT_FOUND)
 
     def estimate_delivery(

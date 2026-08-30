@@ -57,3 +57,22 @@ def test_delivery_tool_warns_when_requested_date_cannot_be_met(adapter) -> None:
 def test_blank_lookup_identifiers_are_business_invalid_input(adapter) -> None:
     assert adapter.get_applicant("").business_status == BusinessStatus.INVALID_INPUT
     assert adapter.lookup_department("  ").business_status == BusinessStatus.INVALID_INPUT
+
+
+def test_ambiguous_partial_identifiers_require_clarification(adapter) -> None:
+    applicant = adapter.get_applicant("架空")
+    assert applicant.business_status == BusinessStatus.CLARIFICATION_REQUIRED
+    assert len(applicant.result["clarification"]["options"]) == 2
+    assert applicant.result["clarification"]["required_input_refs"] == [
+        "request.applicant_name"
+    ]
+
+    department = adapter.lookup_department("一部")
+    assert department.business_status == BusinessStatus.CLARIFICATION_REQUIRED
+    assert len(department.result["clarification"]["options"]) == 2
+
+
+def test_exact_applicant_identifier_wins_over_partial_matching(adapter) -> None:
+    response = adapter.get_applicant("EMP-002")
+    assert response.business_status == BusinessStatus.SUCCESS
+    assert response.result["applicant"]["employee_id"] == "EMP-002"

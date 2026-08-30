@@ -44,10 +44,20 @@ def completed_step_key(plan_version: int, step_id: str, input_hash: str) -> str:
 SINGLE_TEMPLATE = (
     ("S01", "parse_request", AgentRole.PROCUREMENT_ASSISTANT, ["request.raw"]),
     ("S02", "resolve_missing_fields", AgentRole.PROCUREMENT_ASSISTANT, ["request"]),
-    ("S03", "search_catalog", AgentRole.PROCUREMENT_ASSISTANT, ["request.query", "request.constraints"]),
+    (
+        "S03",
+        "search_catalog",
+        AgentRole.PROCUREMENT_ASSISTANT,
+        ["request.query", "request.constraints.specifications"],
+    ),
     ("S04", "select_catalog_item", AgentRole.PROCUREMENT_ASSISTANT, ["search.candidates"]),
     ("S05", "get_applicant", AgentRole.PROCUREMENT_ASSISTANT, ["request.applicant_name"]),
-    ("S06", "lookup_department", AgentRole.PROCUREMENT_ASSISTANT, ["applicant.department_code"]),
+    (
+        "S06",
+        "lookup_department",
+        AgentRole.PROCUREMENT_ASSISTANT,
+        ["applicant.department_code", "request.department_name"],
+    ),
     ("S07", "lookup_account_code", AgentRole.PROCUREMENT_ASSISTANT, ["item.category", "request.purpose"]),
     ("S08", "estimate_delivery", AgentRole.PROCUREMENT_ASSISTANT, ["item.product_code", "request.quantity", "request.constraints.requested_by"]),
     ("S09", "calculate_total", AgentRole.PROCUREMENT_ASSISTANT, ["item.unit_price", "request.quantity"]),
@@ -60,7 +70,21 @@ SINGLE_TEMPLATE = (
 MULTI_TEMPLATE = (
     ("S01", "parse_request", AgentRole.COORDINATOR, ["request.raw"]),
     ("S02", "resolve_missing_fields", AgentRole.COORDINATOR, ["request"]),
-    ("S03", "procurement_lookup", AgentRole.PROCUREMENT_SPECIALIST, ["request", "context_snapshot"]),
+    (
+        "S03",
+        "procurement_lookup",
+        AgentRole.PROCUREMENT_SPECIALIST,
+        [
+            "request.query",
+            "request.quantity",
+            "request.applicant_name",
+            "request.department_name",
+            "request.purpose",
+            "request.constraints.requested_by",
+            "request.constraints.specifications",
+            "context_snapshot",
+        ],
+    ),
     ("S04", "merge_procurement_result", AgentRole.COORDINATOR, ["procurement_result"]),
     ("S05", "build_draft", AgentRole.DRAFTING_SPECIALIST, ["request", "procurement_result", "context_snapshot"]),
     ("S06", "merge_draft_result", AgentRole.COORDINATOR, ["drafting_result"]),
@@ -270,9 +294,24 @@ class PlanExecutor:
             self.plan.status = PlanStatus.COMPLETED
         return step
 
-    def wait_for_user(self, step_id: str, missing_fields: Iterable[str]) -> PlanStep:
+    def wait_for_user(
+        self,
+        step_id: str,
+        missing_fields: Iterable[str],
+        *,
+        evidence_refs: Iterable[str] = (),
+        tool_call_ids: Iterable[str] = (),
+        reason: str | None = None,
+    ) -> PlanStep:
         step = self._step(step_id)
-        self._transition(step, PlanStatus.WAITING_USER, f"missing: {', '.join(missing_fields)}")
+        fields = list(missing_fields)
+        self._transition(
+            step,
+            PlanStatus.WAITING_USER,
+            reason or f"missing: {', '.join(fields)}",
+        )
+        step.evidence_refs = list(evidence_refs)
+        step.tool_call_ids = list(tool_call_ids)
         self.plan.status = PlanStatus.WAITING_USER
         return step
 
@@ -293,13 +332,21 @@ class PlanExecutor:
         self.plan.status = PlanStatus.BLOCKED
         return step
 
-    def refresh_waiting(self, step_id: str, missing_fields: Iterable[str]) -> PlanStep:
+    def refresh_waiting(
+        self,
+        step_id: str,
+        missing_fields: Iterable[str],
+        *,
+        reason: str | None = None,
+    ) -> PlanStep:
         """Refresh observable WAITING_USER state after a partial request merge."""
 
         step = self._step(step_id)
         if step.status != PlanStatus.WAITING_USER:
             raise PlanStateError(f"step {step_id} is not waiting for user input")
-        step.completion_reason = f"missing required fields: {', '.join(missing_fields)}"
+        step.completion_reason = reason or (
+            f"missing required fields: {', '.join(missing_fields)}"
+        )
         self.plan.updated_at = datetime.now(timezone.utc)
         self.events.append(
             {

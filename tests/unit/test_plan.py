@@ -169,3 +169,32 @@ def test_refresh_waiting_replaces_stale_missing_field_reason() -> None:
     assert refreshed.completion_reason == (
         "missing required fields: applicant_name, constraints.requested_by"
     )
+
+
+def test_waiting_step_retains_clarification_provenance() -> None:
+    plan = ExecutionPlan(
+        plan_id="plan-clarification",
+        plan_version=1,
+        goal="clarify ambiguous item",
+        status=PlanStatus.RUNNING,
+        steps=[
+            PlanStep(
+                step_id="S1",
+                step_type="search_catalog",
+                owner=AgentRole.PROCUREMENT_ASSISTANT,
+            )
+        ],
+    )
+    executor = PlanExecutor(plan)
+    executor.start("S1", {"query": "ambiguous"})
+    waiting = executor.wait_for_user(
+        "S1",
+        ["request.query"],
+        evidence_refs=["catalog:item:1"],
+        tool_call_ids=["logical-1"],
+        reason="clarification required for: request.query",
+    )
+    assert waiting.status == PlanStatus.WAITING_USER
+    assert waiting.evidence_refs == ["catalog:item:1"]
+    assert waiting.tool_call_ids == ["logical-1"]
+    assert plan.status == PlanStatus.WAITING_USER

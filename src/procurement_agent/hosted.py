@@ -95,22 +95,59 @@ def _normalized_specifications(value: dict[str, Any]) -> dict[str, str]:
 def _select_catalog_candidate(
     search_response: ToolResponse,
     required_specifications: dict[str, str],
+    *,
+    step_id: str,
+    governance_decisions: list[Any] | None = None,
 ) -> dict[str, Any]:
     candidates = list(search_response.result.get("candidates", []))
     if not candidates:
         raise ValueError("search_catalog returned no candidates")
     required = _normalized_specifications(required_specifications)
+    eligible = candidates
     if required:
+        matches = []
         for candidate in candidates:
             actual = _normalized_specifications(
                 candidate.get("item", {}).get("specifications", {})
             )
             if all(actual.get(key) == value for key, value in required.items()):
-                return candidate
-    # Preserve the strongest search result when no candidate meets every
-    # requested specification. Deterministic validation then blocks output and
-    # reports the unmet constraint instead of returning a semantic SUCCESS.
-    return candidates[0]
+                matches.append(candidate)
+        if matches:
+            eligible = matches
+    top_score = eligible[0].get("score")
+    top_candidates = [
+        candidate for candidate in eligible if candidate.get("score") == top_score
+    ]
+    if len(top_candidates) > 1:
+        raise BusinessOperationFailed(
+            tool_name="search_catalog",
+            step_id=step_id,
+            business_status=BusinessStatus.CLARIFICATION_REQUIRED,
+            result={
+                "clarification": {
+                    "field": "catalog_item",
+                    "required_input_refs": [
+                        "request.query",
+                        "request.constraints.specifications",
+                    ],
+                    "prompt": "商品を特定できる検索条件または仕様を指定してください。",
+                    "options": [
+                        {
+                            "product_code": candidate["item"]["product_code"],
+                            "name": candidate["item"]["name"],
+                            "specifications": candidate["item"]["specifications"],
+                        }
+                        for candidate in top_candidates
+                    ],
+                }
+            },
+            evidence_refs=search_response.evidence_refs,
+            tool_call_ids=[search_response.call_id],
+            governance_decisions=governance_decisions,
+        )
+    # If no item satisfies all requested specifications, preserve the strongest
+    # unique search result so deterministic validation can report the mismatch.
+    return top_candidates[0]
 
 
 class BusinessOperationFailed(RuntimeError):
@@ -128,6 +165,7 @@ class BusinessOperationFailed(RuntimeError):
         tool_call_ids: list[str] | None = None,
         governance_decisions: list[Any] | None = None,
         delegation_tool_name: str | None = None,
+        result: dict[str, Any] | None = None,
     ) -> None:
         self.tool_name = tool_name
         self.step_id = step_id
@@ -138,6 +176,7 @@ class BusinessOperationFailed(RuntimeError):
         self.tool_call_ids = list(tool_call_ids or [])
         self.governance_decisions = list(governance_decisions or [])
         self.delegation_tool_name = delegation_tool_name
+        self.result = dict(result or {})
         super().__init__(f"{tool_name} returned {business_status.value}")
 
     @classmethod
@@ -158,6 +197,7 @@ class BusinessOperationFailed(RuntimeError):
             warnings=response.warnings,
             tool_call_ids=[response.call_id],
             governance_decisions=governance_decisions,
+            result=response.result,
         )
 
 
@@ -365,6 +405,7 @@ class ProcurementSpecialistHandler:
                 agent_role=AgentRole.PROCUREMENT_SPECIALIST,
                 business_status=failure.business_status,
                 result={
+                    **failure.result,
                     "failed_tool": failure.tool_name,
                     "governance_decisions": [
                         item.model_dump(mode="json")
@@ -406,7 +447,10 @@ class ProcurementSpecialistHandler:
             "search_catalog", {"query": request.query}, lambda: self.support.adapter.search_catalog(request.query)
         )
         product_code = _select_catalog_candidate(
-            search, request.constraints.specifications
+            search,
+            request.constraints.specifications,
+            step_id=task.step_ids[0],
+            governance_decisions=decisions,
         )["item"]["product_code"]
         item_response = call(
             "get_catalog_item",
@@ -426,6 +470,38 @@ class ProcurementSpecialistHandler:
             lambda: self.support.adapter.lookup_department(applicant.department_code),
         )
         department = Department.model_validate(department_response.result["department"])
+        if request.department_name:
+            requested_department_response = call(
+                "lookup_department",
+                {"identifier": request.department_name},
+                lambda: self.support.adapter.lookup_department(
+                    request.department_name or ""
+                ),
+            )
+            requested_department = Department.model_validate(
+                requested_department_response.result["department"]
+            )
+            if requested_department.department_code != department.department_code:
+                raise BusinessOperationFailed(
+                    tool_name="lookup_department",
+                    step_id=task.step_ids[0],
+                    business_status=BusinessStatus.VALIDATION_FAILED,
+                    evidence_refs=list(
+                        dict.fromkeys(
+                            ref
+                            for response in (
+                                department_response,
+                                requested_department_response,
+                            )
+                            for ref in response.evidence_refs
+                        )
+                    ),
+                    warnings=[
+                        "request.department_name does not match applicant department"
+                    ],
+                    tool_call_ids=[record.call_id for record in tool_records],
+                    governance_decisions=decisions,
+                )
         account_response = call(
             "lookup_account_code",
             {"category": item.category, "purpose": request.purpose},
@@ -981,6 +1057,9 @@ class HostedProcurementApplication:
                     )
                     executor = session.plan_executor()
                     missing = request.missing_required_fields()
+                    pending_clarification = session.governance_state.get(
+                        "pending_clarification"
+                    )
                     if missing:
                         executor.refresh_waiting(waiting.step_id, missing)
                         self.support.telemetry.add_event(
@@ -991,6 +1070,33 @@ class HostedProcurementApplication:
                                 "poc.missing.field.count": len(missing),
                             },
                         )
+                    elif pending_clarification:
+                        required_refs = set(
+                            pending_clarification.get("required_input_refs", [])
+                        )
+                        if changed & required_refs:
+                            executor.resume_after_user_input(waiting.step_id)
+                            invalidated = executor.invalidate_by_refs(changed)
+                            session.governance_state.pop(
+                                "pending_clarification", None
+                            )
+                            self.support.telemetry.add_event(
+                                root_span,
+                                "clarification_resolved",
+                                {
+                                    "poc.plan.step.id": waiting.step_id,
+                                    "poc.invalidated.step.count": len(invalidated),
+                                },
+                            )
+                        else:
+                            executor.refresh_waiting(
+                                waiting.step_id,
+                                required_refs,
+                                reason=(
+                                    "clarification required for: "
+                                    + ", ".join(sorted(required_refs))
+                                ),
+                            )
                     else:
                         executor.resume_after_user_input(waiting.step_id)
                         self.support.telemetry.add_event(
@@ -1015,16 +1121,7 @@ class HostedProcurementApplication:
                 session, user_input=user_text, resumed=resumed
             )
             if session.plan.status == PlanStatus.WAITING_USER:
-                response_text = json.dumps(
-                    {
-                        "business_status": "WAITING_USER",
-                        "missing_required_fields": session.request.missing_required_fields(),
-                        "plan_id": session.plan.plan_id,
-                        "plan_version": session.plan.plan_version,
-                    },
-                    ensure_ascii=False,
-                    sort_keys=True,
-                )
+                response_text = self._waiting_user_response(session)
                 self.context.after_invocation(session, response_text=response_text)
                 return self._outcome(
                     session,
@@ -1036,18 +1133,35 @@ class HostedProcurementApplication:
                     active_span=root_span,
                 )
 
-            await self._step(
-                executor,
-                "S02",
-                {"missing": request.missing_required_fields()},
-                lambda: (True, ["request.complete"], [], []),
+            resolve_step = next(
+                step for step in session.plan.steps if step.step_id == "S02"
             )
+            if resolve_step.status != PlanStatus.COMPLETED:
+                await self._step(
+                    executor,
+                    "S02",
+                    {"missing": request.missing_required_fields()},
+                    lambda: (True, ["request.complete"], [], []),
+                )
             try:
                 if self.bundle.pattern == LogicalPattern.HOSTED_SINGLE:
                     validation = await self._run_single(session, executor, request)
                 else:
                     validation = await self._run_multi(session, executor, request)
             except BusinessOperationFailed as failure:
+                if (
+                    failure.business_status
+                    == BusinessStatus.CLARIFICATION_REQUIRED
+                ):
+                    return self._clarification_outcome(
+                        session=session,
+                        executor=executor,
+                        failure=failure,
+                        run_id=run_id,
+                        trace_id=trace_id,
+                        resumed=resumed,
+                        root_span=root_span,
+                    )
                 return self._business_failure_outcome(
                     session=session,
                     executor=executor,
@@ -1186,6 +1300,65 @@ class HostedProcurementApplication:
             run_id,
             trace_id,
             True,
+            validation=None,
+            active_span=root_span,
+        )
+
+    @staticmethod
+    def _waiting_user_response(session: AgentSession) -> str:
+        payload: dict[str, Any] = {
+            "business_status": "WAITING_USER",
+            "missing_required_fields": session.request.missing_required_fields(),
+            "plan_id": session.plan.plan_id,
+            "plan_version": session.plan.plan_version,
+        }
+        clarification = session.governance_state.get("pending_clarification")
+        if clarification:
+            payload["clarification"] = clarification
+        return json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
+
+    def _clarification_outcome(
+        self,
+        *,
+        session: AgentSession,
+        executor,
+        failure: BusinessOperationFailed,
+        run_id: str,
+        trace_id: str,
+        resumed: bool,
+        root_span: Any,
+    ) -> HostedRunOutcome:
+        clarification = dict(failure.result.get("clarification", {}))
+        required_refs = list(clarification.get("required_input_refs", []))
+        if not required_refs:
+            raise RuntimeError("clarification failure must declare required_input_refs")
+        session.governance_state["pending_clarification"] = clarification
+        executor.wait_for_user(
+            failure.step_id,
+            required_refs,
+            evidence_refs=failure.evidence_refs,
+            tool_call_ids=failure.tool_call_ids,
+            reason="clarification required for: " + ", ".join(required_refs),
+        )
+        self.support.telemetry.add_event(
+            root_span,
+            "clarification_required",
+            {
+                "poc.plan.step.id": failure.step_id,
+                "poc.clarification.option_count": len(
+                    clarification.get("options", [])
+                ),
+                "poc.clarification.required_ref_count": len(required_refs),
+            },
+        )
+        response_text = self._waiting_user_response(session)
+        self.context.after_invocation(session, response_text=response_text)
+        return self._outcome(
+            session,
+            response_text,
+            run_id,
+            trace_id,
+            resumed,
             validation=None,
             active_span=root_span,
         )
@@ -1354,29 +1527,52 @@ class HostedProcurementApplication:
             )
             return self._success(response, name, step) if require_success else response
 
-        search = await self._step(
-            executor,
-            "S03",
-            {"query": request.query},
-            lambda: self._step_tool_result(
-                governed("S03", "search_catalog", {"query": request.query}, lambda: self.support.adapter.search_catalog(request.query)),
-                "search.candidates",
-            ),
-        )
-        product_code = _select_catalog_candidate(
-            search, request.constraints.specifications
-        )["item"]["product_code"]
-        item_response = await self._step(
-            executor,
-            "S04",
-            {"product_code": product_code},
-            lambda: self._step_tool_result(
-                governed("S04", "get_catalog_item", {"product_code": product_code}, lambda: self.support.adapter.get_catalog_item(product_code)),
-                "item",
-            ),
-        )
-        item = CatalogItem.model_validate(item_response.result["item"])
-        session.selected_item = item
+        item_step = next(step for step in session.plan.steps if step.step_id == "S04")
+        if item_step.status == PlanStatus.COMPLETED and session.selected_item:
+            item = session.selected_item
+            item_evidence = list(item_step.evidence_refs)
+        else:
+            def search_and_select():
+                search = governed(
+                    "S03",
+                    "search_catalog",
+                    {"query": request.query},
+                    lambda: self.support.adapter.search_catalog(request.query),
+                )
+                candidate = _select_catalog_candidate(
+                    search,
+                    request.constraints.specifications,
+                    step_id="S03",
+                )
+                return (
+                    candidate,
+                    ["search.candidates"],
+                    search.evidence_refs,
+                    [search.call_id],
+                )
+
+            candidate = await self._step(
+                executor,
+                "S03",
+                {
+                    "query": request.query,
+                    "specifications": request.constraints.specifications,
+                },
+                search_and_select,
+            )
+            product_code = candidate["item"]["product_code"]
+            item_response = await self._step(
+                executor,
+                "S04",
+                {"product_code": product_code},
+                lambda: self._step_tool_result(
+                    governed("S04", "get_catalog_item", {"product_code": product_code}, lambda: self.support.adapter.get_catalog_item(product_code)),
+                    "item",
+                ),
+            )
+            item = CatalogItem.model_validate(item_response.result["item"])
+            session.selected_item = item
+            item_evidence = list(item_response.evidence_refs)
         applicant_response = await self._step(
             executor,
             "S05",
@@ -1387,14 +1583,68 @@ class HostedProcurementApplication:
             ),
         )
         applicant = Applicant.model_validate(applicant_response.result["applicant"])
+        def resolve_department():
+            department_response = governed(
+                "S06",
+                "lookup_department",
+                {"identifier": applicant.department_code},
+                lambda: self.support.adapter.lookup_department(
+                    applicant.department_code
+                ),
+            )
+            responses = [department_response]
+            if request.department_name:
+                requested_department_response = governed(
+                    "S06",
+                    "lookup_department",
+                    {"identifier": request.department_name},
+                    lambda: self.support.adapter.lookup_department(
+                        request.department_name or ""
+                    ),
+                )
+                responses.append(requested_department_response)
+                department = Department.model_validate(
+                    department_response.result["department"]
+                )
+                requested_department = Department.model_validate(
+                    requested_department_response.result["department"]
+                )
+                if requested_department.department_code != department.department_code:
+                    raise BusinessOperationFailed(
+                        tool_name="lookup_department",
+                        step_id="S06",
+                        business_status=BusinessStatus.VALIDATION_FAILED,
+                        evidence_refs=list(
+                            dict.fromkeys(
+                                ref
+                                for response in responses
+                                for ref in response.evidence_refs
+                            )
+                        ),
+                        warnings=[
+                            "request.department_name does not match applicant department"
+                        ],
+                        tool_call_ids=[response.call_id for response in responses],
+                    )
+            return (
+                department_response,
+                ["department"],
+                list(
+                    dict.fromkeys(
+                        ref for response in responses for ref in response.evidence_refs
+                    )
+                ),
+                [response.call_id for response in responses],
+            )
+
         department_response = await self._step(
             executor,
             "S06",
-            {"department_code": applicant.department_code},
-            lambda: self._step_tool_result(
-                governed("S06", "lookup_department", {"identifier": applicant.department_code}, lambda: self.support.adapter.lookup_department(applicant.department_code)),
-                "department",
-            ),
+            {
+                "department_code": applicant.department_code,
+                "requested_department": request.department_name,
+            },
+            resolve_department,
         )
         department = Department.model_validate(department_response.result["department"])
         account_response = await self._step(
@@ -1427,8 +1677,19 @@ class HostedProcurementApplication:
             ),
         )
         calculation = CalculationResult.model_validate(calculation_response.result["calculation"])
-        records = [item_response, applicant_response, department_response, account_response, delivery_response, calculation_response]
-        evidence = list(dict.fromkeys(ref for response in records for ref in response.evidence_refs))
+        records = [
+            applicant_response,
+            department_response,
+            account_response,
+            delivery_response,
+            calculation_response,
+        ]
+        evidence = list(
+            dict.fromkeys(
+                item_evidence
+                + [ref for response in records for ref in response.evidence_refs]
+            )
+        )
         draft = ApplicationDraft(
             request_id=request.request_id,
             item=DraftItem(
@@ -1590,6 +1851,7 @@ class HostedProcurementApplication:
                 warnings=result.warnings,
                 tool_call_ids=tool_ids,
                 delegation_tool_name=tool.name,
+                result=result.result,
             )
         return result, [f"agent_tool_result.{result.agent_role.value}"], result.evidence_refs, tool_ids
 

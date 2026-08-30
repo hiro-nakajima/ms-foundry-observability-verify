@@ -176,6 +176,136 @@ def test_requested_specification_selects_matching_catalog_item(pattern: LogicalP
 
 @pytest.mark.integration
 @pytest.mark.parametrize("pattern", [LogicalPattern.HOSTED_SINGLE, LogicalPattern.HOSTED_MULTI])
+def test_ambiguous_catalog_waits_then_resumes_with_specification(
+    pattern: LogicalPattern,
+) -> None:
+    bundle = build_local_hosted_bundle(pattern)
+    initial = complete_request(request_id="REQ-CATALOG-CLARIFY", quantity=1).model_copy(
+        update={
+            "query": "ノートPC",
+            "constraints": RequestConstraints(requested_by=date(2026, 9, 30)),
+        }
+    )
+    first = asyncio.run(bundle.application.run(initial))
+    response = json.loads(first.response_text)
+    assert response["business_status"] == "WAITING_USER"
+    assert response["missing_required_fields"] == []
+    assert response["clarification"]["field"] == "catalog_item"
+    assert {
+        option["product_code"] for option in response["clarification"]["options"]
+    } == {"LAPTOP-DEV-14", "LAPTOP-OFFICE-13"}
+    waiting_step = next(
+        step for step in first.session.plan.steps if step.status == PlanStatus.WAITING_USER
+    )
+    assert waiting_step.step_id == "S03"
+    assert waiting_step.tool_call_ids
+    plan_id = first.session.active_plan_id
+
+    clarified = initial.model_copy(
+        update={
+            "constraints": RequestConstraints(
+                requested_by=date(2026, 9, 30),
+                specifications={"memory": "16GB"},
+            )
+        }
+    )
+    second = asyncio.run(
+        bundle.application.run(clarified, session=first.session, resume=True)
+    )
+    final = json.loads(second.response_text)
+    assert final["business_status"] == "SUCCESS"
+    assert final["application_draft"]["item"]["product_code"] == "LAPTOP-OFFICE-13"
+    assert second.session.active_plan_id == plan_id
+    assert second.session.plan.plan_version == 2
+
+
+@pytest.mark.integration
+def test_irrelevant_follow_up_does_not_resume_catalog_clarification() -> None:
+    bundle = build_local_hosted_bundle(LogicalPattern.HOSTED_SINGLE)
+    initial = complete_request(request_id="REQ-CLARIFY-STILL-WAITING", quantity=1).model_copy(
+        update={"query": "ノートPC"}
+    )
+    first = asyncio.run(bundle.application.run(initial))
+    follow_up = initial.model_copy(update={"purpose": "検証環境"})
+    second = asyncio.run(
+        bundle.application.run(follow_up, session=first.session, resume=True)
+    )
+    response = json.loads(second.response_text)
+    assert response["business_status"] == "WAITING_USER"
+    assert response["clarification"]["field"] == "catalog_item"
+    assert second.session.plan.plan_version == 1
+    assert second.session.plan.status == PlanStatus.WAITING_USER
+    assert second.envelope.tool_calls == [{"status": "not-executed"}]
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("pattern", [LogicalPattern.HOSTED_SINGLE, LogicalPattern.HOSTED_MULTI])
+def test_ambiguous_applicant_waits_then_resumes_with_employee_id(
+    pattern: LogicalPattern,
+) -> None:
+    bundle = build_local_hosted_bundle(pattern)
+    initial = complete_request(request_id="REQ-APPLICANT-CLARIFY", quantity=1).model_copy(
+        update={"applicant_name": "架空"}
+    )
+    first = asyncio.run(bundle.application.run(initial))
+    response = json.loads(first.response_text)
+    assert response["business_status"] == "WAITING_USER"
+    assert response["clarification"]["field"] == "applicant_name"
+    assert {
+        option["employee_id"] for option in response["clarification"]["options"]
+    } == {"EMP-001", "EMP-002"}
+    waiting_step = next(
+        step for step in first.session.plan.steps if step.status == PlanStatus.WAITING_USER
+    )
+    assert waiting_step.tool_call_ids
+    plan_id = first.session.active_plan_id
+
+    clarified = initial.model_copy(update={"applicant_name": "EMP-002"})
+    second = asyncio.run(
+        bundle.application.run(clarified, session=first.session, resume=True)
+    )
+    final = json.loads(second.response_text)
+    assert final["business_status"] == "SUCCESS"
+    assert final["application_draft"]["applicant"]["employee_id"] == "EMP-002"
+    assert second.session.active_plan_id == plan_id
+    assert second.session.plan.plan_version == 2
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("pattern", [LogicalPattern.HOSTED_SINGLE, LogicalPattern.HOSTED_MULTI])
+def test_explicit_department_must_match_applicant_department(
+    pattern: LogicalPattern,
+) -> None:
+    bundle = build_local_hosted_bundle(pattern)
+    request = complete_request(request_id="REQ-DEPARTMENT-MISMATCH").model_copy(
+        update={"department_name": "運用一部"}
+    )
+    outcome = asyncio.run(bundle.application.run(request))
+    response = json.loads(outcome.response_text)
+    assert response["technical_status"] == "SUCCESS"
+    assert response["business_status"] == "VALIDATION_FAILED"
+    assert response["failed_tool"] == "lookup_department"
+    assert "application_draft" not in response
+    assert outcome.session.application_draft is None
+    assert outcome.session.plan.status == PlanStatus.BLOCKED
+    assert len(response["evidence_refs"]) == 2
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("pattern", [LogicalPattern.HOSTED_SINGLE, LogicalPattern.HOSTED_MULTI])
+def test_matching_explicit_department_is_accepted(pattern: LogicalPattern) -> None:
+    bundle = build_local_hosted_bundle(pattern)
+    request = complete_request(request_id="REQ-DEPARTMENT-MATCH").model_copy(
+        update={"department_name": "開発一部"}
+    )
+    outcome = asyncio.run(bundle.application.run(request))
+    response = json.loads(outcome.response_text)
+    assert response["business_status"] == "SUCCESS"
+    assert response["application_draft"]["applicant"]["department_code"] == "DPT-DEV-01"
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("pattern", [LogicalPattern.HOSTED_SINGLE, LogicalPattern.HOSTED_MULTI])
 @pytest.mark.parametrize(
     "constraints",
     [
@@ -383,6 +513,38 @@ def test_framework_session_round_trip_resumes_waiting_plan() -> None:
     response = json.loads(second.text)
     assert response["observability"]["session_resumed"] is True
     assert response["application_draft"]["amount"]["total"] == "594000"
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("pattern", [LogicalPattern.HOSTED_SINGLE, LogicalPattern.HOSTED_MULTI])
+def test_framework_session_resumes_catalog_clarification(
+    pattern: LogicalPattern,
+) -> None:
+    bundle = build_local_hosted_bundle(pattern)
+    framework_session = FrameworkAgentSession()
+    initial = complete_request(request_id="REQ-FRAMEWORK-CLARIFY", quantity=1).model_copy(
+        update={"query": "ノートPC"}
+    )
+    first = asyncio.run(
+        bundle.coordinator.run(initial.model_dump_json(), session=framework_session)
+    )
+    assert json.loads(first.text)["business_status"] == "WAITING_USER"
+
+    clarified = initial.model_copy(
+        update={
+            "constraints": RequestConstraints(
+                requested_by=date(2026, 9, 30),
+                specifications={"memory": "32GB"},
+            )
+        }
+    )
+    second = asyncio.run(
+        bundle.coordinator.run(clarified.model_dump_json(), session=framework_session)
+    )
+    response = json.loads(second.text)
+    assert response["business_status"] == "SUCCESS"
+    assert response["application_draft"]["item"]["product_code"] == "LAPTOP-DEV-14"
+    assert response["observability"]["session_resumed"] is True
 
 
 @pytest.mark.integration
