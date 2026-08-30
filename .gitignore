@@ -1,0 +1,16 @@
+.venv*/
+.local_state/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+.env
+artifacts/traces/*
+artifacts/envelopes/*
+artifacts/eval-results/*
+artifacts/reports/*
+!artifacts/**/.gitkeep

@@ -1,0 +1,140 @@
+apiVersion: governance.toolkit/v1
+version: "1.0.0"
+name: procurement-poc-runtime-policy
+description: Runtime policy for synthetic procurement Plan and Execute agents.
+agents: ["*"]
+default_action: allow
+
+rules:
+  - name: pre-input-secret-pattern
+    stage: pre_input
+    condition: input.contains_secret
+    action: deny
+    description: Secret-like input is prohibited.
+    priority: 1000
+
+  - name: pre-input-synthetic-canary
+    stage: pre_input
+    condition: input.contains_canary
+    action: deny
+    description: Synthetic canary values must never be accepted or echoed.
+    priority: 1000
+
+  - name: coordinator-direct-data-tool
+    stage: pre_tool
+    condition: action.agent_role == 'coordinator' and action.is_data_tool
+    action: deny
+    description: Multi-agent Coordinator cannot call data tools directly.
+    priority: 950
+
+  - name: drafting-specialist-search-tool
+    stage: pre_tool
+    condition: action.agent_role == 'drafting_specialist' and action.is_search_tool
+    action: deny
+    description: Drafting specialist cannot search or look up procurement data.
+    priority: 950
+
+  - name: role-tool-allowlist
+    stage: pre_tool
+    condition: action.role_tool_violation
+    action: deny
+    description: Tool is not allowlisted for the current agent role.
+    priority: 900
+
+  - name: completed-step-duplicate
+    stage: pre_tool
+    condition: action.duplicate_step
+    action: deny
+    description: Same plan version, step, and input hash was already completed.
+    priority: 900
+
+  - name: completed-plan-action
+    stage: pre_tool
+    condition: action.plan_completed
+    action: deny
+    description: No tool or agent-tool call is allowed after plan completion.
+    priority: 900
+
+  - name: missing-required-information
+    stage: pre_tool
+    condition: action.missing_required_information
+    action: deny
+    description: Missing required information must transition to WAITING_USER.
+    priority: 850
+
+  - name: tool-call-limit
+    stage: pre_tool
+    condition: action.tool_call_count > 24
+    action: deny
+    description: Logical tool call limit exceeded.
+    priority: 800
+
+  - name: agent-tool-call-limit
+    stage: pre_tool
+    condition: action.agent_tool_call_count > 4
+    action: deny
+    description: Agent tool delegation limit exceeded.
+    priority: 800
+
+  - name: post-tool-missing-provenance
+    stage: post_tool
+    condition: tool.success_without_evidence
+    action: deny
+    description: Successful structured tool output must include evidence.
+    priority: 900
+
+  - name: post-tool-secret-pattern
+    stage: post_tool
+    condition: tool.contains_secret
+    action: deny
+    description: Tool output containing a secret-like value is prohibited.
+    priority: 1000
+
+  - name: post-tool-synthetic-canary
+    stage: post_tool
+    condition: tool.contains_canary
+    action: deny
+    description: Tool output containing a synthetic canary is prohibited.
+    priority: 1000
+
+  - name: pre-output-ungrounded-product
+    stage: pre_output
+    condition: response.ungrounded_product_or_code
+    action: deny
+    description: Product and code must exist in structured tool output.
+    priority: 1000
+
+  - name: pre-output-calculation-required
+    stage: pre_output
+    condition: response.missing_calculation_output
+    action: deny
+    description: request-check calculation output is required.
+    priority: 1000
+
+  - name: pre-output-validation-required
+    stage: pre_output
+    condition: response.validation_not_passed
+    action: deny
+    description: Draft cannot be presented before deterministic validation passes.
+    priority: 1000
+
+  - name: pre-output-plan-not-ready
+    stage: pre_output
+    condition: response.plan_not_ready
+    action: deny
+    description: Required plan steps must be complete before output.
+    priority: 950
+
+  - name: pre-output-secret-pattern
+    stage: pre_output
+    condition: response.contains_secret
+    action: deny
+    description: Secret-like response content is prohibited.
+    priority: 1000
+
+  - name: pre-output-synthetic-canary
+    stage: pre_output
+    condition: response.contains_canary
+    action: deny
+    description: Synthetic canary response content is prohibited.
+    priority: 1000
