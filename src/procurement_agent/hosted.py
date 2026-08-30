@@ -7,7 +7,6 @@ import inspect
 import json
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
-from datetime import date
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -351,18 +350,10 @@ class ExecutionSupport:
         return response
 
     def calculate_with_skill(self, quantity: int, unit_price: str) -> ToolResponse:
-        active_rule = next(
-            (
-                rule
-                for rule in self.adapter.tax_rules
-                if date.fromisoformat(rule["valid_from"])
-                <= self.adapter.as_of_date
-                <= date.fromisoformat(rule["valid_to"])
-            ),
-            None,
-        )
-        if active_rule is None:
+        active_rules = self.adapter.active_tax_rules()
+        if len(active_rules) != 1:
             return self.adapter.calculate_request(quantity, unit_price)
+        active_rule = active_rules[0]
         with self.telemetry.span("skill.request_check", {"poc.skill.name": "request-check"}):
             with self.telemetry.span(
                 "script.calculate_request", {"poc.script.name": "calculate_request.py"}
@@ -826,7 +817,12 @@ def build_local_hosted_bundle(
             drafting_tool=drafting_tool,
         )
     application = HostedProcurementApplication(bundle)
-    context_provider.bind(application.run)
+    context_provider.bind(
+        application.run,
+        invalid_input_gate=lambda raw: support.middleware.run_pre_input(
+            raw, application.role
+        ),
+    )
     bundle.application = application
     return bundle
 
@@ -1936,6 +1932,9 @@ class HostedProcurementApplication:
 
     def _status_summary(self, session: AgentSession, trace_id: str, resumed: bool) -> dict[str, Any]:
         next_step = session.plan_executor().next_step() if session.plan else None
+        invocation_decisions = session.governance_decisions[
+            self.support.ledger.governance_decision_offset :
+        ]
         return {
             "logical_pattern": self.bundle.pattern.value,
             "plan_id": session.active_plan_id,
@@ -1946,7 +1945,9 @@ class HostedProcurementApplication:
                 step.step_id for step in (session.plan.steps if session.plan else []) if step.status == PlanStatus.COMPLETED
             ],
             "delegations": [item["agent_role"] for item in self.support.ledger.delegations],
-            "governance_decisions": [item.outcome.value for item in session.governance_decisions],
+            "governance_decisions": [
+                item.outcome.value for item in invocation_decisions
+            ],
             "trace_id": trace_id,
             "warnings": list(session.plan.warnings if session.plan else []),
             "session_resumed": resumed,

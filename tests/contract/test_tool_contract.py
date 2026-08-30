@@ -81,6 +81,20 @@ def test_missing_active_tax_rule_is_structured_business_failure() -> None:
     assert response.warnings == ["no active tax rule for 2027-01-01"]
 
 
+def test_overlapping_tax_rules_are_structured_business_failure(adapter) -> None:
+    overlapping = dict(adapter.tax_rules[0])
+    overlapping["rule_id"] = "JP-OVERLAP-2026-SYNTHETIC"
+    overlapping["tax_rate"] = "0.08"
+    adapter.tax_rules.append(overlapping)
+    response = adapter.calculate_request(1, "180000")
+    _assert_contract(response)
+    assert response.business_status == BusinessStatus.BLOCKED
+    assert response.result == {}
+    assert response.warnings == [
+        "multiple active tax rules for 2026-08-28"
+    ]
+
+
 def test_delivery_tool_warns_when_requested_date_cannot_be_met(adapter) -> None:
     response = adapter.estimate_delivery("LAPTOP-DEV-14", 1, date(2026, 8, 29))
     _assert_contract(response)

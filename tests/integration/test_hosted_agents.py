@@ -118,6 +118,21 @@ def test_enforce_pre_input_denial_does_not_mutate_session() -> None:
 
 
 @pytest.mark.integration
+def test_framework_invalid_input_is_governed_before_schema_response() -> None:
+    bundle = build_local_hosted_bundle(
+        LogicalPattern.HOSTED_SINGLE,
+        governance_mode=GovernanceMode.ENFORCE,
+    )
+    framework_session = FrameworkAgentSession()
+    malformed = '{"query":"password=synthetic-test-value"'
+    with pytest.raises(GovernanceDenied) as exc:
+        asyncio.run(bundle.coordinator.run(malformed, session=framework_session))
+    assert exc.value.decision.stage == "pre_input"
+    assert framework_session.state["procurement-execution-context"] == {}
+    assert "synthetic-test-value" not in json.dumps(framework_session.state)
+
+
+@pytest.mark.integration
 def test_failed_validation_details_are_protected_in_trace_envelope() -> None:
     bundle = build_local_hosted_bundle(LogicalPattern.HOSTED_SINGLE)
     constraints = RequestConstraints(
@@ -212,6 +227,26 @@ def test_hosted_multi_propagates_missing_tax_rule_as_business_failure() -> None:
         decision["outcome"]
         for decision in outcome.envelope.agent_trace.governance_decisions
     ]
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("pattern", [LogicalPattern.HOSTED_SINGLE, LogicalPattern.HOSTED_MULTI])
+def test_overlapping_tax_rules_block_both_hosted_patterns(
+    pattern: LogicalPattern,
+) -> None:
+    bundle = build_local_hosted_bundle(pattern)
+    overlapping = dict(bundle.support.adapter.tax_rules[0])
+    overlapping["rule_id"] = "JP-OVERLAP-2026-SYNTHETIC"
+    overlapping["tax_rate"] = "0.08"
+    bundle.support.adapter.tax_rules.append(overlapping)
+    outcome = asyncio.run(
+        bundle.application.run(complete_request(request_id="REQ-TAX-AMBIGUOUS"))
+    )
+    response = json.loads(outcome.response_text)
+    assert response["technical_status"] == "SUCCESS"
+    assert response["business_status"] == "BLOCKED"
+    assert response["failed_tool"] == "calculate_request"
+    assert outcome.session.plan.status == PlanStatus.BLOCKED
 
 
 @pytest.mark.integration
@@ -316,6 +351,9 @@ def test_completed_plan_replay_records_only_current_invocation_governance() -> N
         "pre_output",
     ]
     assert second.envelope.tool_calls == [{"status": "not-executed"}]
+    assert second.status_summary["governance_decisions"] == [
+        decision["outcome"] for decision in decisions
+    ]
 
 
 @pytest.mark.integration

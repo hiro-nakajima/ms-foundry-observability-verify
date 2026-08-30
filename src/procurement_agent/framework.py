@@ -171,9 +171,16 @@ class SerializedProcurementContextProvider(ContextProvider):
     def __init__(self) -> None:
         super().__init__(source_id="procurement-execution-context")
         self._run_request: Callable[..., Any] | None = None
+        self._invalid_input_gate: Callable[[str], Any] | None = None
 
-    def bind(self, run_request: Callable[..., Any]) -> None:
+    def bind(
+        self,
+        run_request: Callable[..., Any],
+        *,
+        invalid_input_gate: Callable[[str], Any] | None = None,
+    ) -> None:
         self._run_request = run_request
+        self._invalid_input_gate = invalid_input_gate
 
     @staticmethod
     def _last_user_text(context: SessionContext) -> str:
@@ -196,6 +203,8 @@ class SerializedProcurementContextProvider(ContextProvider):
         try:
             request = ProcurementRequest.model_validate_json(raw)
         except ValidationError as exc:
+            if self._invalid_input_gate is not None:
+                self._invalid_input_gate(raw)
             response = {
                 "business_status": "INVALID_INPUT",
                 "message": "ProcurementRequest JSON is required in local deterministic mode.",

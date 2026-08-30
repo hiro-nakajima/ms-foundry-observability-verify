@@ -383,21 +383,20 @@ class LocalJsonAdapter:
     def calculate_request(
         self, quantity: int, unit_price: str, *, discount_rate: str = "0"
     ) -> ToolResponse:
-        active_rule = next(
-            (
-                rule
-                for rule in self.tax_rules
-                if date.fromisoformat(rule["valid_from"])
-                <= self.as_of_date
-                <= date.fromisoformat(rule["valid_to"])
-            ),
-            None,
-        )
-        if active_rule is None:
+        active_rules = self.active_tax_rules()
+        if not active_rules:
             return self._response(
                 business_status=BusinessStatus.NOT_FOUND,
                 warnings=[f"no active tax rule for {self.as_of_date.isoformat()}"],
             )
+        if len(active_rules) > 1:
+            return self._response(
+                business_status=BusinessStatus.BLOCKED,
+                warnings=[
+                    f"multiple active tax rules for {self.as_of_date.isoformat()}"
+                ],
+            )
+        active_rule = active_rules[0]
         try:
             raw_result = self._calculation_module.calculate_request(
                 quantity=quantity,
@@ -419,6 +418,15 @@ class LocalJsonAdapter:
             result={"calculation": result.model_dump(mode="json")},
             evidence_refs=[evidence],
         )
+
+    def active_tax_rules(self) -> list[dict[str, Any]]:
+        return [
+            rule
+            for rule in self.tax_rules
+            if date.fromisoformat(rule["valid_from"])
+            <= self.as_of_date
+            <= date.fromisoformat(rule["valid_to"])
+        ]
 
     def validate_application(self, draft: ApplicationDraft) -> ToolResponse:
         validation_data = self._validation_module.validate_request(draft.model_dump(mode="json"))
