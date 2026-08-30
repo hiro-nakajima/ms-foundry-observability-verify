@@ -23,7 +23,16 @@ from .models import (
 SECRET_PATTERNS = (
     re.compile(r"\bsk-[A-Za-z0-9_-]{12,}\b"),
     re.compile(r"(?i)\b(?:api[_-]?key|client[_-]?secret|password)\s*[:=]\s*\S+"),
-    re.compile(r"\b[A-Za-z0-9+/]{32,}={0,2}\b"),
+    # A bare hexadecimal trace/span ID is observability metadata, not evidence
+    # of a secret. Only treat unlabeled Base64-like values as secrets when they
+    # contain Base64-specific punctuation; named keys are handled above.
+    re.compile(
+        r"(?<![A-Za-z0-9+/=])"
+        r"(?=[A-Za-z0-9+/=]{32,}(?![A-Za-z0-9+/=]))"
+        r"(?=[A-Za-z0-9+/=]*[+/=])"
+        r"[A-Za-z0-9+/]{32,}={0,2}"
+        r"(?![A-Za-z0-9+/=])"
+    ),
 )
 CANARY_PATTERN = re.compile(r"\bSYNTHETIC-CANARY-[A-Z0-9-]+\b")
 

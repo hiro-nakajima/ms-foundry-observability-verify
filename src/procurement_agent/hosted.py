@@ -1060,6 +1060,16 @@ class HostedProcurementApplication:
             draft = session.application_draft
             if draft is None:
                 raise RuntimeError("validated run did not produce an ApplicationDraft")
+            if not validation.valid:
+                return self._validation_failure_outcome(
+                    session=session,
+                    executor=executor,
+                    validation=validation,
+                    run_id=run_id,
+                    trace_id=trace_id,
+                    resumed=resumed,
+                    root_span=root_span,
+                )
             with self.support.telemetry.span(
                 "governance.pre_output", {"poc.agent.role": self.role}
             ) as governance_span:
@@ -1070,7 +1080,7 @@ class HostedProcurementApplication:
                     ungrounded_product_or_code=False,
                     missing_calculation_output=draft.amount.calculated_by
                     != "request-check/scripts/calculate_request.py",
-                    validation_not_passed=not validation.valid,
+                    validation_not_passed=False,
                     plan_not_ready=any(
                         step.status != PlanStatus.COMPLETED
                         for step in session.plan.steps
@@ -1086,37 +1096,6 @@ class HostedProcurementApplication:
                     }
                 )
             session.governance_decisions.append(decision)
-            if not validation.valid:
-                reason = (
-                    "deterministic validation failed "
-                    f"({len(validation.violations)} violation(s))"
-                )
-                executor.block(session.plan.steps[-1].step_id, reason)
-                with self.support.telemetry.span(
-                    "response.generate", {"poc.response.validated": False}
-                ):
-                    status = self._status_summary(session, trace_id, resumed)
-                    response_text = json.dumps(
-                        {
-                            "business_status": BusinessStatus.VALIDATION_FAILED.value,
-                            "validated": False,
-                            "violations": validation.violations,
-                            "observability": status,
-                        },
-                        ensure_ascii=False,
-                        sort_keys=True,
-                        default=str,
-                    )
-                self.context.after_invocation(session, response_text=response_text)
-                return self._outcome(
-                    session,
-                    response_text,
-                    run_id,
-                    trace_id,
-                    resumed,
-                    validation=validation,
-                    active_span=root_span,
-                )
             await self._step(
                 executor,
                 session.plan.steps[-1].step_id,
@@ -1286,6 +1265,77 @@ class HostedProcurementApplication:
             trace_id,
             resumed,
             validation=None,
+            active_span=root_span,
+        )
+
+    def _validation_failure_outcome(
+        self,
+        *,
+        session: AgentSession,
+        executor,
+        validation: ValidationResult,
+        run_id: str,
+        trace_id: str,
+        resumed: bool,
+        root_span: Any,
+    ) -> HostedRunOutcome:
+        reason = (
+            "deterministic validation failed "
+            f"({len(validation.violations)} violation(s))"
+        )
+        executor.block(session.plan.steps[-1].step_id, reason)
+        self.support.telemetry.add_event(
+            root_span,
+            "validation_failed",
+            {
+                "poc.plan.step.id": session.plan.steps[-1].step_id,
+                "poc.validation.violation_count": len(validation.violations),
+            },
+        )
+        response_text = json.dumps(
+            {
+                "business_status": BusinessStatus.VALIDATION_FAILED.value,
+                "validated": False,
+                "violations": validation.violations,
+                "observability": self._status_summary(session, trace_id, resumed),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            default=str,
+        )
+        with self.support.telemetry.span(
+            "governance.pre_output", {"poc.agent.role": self.role}
+        ) as governance_span:
+            decision = self.support.middleware.run_pre_output(
+                role=self.role,
+                plan_id=session.plan.plan_id,
+                response_text=response_text,
+                ungrounded_product_or_code=False,
+                missing_calculation_output=False,
+                validation_not_passed=False,
+                plan_not_ready=False,
+            )
+            governance_span.set_attributes(
+                {
+                    "poc.policy.version": decision.policy_version,
+                    "poc.policy.rule.id": decision.rule_id,
+                    "poc.governance.stage": decision.stage,
+                    "poc.governance.decision": decision.outcome.value,
+                }
+            )
+        session.governance_decisions.append(decision)
+        with self.support.telemetry.span(
+            "response.generate", {"poc.response.validated": False}
+        ):
+            pass
+        self.context.after_invocation(session, response_text=response_text)
+        return self._outcome(
+            session,
+            response_text,
+            run_id,
+            trace_id,
+            resumed,
+            validation=validation,
             active_span=root_span,
         )
 

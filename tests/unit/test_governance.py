@@ -107,3 +107,14 @@ def test_canary_is_hard_gated_in_enforce_mode() -> None:
             plan_not_ready=False,
         )
     assert exc.value.decision.rule_id == "pre-output-synthetic-canary"
+
+
+def test_bare_trace_id_is_not_classified_as_secret() -> None:
+    assert GovernanceAdapter._has_secret("2e1ed0afcd4308c34a9e0430b0536380") is False
+
+
+def test_unlabeled_padded_base64_value_is_classified_as_secret() -> None:
+    assert (
+        GovernanceAdapter._has_secret("ZmFrZS1zZWNyZXQtdmFsdWUtbm90LXJlYWw=")
+        is True
+    )

@@ -12,6 +12,7 @@ from agent_framework import AgentSession as FrameworkAgentSession
 
 from procurement_agent.hosted import build_local_hosted_bundle
 from procurement_agent.models import (
+    GovernanceMode,
     LogicalPattern,
     PlanGenerationSource,
     PlanStatus,
@@ -217,6 +218,35 @@ def test_unmet_requested_delivery_date_is_validation_failure(pattern: LogicalPat
     assert "application_draft" not in response
     assert any("constraint.requested_by" in item for item in response["violations"])
     assert "requested delivery date cannot be met" in outcome.session.application_draft.warnings
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("pattern", [LogicalPattern.HOSTED_SINGLE, LogicalPattern.HOSTED_MULTI])
+def test_enforce_mode_returns_structured_validation_failure(pattern: LogicalPattern) -> None:
+    bundle = build_local_hosted_bundle(pattern, governance_mode=GovernanceMode.ENFORCE)
+    constraints = RequestConstraints(
+        requested_by=date(2026, 9, 30),
+        budget_limit="100000",
+    )
+    outcome = asyncio.run(
+        bundle.application.run(
+            complete_request().model_copy(update={"constraints": constraints})
+        )
+    )
+    response = json.loads(outcome.response_text)
+    assert response["business_status"] == "VALIDATION_FAILED"
+    assert response["validated"] is False
+    assert "application_draft" not in response
+    assert outcome.session.plan.status == PlanStatus.BLOCKED
+    assert outcome.session.plan.steps[-1].status == PlanStatus.BLOCKED
+    assert outcome.envelope.run.technical_status == "SUCCESS"
+    pre_output_decisions = [
+        decision
+        for decision in outcome.session.governance_decisions
+        if decision.stage == "pre_output"
+    ]
+    assert pre_output_decisions
+    assert pre_output_decisions[-1].outcome.value == "ALLOW"
 
 
 @pytest.mark.integration
