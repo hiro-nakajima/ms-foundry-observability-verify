@@ -236,6 +236,25 @@ def test_irrelevant_follow_up_does_not_resume_catalog_clarification() -> None:
     assert second.session.plan.plan_version == 1
     assert second.session.plan.status == PlanStatus.WAITING_USER
     assert second.envelope.tool_calls == [{"status": "not-executed"}]
+    decisions = second.envelope.agent_trace.governance_decisions
+    assert len(decisions) == 1
+    assert decisions[0]["stage"] == "pre_input"
+
+
+@pytest.mark.integration
+def test_completed_plan_replay_records_only_current_invocation_governance() -> None:
+    bundle = build_local_hosted_bundle(LogicalPattern.HOSTED_SINGLE)
+    request = complete_request(request_id="REQ-REPLAY-TRACE")
+    first = asyncio.run(bundle.application.run(request))
+    second = asyncio.run(
+        bundle.application.run(request, session=first.session, resume=True)
+    )
+    decisions = second.envelope.agent_trace.governance_decisions
+    assert [decision["stage"] for decision in decisions] == [
+        "pre_input",
+        "pre_output",
+    ]
+    assert second.envelope.tool_calls == [{"status": "not-executed"}]
 
 
 @pytest.mark.integration
@@ -742,6 +761,7 @@ def test_completed_session_new_plan_does_not_reuse_residual_values() -> None:
     assert second.session.active_plan_id != first_plan
     assert second.session.application_draft.amount.total == 198000
     assert second.session.request.request_id == "REQ-SECOND"
+    assert second.envelope.agent_trace.governance_decisions
 
 
 @pytest.mark.integration

@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date
 
 from procurement_agent.models import BusinessStatus, TechnicalStatus
+from procurement_agent.tools import LocalJsonAdapter, default_data_resource
 
 
 def _assert_contract(response) -> None:
@@ -51,6 +52,23 @@ def test_catalog_search_accepts_exact_product_code(adapter) -> None:
     assert response.business_status == BusinessStatus.SUCCESS
     assert response.result["candidates"][0]["item"]["product_code"] == "LAPTOP-DEV-14"
     assert response.result["candidates"][0]["score"] >= 100
+
+
+def test_expired_catalog_records_are_not_returned() -> None:
+    adapter = LocalJsonAdapter(default_data_resource(), as_of_date=date(2027, 1, 1))
+    search = adapter.search_catalog("LAPTOP-DEV-14")
+    structured = adapter.get_catalog_item("LAPTOP-DEV-14")
+    assert search.business_status == BusinessStatus.NOT_FOUND
+    assert structured.business_status == BusinessStatus.NOT_FOUND
+
+
+def test_missing_active_tax_rule_is_structured_business_failure() -> None:
+    adapter = LocalJsonAdapter(default_data_resource(), as_of_date=date(2027, 1, 1))
+    response = adapter.calculate_request(1, "180000")
+    _assert_contract(response)
+    assert response.business_status == BusinessStatus.NOT_FOUND
+    assert response.result == {}
+    assert response.warnings == ["no active tax rule for 2027-01-01"]
 
 
 def test_delivery_tool_warns_when_requested_date_cannot_be_met(adapter) -> None:

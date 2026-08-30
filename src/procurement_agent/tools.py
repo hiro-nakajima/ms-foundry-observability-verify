@@ -163,6 +163,8 @@ class LocalJsonAdapter:
             )
         candidates: list[dict[str, Any]] = []
         for item in self.catalog:
+            if not (item.valid_from <= self.as_of_date <= item.valid_to):
+                continue
             product_code_hit = 1 if normalized == item.product_code.casefold() else 0
             keyword_hits = sum(1 for keyword in item.keywords if keyword.casefold() in normalized)
             name_hit = 1 if normalized in item.name.casefold() else 0
@@ -188,7 +190,10 @@ class LocalJsonAdapter:
 
     def get_catalog_item(self, product_code: str) -> ToolResponse:
         for item in self.catalog:
-            if item.product_code == product_code:
+            if (
+                item.product_code == product_code
+                and item.valid_from <= self.as_of_date <= item.valid_to
+            ):
                 evidence = f"catalog:{item.product_code}:{self.data_version}"
                 return self._response(
                     business_status=BusinessStatus.SUCCESS,
@@ -362,10 +367,20 @@ class LocalJsonAdapter:
         self, quantity: int, unit_price: str, *, discount_rate: str = "0"
     ) -> ToolResponse:
         active_rule = next(
-            rule
-            for rule in self.tax_rules
-            if date.fromisoformat(rule["valid_from"]) <= self.as_of_date <= date.fromisoformat(rule["valid_to"])
+            (
+                rule
+                for rule in self.tax_rules
+                if date.fromisoformat(rule["valid_from"])
+                <= self.as_of_date
+                <= date.fromisoformat(rule["valid_to"])
+            ),
+            None,
         )
+        if active_rule is None:
+            return self._response(
+                business_status=BusinessStatus.NOT_FOUND,
+                warnings=[f"no active tax rule for {self.as_of_date.isoformat()}"],
+            )
         try:
             raw_result = self._calculation_module.calculate_request(
                 quantity=quantity,

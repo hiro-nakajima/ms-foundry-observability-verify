@@ -78,6 +78,7 @@ class RunLedger:
     retrieved_contexts: list[dict[str, Any]] = field(default_factory=list)
     delegations: list[dict[str, Any]] = field(default_factory=list)
     validations: list[dict[str, Any]] = field(default_factory=list)
+    governance_decision_offset: int = 0
 
 
 def _hash_payload(value: Any) -> str:
@@ -347,12 +348,17 @@ class ExecutionSupport:
 
     def calculate_with_skill(self, quantity: int, unit_price: str) -> ToolResponse:
         active_rule = next(
-            rule
-            for rule in self.adapter.tax_rules
-            if date.fromisoformat(rule["valid_from"])
-            <= self.adapter.as_of_date
-            <= date.fromisoformat(rule["valid_to"])
+            (
+                rule
+                for rule in self.adapter.tax_rules
+                if date.fromisoformat(rule["valid_from"])
+                <= self.adapter.as_of_date
+                <= date.fromisoformat(rule["valid_to"])
+            ),
+            None,
         )
+        if active_rule is None:
+            return self.adapter.calculate_request(quantity, unit_price)
         with self.telemetry.span("skill.request_check", {"poc.skill.name": "request-check"}):
             with self.telemetry.span(
                 "script.calculate_request", {"poc.script.name": "calculate_request.py"}
@@ -1015,6 +1021,9 @@ class HostedProcurementApplication:
         session.begin_turn(user_text)
         run_id = f"run-{uuid4()}"
         resumed = bool(resume and session.plan and session.request)
+        self.support.ledger.governance_decision_offset = (
+            len(session.governance_decisions) if resumed else 0
+        )
         with self.support.telemetry.span(
             "agent.invoke",
             {"poc.run.id": run_id, "poc.logical.pattern": self.bundle.pattern.value, "poc.agent.role": self.role},
@@ -1981,6 +1990,9 @@ class HostedProcurementApplication:
             tool_calls=self.support.ledger.tool_calls or [{"status": "not-executed"}],
             tool_output=self.support.ledger.tool_outputs or [{"status": "not-executed"}],
             delegations=self.support.ledger.delegations,
+            governance_decisions=session.governance_decisions[
+                self.support.ledger.governance_decision_offset :
+            ],
             validations=[validation.model_dump(mode="json")] if validation else [],
             resumed=resumed,
             trace_id=trace_id,

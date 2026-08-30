@@ -39,6 +39,7 @@ def build_envelope(
     tool_calls: list[dict[str, Any]],
     tool_output: list[dict[str, Any]],
     delegations: list[dict[str, Any]] | None = None,
+    governance_decisions: list[Any] | None = None,
     validations: list[dict[str, Any]] | None = None,
     resumed: bool = False,
     trace_id: str | None = None,
@@ -89,7 +90,14 @@ def build_envelope(
             spans=spans,
             events=events,
             delegations=delegations or [],
-            governance_decisions=[item.model_dump(mode="json") for item in session.governance_decisions],
+            governance_decisions=[
+                item.model_dump(mode="json")
+                for item in (
+                    session.governance_decisions
+                    if governance_decisions is None
+                    else governance_decisions
+                )
+            ],
             validations=protected_validations,
         ),
         conversation=[
