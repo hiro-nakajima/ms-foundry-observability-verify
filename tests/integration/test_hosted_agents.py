@@ -240,6 +240,27 @@ def test_irrelevant_follow_up_does_not_resume_catalog_clarification() -> None:
 
 @pytest.mark.integration
 @pytest.mark.parametrize("pattern", [LogicalPattern.HOSTED_SINGLE, LogicalPattern.HOSTED_MULTI])
+def test_catalog_clarification_accepts_exact_product_code(
+    pattern: LogicalPattern,
+) -> None:
+    bundle = build_local_hosted_bundle(pattern)
+    initial = complete_request(request_id="REQ-CLARIFY-BY-CODE", quantity=1).model_copy(
+        update={"query": "ノートPC"}
+    )
+    first = asyncio.run(bundle.application.run(initial))
+    assert json.loads(first.response_text)["business_status"] == "WAITING_USER"
+
+    clarified = initial.model_copy(update={"query": "LAPTOP-DEV-14"})
+    second = asyncio.run(
+        bundle.application.run(clarified, session=first.session, resume=True)
+    )
+    response = json.loads(second.response_text)
+    assert response["business_status"] == "SUCCESS"
+    assert response["application_draft"]["item"]["product_code"] == "LAPTOP-DEV-14"
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("pattern", [LogicalPattern.HOSTED_SINGLE, LogicalPattern.HOSTED_MULTI])
 def test_ambiguous_applicant_waits_then_resumes_with_employee_id(
     pattern: LogicalPattern,
 ) -> None:
@@ -273,6 +294,38 @@ def test_ambiguous_applicant_waits_then_resumes_with_employee_id(
 
 @pytest.mark.integration
 @pytest.mark.parametrize("pattern", [LogicalPattern.HOSTED_SINGLE, LogicalPattern.HOSTED_MULTI])
+def test_clarification_accumulates_changes_across_waiting_turns(
+    pattern: LogicalPattern,
+) -> None:
+    bundle = build_local_hosted_bundle(pattern)
+    initial = complete_request(request_id="REQ-CLARIFY-ACCUMULATE", quantity=1).model_copy(
+        update={"applicant_name": "架空"}
+    )
+    first = asyncio.run(bundle.application.run(initial))
+    assert json.loads(first.response_text)["business_status"] == "WAITING_USER"
+
+    changed_query = initial.model_copy(update={"query": "一般業務用ノートPC"})
+    second = asyncio.run(
+        bundle.application.run(changed_query, session=first.session, resume=True)
+    )
+    assert json.loads(second.response_text)["business_status"] == "WAITING_USER"
+    assert second.session.governance_state["clarification_changed_refs"] == [
+        "request.query"
+    ]
+
+    clarified = changed_query.model_copy(update={"applicant_name": "EMP-002"})
+    third = asyncio.run(
+        bundle.application.run(clarified, session=second.session, resume=True)
+    )
+    response = json.loads(third.response_text)
+    assert response["business_status"] == "SUCCESS"
+    assert response["application_draft"]["item"]["product_code"] == "LAPTOP-OFFICE-13"
+    assert response["application_draft"]["applicant"]["employee_id"] == "EMP-002"
+    assert "clarification_changed_refs" not in third.session.governance_state
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("pattern", [LogicalPattern.HOSTED_SINGLE, LogicalPattern.HOSTED_MULTI])
 def test_explicit_department_must_match_applicant_department(
     pattern: LogicalPattern,
 ) -> None:
@@ -302,6 +355,30 @@ def test_matching_explicit_department_is_accepted(pattern: LogicalPattern) -> No
     response = json.loads(outcome.response_text)
     assert response["business_status"] == "SUCCESS"
     assert response["application_draft"]["applicant"]["department_code"] == "DPT-DEV-01"
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("pattern", [LogicalPattern.HOSTED_SINGLE, LogicalPattern.HOSTED_MULTI])
+def test_ambiguous_department_waits_then_resumes_without_duplicate_lookup(
+    pattern: LogicalPattern,
+) -> None:
+    bundle = build_local_hosted_bundle(pattern)
+    initial = complete_request(request_id="REQ-DEPARTMENT-CLARIFY").model_copy(
+        update={"department_name": "一部"}
+    )
+    first = asyncio.run(bundle.application.run(initial))
+    response = json.loads(first.response_text)
+    assert response["business_status"] == "WAITING_USER"
+    assert response["clarification"]["field"] == "department_name"
+    assert len(response["clarification"]["options"]) == 2
+
+    clarified = initial.model_copy(update={"department_name": "開発一部"})
+    second = asyncio.run(
+        bundle.application.run(clarified, session=first.session, resume=True)
+    )
+    final = json.loads(second.response_text)
+    assert final["business_status"] == "SUCCESS"
+    assert final["application_draft"]["applicant"]["department_code"] == "DPT-DEV-01"
 
 
 @pytest.mark.integration

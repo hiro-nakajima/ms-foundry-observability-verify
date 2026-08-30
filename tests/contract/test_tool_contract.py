@@ -46,6 +46,13 @@ def test_search_and_structured_get_are_separate(adapter) -> None:
     assert structured.evidence_refs == ["catalog:LAPTOP-DEV-14:2026-08-28.1"]
 
 
+def test_catalog_search_accepts_exact_product_code(adapter) -> None:
+    response = adapter.search_catalog("LAPTOP-DEV-14")
+    assert response.business_status == BusinessStatus.SUCCESS
+    assert response.result["candidates"][0]["item"]["product_code"] == "LAPTOP-DEV-14"
+    assert response.result["candidates"][0]["score"] >= 100
+
+
 def test_delivery_tool_warns_when_requested_date_cannot_be_met(adapter) -> None:
     response = adapter.estimate_delivery("LAPTOP-DEV-14", 1, date(2026, 8, 29))
     _assert_contract(response)

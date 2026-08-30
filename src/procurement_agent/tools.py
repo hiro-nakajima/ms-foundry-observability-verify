@@ -163,10 +163,16 @@ class LocalJsonAdapter:
             )
         candidates: list[dict[str, Any]] = []
         for item in self.catalog:
+            product_code_hit = 1 if normalized == item.product_code.casefold() else 0
             keyword_hits = sum(1 for keyword in item.keywords if keyword.casefold() in normalized)
             name_hit = 1 if normalized in item.name.casefold() else 0
             category_hit = 1 if item.category.casefold() in normalized else 0
-            score = keyword_hits * 10 + name_hit * 5 + category_hit * 3
+            score = (
+                product_code_hit * 100
+                + keyword_hits * 10
+                + name_hit * 5
+                + category_hit * 3
+            )
             if score:
                 candidates.append({"score": score, "item": item.model_dump(mode="json")})
         candidates.sort(key=lambda row: (-row["score"], row["item"]["product_code"]))

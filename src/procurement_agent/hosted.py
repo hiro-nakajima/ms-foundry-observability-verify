@@ -1060,6 +1060,16 @@ class HostedProcurementApplication:
                     pending_clarification = session.governance_state.get(
                         "pending_clarification"
                     )
+                    accumulated_changes = set(
+                        session.governance_state.get(
+                            "clarification_changed_refs", []
+                        )
+                    )
+                    if pending_clarification:
+                        accumulated_changes.update(changed)
+                        session.governance_state[
+                            "clarification_changed_refs"
+                        ] = sorted(accumulated_changes)
                     if missing:
                         executor.refresh_waiting(waiting.step_id, missing)
                         self.support.telemetry.add_event(
@@ -1074,11 +1084,16 @@ class HostedProcurementApplication:
                         required_refs = set(
                             pending_clarification.get("required_input_refs", [])
                         )
-                        if changed & required_refs:
+                        if accumulated_changes & required_refs:
                             executor.resume_after_user_input(waiting.step_id)
-                            invalidated = executor.invalidate_by_refs(changed)
+                            invalidated = executor.invalidate_by_refs(
+                                accumulated_changes
+                            )
                             session.governance_state.pop(
                                 "pending_clarification", None
+                            )
+                            session.governance_state.pop(
+                                "clarification_changed_refs", None
                             )
                             self.support.telemetry.add_event(
                                 root_span,
@@ -1333,6 +1348,7 @@ class HostedProcurementApplication:
         if not required_refs:
             raise RuntimeError("clarification failure must declare required_input_refs")
         session.governance_state["pending_clarification"] = clarification
+        session.governance_state.setdefault("clarification_changed_refs", [])
         executor.wait_for_user(
             failure.step_id,
             required_refs,
@@ -1573,16 +1589,28 @@ class HostedProcurementApplication:
             item = CatalogItem.model_validate(item_response.result["item"])
             session.selected_item = item
             item_evidence = list(item_response.evidence_refs)
-        applicant_response = await self._step(
-            executor,
-            "S05",
-            {"applicant_name": request.applicant_name},
-            lambda: self._step_tool_result(
-                governed("S05", "get_applicant", {"identifier": request.applicant_name}, lambda: self.support.adapter.get_applicant(request.applicant_name or "")),
-                "applicant",
-            ),
+        applicant_step = next(
+            step for step in session.plan.steps if step.step_id == "S05"
         )
-        applicant = Applicant.model_validate(applicant_response.result["applicant"])
+        if applicant_step.status == PlanStatus.COMPLETED and session.applicant:
+            applicant = session.applicant
+            applicant_evidence = list(applicant_step.evidence_refs)
+        else:
+            applicant_response = await self._step(
+                executor,
+                "S05",
+                {"applicant_name": request.applicant_name},
+                lambda: self._step_tool_result(
+                    governed("S05", "get_applicant", {"identifier": request.applicant_name}, lambda: self.support.adapter.get_applicant(request.applicant_name or "")),
+                    "applicant",
+                ),
+            )
+            applicant = Applicant.model_validate(
+                applicant_response.result["applicant"]
+            )
+            session.applicant = applicant
+            applicant_evidence = list(applicant_response.evidence_refs)
+
         def resolve_department():
             department_response = governed(
                 "S06",
@@ -1678,7 +1706,6 @@ class HostedProcurementApplication:
         )
         calculation = CalculationResult.model_validate(calculation_response.result["calculation"])
         records = [
-            applicant_response,
             department_response,
             account_response,
             delivery_response,
@@ -1687,6 +1714,7 @@ class HostedProcurementApplication:
         evidence = list(
             dict.fromkeys(
                 item_evidence
+                + applicant_evidence
                 + [ref for response in records for ref in response.evidence_refs]
             )
         )
@@ -1766,6 +1794,7 @@ class HostedProcurementApplication:
         account = AccountCode.model_validate(procurement_result.result["account_code"])
         delivery = DeliveryEstimate.model_validate(procurement_result.result["delivery_estimate"])
         session.selected_item = item
+        session.applicant = applicant
         await self._step(
             executor,
             "S04",
