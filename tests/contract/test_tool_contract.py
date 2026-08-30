@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import date
 
+import pytest
+
 from procurement_agent.models import BusinessStatus, TechnicalStatus
 from procurement_agent.tools import LocalJsonAdapter, default_data_resource
 
@@ -85,6 +87,28 @@ def test_delivery_tool_warns_when_requested_date_cannot_be_met(adapter) -> None:
     assert response.business_status == BusinessStatus.SUCCESS
     assert response.result["delivery"]["meets_request"] is False
     assert "requested delivery date cannot be met" in response.warnings
+
+
+@pytest.mark.parametrize(
+    ("quantity", "missing_condition"),
+    [(1, "quantity_lte_stock"), (1000, "quantity_gt_stock")],
+)
+def test_missing_delivery_rule_is_structured_business_failure(
+    adapter, quantity: int, missing_condition: str
+) -> None:
+    adapter.delivery_rules = [
+        rule
+        for rule in adapter.delivery_rules
+        if rule["condition"] != missing_condition
+    ]
+    response = adapter.estimate_delivery(
+        "LAPTOP-DEV-14", quantity, date(2026, 9, 30)
+    )
+    _assert_contract(response)
+    assert response.business_status == BusinessStatus.NOT_FOUND
+    assert response.warnings == [
+        f"delivery rule not found for condition: {missing_condition}"
+    ]
 
 
 def test_blank_lookup_identifiers_are_business_invalid_input(adapter) -> None:

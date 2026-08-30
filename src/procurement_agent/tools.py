@@ -344,7 +344,19 @@ class LocalJsonAdapter:
         item = CatalogItem.model_validate(item_response.result["item"])
         in_stock = quantity <= item.stock
         condition = "quantity_lte_stock" if in_stock else "quantity_gt_stock"
-        rule = next(rule for rule in self.delivery_rules if rule["condition"] == condition)
+        rule = next(
+            (
+                rule
+                for rule in self.delivery_rules
+                if rule["condition"] == condition
+            ),
+            None,
+        )
+        if rule is None:
+            return self._response(
+                business_status=BusinessStatus.NOT_FOUND,
+                warnings=[f"delivery rule not found for condition: {condition}"],
+            )
         estimated_on = self.as_of_date + timedelta(days=item.lead_time_days + rule["additional_days"])
         meets_request = requested_by is None or estimated_on <= requested_by
         warnings = [] if in_stock else ["requested quantity exceeds current stock"]

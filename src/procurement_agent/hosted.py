@@ -577,6 +577,22 @@ class DraftingSpecialistHandler:
             ),
             decisions=decisions,
         )
+        if calculation_response.business_status != BusinessStatus.SUCCESS:
+            result = AgentToolResult(
+                task_id=task.task_id,
+                agent_role=AgentRole.DRAFTING_SPECIALIST,
+                business_status=calculation_response.business_status,
+                result={
+                    "failed_tool": "calculate_request",
+                    "governance_decisions": [
+                        item.model_dump(mode="json") for item in decisions
+                    ],
+                    "tool_call_ids": [calculation_response.call_id],
+                },
+                evidence_refs=calculation_response.evidence_refs,
+                warnings=calculation_response.warnings,
+            )
+            return result.model_dump_json()
         calculation = CalculationResult.model_validate(calculation_response.result["calculation"])
         draft = ApplicationDraft(
             request_id=snapshot.request.request_id,

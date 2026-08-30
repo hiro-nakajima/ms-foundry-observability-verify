@@ -154,6 +154,21 @@ def test_hosted_multi_uses_two_real_agent_tools_with_isolated_sessions() -> None
 
 
 @pytest.mark.integration
+def test_hosted_multi_propagates_missing_tax_rule_as_business_failure() -> None:
+    bundle = build_local_hosted_bundle(LogicalPattern.HOSTED_MULTI)
+    bundle.support.adapter.tax_rules[0]["valid_to"] = "2026-01-01"
+    outcome = asyncio.run(
+        bundle.application.run(complete_request(request_id="REQ-NO-TAX-RULE"))
+    )
+    response = json.loads(outcome.response_text)
+    assert response["technical_status"] == "SUCCESS"
+    assert response["business_status"] == "NOT_FOUND"
+    assert response["failed_tool"] == "calculate_request"
+    assert response["delegation_tool"] == "drafting_specialist"
+    assert outcome.session.plan.status == PlanStatus.BLOCKED
+
+
+@pytest.mark.integration
 @pytest.mark.parametrize("pattern", [LogicalPattern.HOSTED_SINGLE, LogicalPattern.HOSTED_MULTI])
 def test_requested_specification_selects_matching_catalog_item(pattern: LogicalPattern) -> None:
     bundle = build_local_hosted_bundle(pattern)
