@@ -54,7 +54,7 @@ from .models import (
 from .observability import TelemetryRecorder
 from .plan import StructuredPlanBuilder
 from .skills_runtime import AllowlistedSkillScriptRunner, build_request_check_skills_provider
-from .tools import LocalJsonAdapter
+from .tools import LocalJsonAdapter, default_data_resource
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -568,14 +568,14 @@ def _agent_properties(role: AgentRole, pattern: LogicalPattern, implementation_k
 def build_local_hosted_bundle(
     pattern: LogicalPattern,
     *,
-    data_dir: str | Path = ROOT / "data",
+    data_dir: str | Path | None = None,
     governance_mode: GovernanceMode = GovernanceMode.SHADOW,
     record_raw_content: bool = False,
     planner_returns_empty: bool = False,
 ) -> HostedAgentBundle:
     if pattern not in {LogicalPattern.HOSTED_SINGLE, LogicalPattern.HOSTED_MULTI}:
         raise ValueError("Hosted factory accepts only HA-S or HA-M")
-    adapter = LocalJsonAdapter(data_dir)
+    adapter = LocalJsonAdapter(data_dir if data_dir is not None else default_data_resource())
     telemetry = TelemetryRecorder(
         synthetic_environment=True, record_raw_content=record_raw_content
     )

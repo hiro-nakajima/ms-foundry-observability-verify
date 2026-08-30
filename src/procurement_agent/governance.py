@@ -22,7 +22,10 @@ from .models import (
 
 SECRET_PATTERNS = (
     re.compile(r"\bsk-[A-Za-z0-9_-]{12,}\b"),
-    re.compile(r"(?i)\b(?:api[_-]?key|client[_-]?secret|password)\s*[:=]\s*\S+"),
+    re.compile(
+        r"(?i)\b(?:api[_-]?key|client[_-]?secret|password)\b"
+        r"[\"']?\s*[:=]\s*[\"']?\S+"
+    ),
     # A bare hexadecimal trace/span ID is observability metadata, not evidence
     # of a secret. Only treat unlabeled Base64-like values as secrets when they
     # contain Base64-specific punctuation; named keys are handled above.

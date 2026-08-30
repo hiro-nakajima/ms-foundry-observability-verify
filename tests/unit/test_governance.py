@@ -118,3 +118,26 @@ def test_unlabeled_padded_base64_value_is_classified_as_secret() -> None:
         GovernanceAdapter._has_secret("ZmFrZS1zZWNyZXQtdmFsdWUtbm90LXJlYWw=")
         is True
     )
+
+
+@pytest.mark.parametrize(
+    "response_text",
+    [
+        '{"password":"synthetic-test-value"}',
+        "{'api_key': 'synthetic-test-value'}",
+        '{"client_secret": "synthetic-test-value"}',
+    ],
+)
+def test_quoted_structured_secret_key_is_hard_gated(response_text: str) -> None:
+    adapter = GovernanceAdapter(POLICY, mode=GovernanceMode.ENFORCE)
+    with pytest.raises(GovernanceDenied) as exc:
+        adapter.pre_output(
+            agent_role=AgentRole.PROCUREMENT_ASSISTANT,
+            plan_id="plan-1",
+            response_text=response_text,
+            ungrounded_product_or_code=False,
+            missing_calculation_output=False,
+            validation_not_passed=False,
+            plan_not_ready=False,
+        )
+    assert exc.value.decision.rule_id == "pre-output-secret-pattern"

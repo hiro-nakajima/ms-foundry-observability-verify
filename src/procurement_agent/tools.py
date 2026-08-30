@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+from importlib.resources import files
+from importlib.resources.abc import Traversable
 from datetime import date, timedelta
 from pathlib import Path
 from types import ModuleType
@@ -36,6 +38,18 @@ DATA_FILENAMES = (
     "applicants.json",
     "tax_rules.json",
 )
+REPOSITORY_DATA_DIR = Path(__file__).resolve().parents[2] / "data"
+
+
+def default_data_resource() -> Traversable:
+    """Resolve packaged data first and the repository source of truth as fallback."""
+
+    packaged = files("procurement_agent").joinpath("data")
+    if packaged.is_dir():
+        return packaged
+    if REPOSITORY_DATA_DIR.is_dir():
+        return REPOSITORY_DATA_DIR
+    raise FileNotFoundError("procurement synthetic data resource is unavailable")
 
 
 class ProcurementToolPort(Protocol):
@@ -69,8 +83,13 @@ class DataContractError(ValueError):
 class LocalJsonAdapter:
     """Deterministic adapter whose source of truth is the versioned JSON data directory."""
 
-    def __init__(self, data_dir: str | Path, *, as_of_date: date = date(2026, 8, 28)) -> None:
-        self.data_dir = Path(data_dir)
+    def __init__(
+        self,
+        data_dir: str | Path | Traversable,
+        *,
+        as_of_date: date = date(2026, 8, 28),
+    ) -> None:
+        self.data_dir = Path(data_dir) if isinstance(data_dir, str) else data_dir
         self.as_of_date = as_of_date
         documents = {name: self._load_document(name) for name in DATA_FILENAMES}
         versions = {document["data_version"] for document in documents.values()}
@@ -93,9 +112,8 @@ class LocalJsonAdapter:
         self._validation_module = self._load_skill_module("validate_request.py")
 
     def _load_document(self, filename: str) -> dict[str, Any]:
-        path = self.data_dir / filename
-        with path.open(encoding="utf-8") as handle:
-            document = json.load(handle)
+        path = self.data_dir.joinpath(filename)
+        document = json.loads(path.read_text(encoding="utf-8"))
         required = {"schema_version", "data_version", "synthetic", "records"}
         missing = required - document.keys()
         if missing:

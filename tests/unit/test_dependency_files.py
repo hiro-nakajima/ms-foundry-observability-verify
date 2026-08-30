@@ -52,3 +52,13 @@ def test_python_runtime_targets_foundry_source_deployment() -> None:
     assert project["requires-python"] == ">=3.13,<3.15"
     assert (ROOT / ".python-version").read_text(encoding="utf-8").strip() == "3.13"
     assert not (ROOT / "uv.lock").exists()
+
+
+def test_wheel_includes_repository_data_as_package_resource() -> None:
+    configuration = tomllib.loads(
+        (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    )
+    force_include = configuration["tool"]["hatch"]["build"]["targets"]["wheel"][
+        "force-include"
+    ]
+    assert force_include == {"data": "procurement_agent/data"}
