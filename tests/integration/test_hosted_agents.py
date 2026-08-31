@@ -45,6 +45,8 @@ def natural_intake_fixture(messages, options) -> ProcurementTurnExtraction:
         values["quantity"] = 3
     if "4台" in text:
         values["quantity"] = 4
+    if "予算上限は700000円" in text:
+        values["constraints"] = {"budget_limit": "700000"}
     if "山田太郎" in text:
         values["applicant_name"] = "山田太郎"
     if "鈴木一郎" in text:
@@ -1085,6 +1087,61 @@ def test_devui_change_before_confirmation_invalidates_and_revalidates_draft(
         ]
     )
     assert final_machine["application_draft"]["amount"]["total"] == "792000"
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    "pattern", [LogicalPattern.HOSTED_SINGLE, LogicalPattern.HOSTED_MULTI]
+)
+def test_devui_budget_change_revalidates_only_dependent_steps(
+    pattern: LogicalPattern,
+) -> None:
+    bundle = build_natural_bundle(pattern)
+    framework_session = FrameworkAgentSession()
+    asyncio.run(
+        bundle.coordinator.run("開発用ノートPCを購入したい", session=framework_session)
+    )
+    preview = asyncio.run(
+        bundle.coordinator.run(
+            "数量は3台、部門は開発一部、申請者は山田太郎、用途は開発、"
+            "希望納期は2026-09-30です",
+            session=framework_session,
+        )
+    )
+    assert "**594,000 JPY**" in preview.text
+    preview_session = AgentSession.restore(
+        framework_session.state["procurement-execution-context"][
+            "serialized_procurement_session"
+        ]
+    )
+    assert preview_session.governance_decisions[-1].stage == "pre_output"
+
+    revised = asyncio.run(
+        bundle.coordinator.run(
+            "予算上限は700000円に変更します", session=framework_session
+        )
+    )
+    assert "**594,000 JPY**" in revised.text
+    assert "`確定`" in revised.text
+    restored = AgentSession.restore(
+        framework_session.state["procurement-execution-context"][
+            "serialized_procurement_session"
+        ]
+    )
+    assert restored.plan.plan_version == 2
+    attempts = {step.step_id: step.attempt for step in restored.plan.steps}
+    if pattern == LogicalPattern.HOSTED_SINGLE:
+        assert attempts["S03"] == 1
+        assert attempts["S09"] == 1
+        assert attempts["S10"] == 2
+        assert attempts["S11"] == 2
+    else:
+        assert attempts["S03"] == 1
+        assert attempts["S04"] == 1
+        assert attempts["S05"] == 2
+        assert attempts["S07"] == 2
+    assert restored.application_draft.request_constraints.budget_limit == 700000
+    assert restored.governance_decisions[-1].stage == "pre_output"
 
 
 @pytest.mark.integration

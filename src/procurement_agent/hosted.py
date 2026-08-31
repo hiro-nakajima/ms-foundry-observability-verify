@@ -1352,6 +1352,33 @@ class HostedProcurementApplication:
                     for step in session.plan.steps
                     if step.step_type == "confirm_application"
                 )
+                with self.support.telemetry.span(
+                    "governance.pre_output", {"poc.agent.role": self.role}
+                ) as governance_span:
+                    decision = self.support.middleware.run_pre_output(
+                        role=self.role,
+                        plan_id=session.plan.plan_id,
+                        response_text=draft.model_dump_json(),
+                        ungrounded_product_or_code=False,
+                        missing_calculation_output=draft.amount.calculated_by
+                        != "request-check/scripts/calculate_request.py",
+                        validation_not_passed=False,
+                        plan_not_ready=any(
+                            step.status != PlanStatus.COMPLETED
+                            for step in session.plan.steps
+                            if step.step_type
+                            not in {"confirm_application", "present_draft"}
+                        ),
+                    )
+                    governance_span.set_attributes(
+                        {
+                            "poc.policy.version": decision.policy_version,
+                            "poc.policy.rule.id": decision.rule_id,
+                            "poc.governance.stage": decision.stage,
+                            "poc.governance.decision": decision.outcome.value,
+                        }
+                    )
+                session.governance_decisions.append(decision)
                 session.governance_state["pending_confirmation"] = {
                     "validation": validation.model_dump(mode="json")
                 }
@@ -2078,54 +2105,99 @@ class HostedProcurementApplication:
     async def _run_multi(self, session, executor, request) -> ValidationResult:
         if not self.bundle.procurement_tool or not self.bundle.drafting_tool:
             raise RuntimeError("HA-M requires both specialist Agent Tools")
-        initial_snapshot = ProcurementContextSnapshot(
-            request=request,
-            plan_id=session.plan.plan_id,
-            plan_version=session.plan.plan_version,
+        procurement_step = next(
+            step for step in session.plan.steps if step.step_id == "S03"
         )
-        procurement_task = AgentToolTask(
-            task_id=f"task-{uuid4()}",
-            plan_id=session.plan.plan_id,
-            step_ids=["S03"],
-            context_snapshot=initial_snapshot,
-            required_outputs=["item", "applicant", "department", "account_code", "delivery_estimate"],
+        merge_step = next(
+            step for step in session.plan.steps if step.step_id == "S04"
         )
-        procurement_result = await self._step(
-            executor,
-            "S03",
-            procurement_task.model_dump(mode="json"),
-            lambda: self._agent_tool_step(
-                self.bundle.procurement_tool,
-                "agent_as_tool.procurement_specialist",
-                procurement_task,
-                session,
+        cached_snapshot = session.procurement_context_snapshot
+        reuse_procurement = (
+            procurement_step.status == PlanStatus.COMPLETED
+            and merge_step.status == PlanStatus.COMPLETED
+            and cached_snapshot is not None
+            and cached_snapshot.selected_item is not None
+            and cached_snapshot.applicant is not None
+            and cached_snapshot.department is not None
+            and cached_snapshot.account_code is not None
+            and cached_snapshot.delivery_estimate is not None
+        )
+        if reuse_procurement:
+            enriched_snapshot = cached_snapshot.model_copy(
+                update={
+                    "request": request,
+                    "plan_version": session.plan.plan_version,
+                }
+            )
+        else:
+            initial_snapshot = ProcurementContextSnapshot(
+                request=request,
+                plan_id=session.plan.plan_id,
+                plan_version=session.plan.plan_version,
+            )
+            procurement_task = AgentToolTask(
+                task_id=f"task-{uuid4()}",
+                plan_id=session.plan.plan_id,
+                step_ids=["S03"],
+                context_snapshot=initial_snapshot,
+                required_outputs=[
+                    "item",
+                    "applicant",
+                    "department",
+                    "account_code",
+                    "delivery_estimate",
+                ],
+            )
+            procurement_result = await self._step(
+                executor,
                 "S03",
-            ),
-        )
-        item = CatalogItem.model_validate(procurement_result.result["item"])
-        applicant = Applicant.model_validate(procurement_result.result["applicant"])
-        department = Department.model_validate(procurement_result.result["department"])
-        account = AccountCode.model_validate(procurement_result.result["account_code"])
-        delivery = DeliveryEstimate.model_validate(procurement_result.result["delivery_estimate"])
-        session.selected_item = item
-        session.applicant = applicant
-        await self._step(
-            executor,
-            "S04",
-            {"task_id": procurement_result.task_id},
-            lambda: (True, ["procurement_result", "context_snapshot.procurement"], procurement_result.evidence_refs, []),
-        )
-        enriched_snapshot = ProcurementContextSnapshot(
-            request=request,
-            plan_id=session.plan.plan_id,
-            plan_version=session.plan.plan_version,
-            selected_item=item,
-            applicant=applicant,
-            department=department,
-            account_code=account,
-            delivery_estimate=delivery,
-            evidence_refs=procurement_result.evidence_refs,
-        )
+                procurement_task.model_dump(mode="json"),
+                lambda: self._agent_tool_step(
+                    self.bundle.procurement_tool,
+                    "agent_as_tool.procurement_specialist",
+                    procurement_task,
+                    session,
+                    "S03",
+                ),
+            )
+            item = CatalogItem.model_validate(procurement_result.result["item"])
+            applicant = Applicant.model_validate(
+                procurement_result.result["applicant"]
+            )
+            department = Department.model_validate(
+                procurement_result.result["department"]
+            )
+            account = AccountCode.model_validate(
+                procurement_result.result["account_code"]
+            )
+            delivery = DeliveryEstimate.model_validate(
+                procurement_result.result["delivery_estimate"]
+            )
+            session.selected_item = item
+            session.applicant = applicant
+            await self._step(
+                executor,
+                "S04",
+                {"task_id": procurement_result.task_id},
+                lambda: (
+                    True,
+                    ["procurement_result", "context_snapshot.procurement"],
+                    procurement_result.evidence_refs,
+                    [],
+                ),
+            )
+            enriched_snapshot = ProcurementContextSnapshot(
+                request=request,
+                plan_id=session.plan.plan_id,
+                plan_version=session.plan.plan_version,
+                selected_item=item,
+                applicant=applicant,
+                department=department,
+                account_code=account,
+                delivery_estimate=delivery,
+                evidence_refs=procurement_result.evidence_refs,
+            )
+        session.procurement_context_snapshot = enriched_snapshot
         drafting_task = AgentToolTask(
             task_id=f"task-{uuid4()}",
             plan_id=session.plan.plan_id,
