@@ -1,13 +1,15 @@
 # First Task Architecture
 
-確認日: 2026-08-29
+確認日: 2026-08-31
 対象: Repository scaffoldからHosted Agent Local / DevUI scaffoldまで
 
 ## 実行構成
 
 ```mermaid
 flowchart LR
-  U[ProcurementRequest] --> CP[Serialized Context Provider]
+  U[自然言語またはProcurementRequest JSON] --> NI[LLM Structured Intake]
+  NI -->|response_format = ProcurementTurnExtraction BaseModel<br/>tools = empty| PB[ProcurementRequestPatch]
+  PB --> CP[Serialized Context Provider]
   CP --> S[Coordinator AgentSession]
   S --> P[Planner Agent]
   P -->|response_format = AgentPlanResponse<br/>tool_choice = none| E[ExecutionPlan / PlanExecutor]
@@ -19,7 +21,8 @@ flowchart LR
   DS -->|AgentToolResult JSON| HM
   HS --> V[request-check Scripts / Validation]
   HM --> V
-  V --> O[Validated Draft + 9-field Trace Envelope]
+  V --> C[WAITING_USER / explicit confirmation]
+  C --> O[Confirmed Draft + 9-field Trace Envelope]
 ```
 
 ### Plan generation boundary
@@ -27,6 +30,8 @@ flowchart LR
 `AgentPlanResponse(BaseModel)`だけをPlanner Invocationの`response_format`へ指定します。この
 InvocationにはToolを登録せず、`tool_choice=none`を固定します。後続のTool実行は別Invocation
 とapplication-owned loopで行うため、Structured outputとTool callが同じmodel turnで競合しません。
+Azure OpenAI設定がある実行ではIntakeとPlannerが同じConfigured Chat Clientを使用します。
+CredentialのないLocal Testでは同じ`BaseChatClient`契約の決定論的fixtureに差し替えます。
 
 Modelが設定できるのは承認済みStepの`step_id`、`step_type`、`owner`、`input_refs`です。
 status、attempt、timestamps、evidence、completionはModelから受け取りません。
@@ -49,6 +54,25 @@ status、attempt、timestamps、evidence、completionはModelから受け取り�
 
 不足情報は`WAITING_USER`です。Framework `AgentSession.to_dict()`でProvider stateをserializeし、
 別のFactory instanceで`from_dict()`した後、application `AgentSession.restore()`から再開できます。
+
+### DevUI conversation boundary
+
+JSON Contractは維持しつつ、DevUIの自然言語TurnはAzure OpenAI Chat Clientへ渡し、
+`ProcurementTurnExtraction(BaseModel)`のStructured Outputから`ProcurementRequestPatch`を取得します。
+このInvocationはToolなし、`tool_choice=none`です。ユーザーが明示した値だけを既存Requestへmergeし、
+空のStructured Outputは空Patchとして扱います。queryがまだないTurnは商品を質問し、query取得後に
+`AgentPlanResponse`の計画境界へ進みます。
+
+自然言語会話では数量、部門、申請者、用途、希望納期を順に確認します。部門の部分一致が複数ある場合、
+LLM出力を確定値にせず、Version付きSynthetic Dataで候補を解決して選択を要求します。検証後は
+`confirm_application`を`WAITING_USER`にし、LLMが明示的な確認を`intent=CONFIRM`として返した場合だけ
+`present_draft`へ進みます。確定前の条件変更ではStructured referenceの親子関係を含めて影響Stepを
+`INVALIDATED`にし、再実行・再検証後にもう一度確認を求めます。
+
+価格、商品コード、勘定科目、納期見込、合計はintakeで抽出せず、既存Structured Toolと
+`request-check` Scriptだけで確定します。自然言語本文は`pre_input`を通した後、Trace envelopeの
+保護済み`user_input`とCoordinator `AgentSession`の会話Turnとして扱います。JSON入力時は従来の
+machine-readable responseを返し、自然言語時だけ同じmachine responseを日本語表示へ整形します。
 
 ## Hosted Single
 

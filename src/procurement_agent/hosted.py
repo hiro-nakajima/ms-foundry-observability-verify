@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import inspect
 import json
@@ -11,7 +12,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from agent_framework import Agent, FunctionTool
+from agent_framework import Agent, BaseChatClient, FunctionTool
 from trace_pipeline.envelope import RunIdentity, TraceEvaluationEnvelope
 from trace_pipeline.normalize import build_envelope
 
@@ -21,7 +22,14 @@ from .framework import (
     StructuredPlannerHandler,
     marker_response_handler,
 )
+from .conversation import natural_missing_required_fields
 from .governance import GovernanceAdapter
+from .intake import (
+    DepartmentCandidateResolver,
+    LlmProcurementIntake,
+    structured_output_options,
+    structured_output_timeout_seconds,
+)
 from .memory import AgentSession, InMemoryContextProvider
 from .middleware import GovernanceMiddleware
 from .models import (
@@ -40,6 +48,7 @@ from .models import (
     DraftAccount,
     DraftApplicant,
     DraftItem,
+    GovernanceDecision,
     GovernanceMode,
     ImplementationKind,
     LogicalPattern,
@@ -51,7 +60,7 @@ from .models import (
     ValidationResult,
 )
 from .observability import TelemetryRecorder
-from .plan import StructuredPlanBuilder
+from .plan import MULTI_TEMPLATE, SINGLE_TEMPLATE, StructuredPlanBuilder
 from .skills_runtime import AllowlistedSkillScriptRunner, build_request_check_skills_provider
 from .tools import LocalJsonAdapter, default_data_resource
 
@@ -636,7 +645,7 @@ class HostedAgentBundle:
     pattern: LogicalPattern
     coordinator: Agent
     planner: Agent
-    planner_client: DeterministicChatClient
+    planner_client: BaseChatClient
     context_provider: SerializedProcurementContextProvider
     skills_provider: Any
     script_runner: AllowlistedSkillScriptRunner
@@ -658,6 +667,27 @@ def _agent_properties(role: AgentRole, pattern: LogicalPattern, implementation_k
     }
 
 
+def _planner_instructions(pattern: LogicalPattern) -> str:
+    source = MULTI_TEMPLATE if pattern == LogicalPattern.HOSTED_MULTI else SINGLE_TEMPLATE
+    template = [
+        {
+            "step_id": step_id,
+            "step_type": step_type,
+            "owner": owner.value,
+            "input_refs": input_refs,
+        }
+        for step_id, step_type, owner, input_refs in source
+    ]
+    return (
+        "Return one AgentPlanResponse BaseModel and do not call tools or execute the plan. "
+        "Copy the exact approved step IDs, order, owners, and input_refs from this hosted "
+        "procurement template: "
+        + json.dumps(template, ensure_ascii=False, sort_keys=True)
+        + ". "
+        "Do not include runtime status, timestamps, attempts, evidence, tool calls, or reasoning."
+    )
+
+
 def build_local_hosted_bundle(
     pattern: LogicalPattern,
     *,
@@ -665,6 +695,7 @@ def build_local_hosted_bundle(
     governance_mode: GovernanceMode = GovernanceMode.SHADOW,
     record_raw_content: bool = False,
     planner_returns_empty: bool = False,
+    intake_client: BaseChatClient | None = None,
 ) -> HostedAgentBundle:
     if pattern not in {LogicalPattern.HOSTED_SINGLE, LogicalPattern.HOSTED_MULTI}:
         raise ValueError("Hosted factory accepts only HA-S or HA-M")
@@ -676,16 +707,26 @@ def build_local_hosted_bundle(
     skills_provider, runner = build_request_check_skills_provider(SKILLS_ROOT)
     ledger = RunLedger()
     support = ExecutionSupport(adapter, governance, telemetry, runner, ledger)
-    context_provider = SerializedProcurementContextProvider()
-    planner_client = DeterministicChatClient(
-        StructuredPlannerHandler(pattern, return_empty=planner_returns_empty),
-        client_name=f"{pattern.value}-planner",
+    intake = LlmProcurementIntake.from_environment(
+        telemetry=telemetry,
+        client=intake_client,
     )
+    context_provider = SerializedProcurementContextProvider(
+        intake=intake,
+        department_resolver=DepartmentCandidateResolver(adapter.departments),
+    )
+    if intake_client is None and intake.client is not None and not planner_returns_empty:
+        planner_client: BaseChatClient = intake.client
+    else:
+        planner_client = DeterministicChatClient(
+            StructuredPlannerHandler(pattern, return_empty=planner_returns_empty),
+            client_name=f"{pattern.value}-planner",
+        )
     planner = Agent(
         client=planner_client,
         name=f"{pattern.value.lower()}-planner",
         description="Produces only the Pydantic ExecutionPlan proposal.",
-        instructions="Return an AgentPlanResponse. Do not call tools or execute the plan.",
+        instructions=_planner_instructions(pattern),
         tools=[],
         additional_properties=_agent_properties(
             AgentRole.COORDINATOR
@@ -844,14 +885,20 @@ class HostedProcurementApplication:
             else AgentRole.PROCUREMENT_ASSISTANT
         )
 
-    async def _create_plan(self, request: ProcurementRequest):
+    async def _create_plan(
+        self,
+        request: ProcurementRequest,
+        *,
+        required_missing_fields: list[str] | None = None,
+    ):
         with self.support.telemetry.span(
             "plan.create", {"poc.logical.pattern": self.bundle.pattern.value}
         ):
-            response = await self.bundle.planner.run(
-                request.model_dump_json(),
-                options={"response_format": AgentPlanResponse, "tool_choice": "none"},
-            )
+            async with asyncio.timeout(structured_output_timeout_seconds()):
+                response = await self.bundle.planner.run(
+                    request.model_dump_json(),
+                    options=structured_output_options(AgentPlanResponse),
+                )
             raw = response.value
             if raw is None and response.text:
                 try:
@@ -862,6 +909,7 @@ class HostedProcurementApplication:
                 request,
                 self.bundle.pattern,
                 raw_response=raw if raw is not None else {},
+                required_missing_fields=required_missing_fields,
             )
 
     async def _step(self, executor, step_id: str, inputs: Any, operation):
@@ -1018,10 +1066,20 @@ class HostedProcurementApplication:
         *,
         session: AgentSession | None = None,
         resume: bool = False,
+        raw_user_input: str | None = None,
+        pre_input_decision: GovernanceDecision | None = None,
+        user_confirmed: bool = False,
     ) -> HostedRunOutcome:
         token = self.support.bind_ledger(RunLedger())
         try:
-            return await self._run_bound(request, session=session, resume=resume)
+            return await self._run_bound(
+                request,
+                session=session,
+                resume=resume,
+                raw_user_input=raw_user_input,
+                pre_input_decision=pre_input_decision,
+                user_confirmed=user_confirmed,
+            )
         finally:
             self.support.reset_ledger(token)
 
@@ -1031,11 +1089,20 @@ class HostedProcurementApplication:
         *,
         session: AgentSession | None = None,
         resume: bool = False,
+        raw_user_input: str | None = None,
+        pre_input_decision: GovernanceDecision | None = None,
+        user_confirmed: bool = False,
     ) -> HostedRunOutcome:
         session = session or AgentSession()
-        user_text = request.model_dump_json()
+        user_text = (
+            raw_user_input
+            if raw_user_input is not None
+            else request.model_dump_json()
+        )
         run_id = f"run-{uuid4()}"
         resumed = bool(resume and session.plan and session.request)
+        natural_mode = raw_user_input is not None
+        confirmed_validation: ValidationResult | None = None
         self.support.ledger.governance_decision_offset = (
             len(session.governance_decisions) if resumed else 0
         )
@@ -1047,7 +1114,9 @@ class HostedProcurementApplication:
             with self.support.telemetry.span(
                 "governance.pre_input", {"poc.agent.role": self.role}
             ) as governance_span:
-                pre_input = self.support.middleware.run_pre_input(user_text, self.role)
+                pre_input = pre_input_decision or self.support.middleware.run_pre_input(
+                    user_text, self.role
+                )
                 governance_span.set_attributes(
                     {
                         "poc.policy.version": pre_input.policy_version,
@@ -1081,7 +1150,10 @@ class HostedProcurementApplication:
                         step for step in session.plan.steps if step.status == PlanStatus.WAITING_USER
                     )
                     executor = session.plan_executor()
-                    missing = request.missing_required_fields()
+                    missing = self._missing_required_fields(request, natural_mode)
+                    pending_confirmation = session.governance_state.get(
+                        "pending_confirmation"
+                    )
                     pending_clarification = session.governance_state.get(
                         "pending_clarification"
                     )
@@ -1095,7 +1167,36 @@ class HostedProcurementApplication:
                         session.governance_state[
                             "clarification_changed_refs"
                         ] = sorted(accumulated_changes)
-                    if missing:
+                    if pending_confirmation and user_confirmed and not changed:
+                        executor.resume_after_user_input(waiting.step_id)
+                        confirmed_validation = ValidationResult.model_validate(
+                            pending_confirmation["validation"]
+                        )
+                        session.governance_state.pop("pending_confirmation", None)
+                        self.support.telemetry.add_event(
+                            root_span,
+                            "application_confirmation_received",
+                            {"poc.plan.step.id": waiting.step_id},
+                        )
+                    elif pending_confirmation and changed:
+                        executor.resume_after_user_input(waiting.step_id)
+                        invalidated = executor.invalidate_by_refs(changed)
+                        session.governance_state.pop("pending_confirmation", None)
+                        self.support.telemetry.add_event(
+                            root_span,
+                            "confirmed_draft_invalidated",
+                            {
+                                "poc.changed.ref.count": len(changed),
+                                "poc.invalidated.step.count": len(invalidated),
+                            },
+                        )
+                    elif pending_confirmation:
+                        executor.refresh_waiting(
+                            waiting.step_id,
+                            ["user.confirmation"],
+                            reason="explicit application confirmation required",
+                        )
+                    elif missing:
                         executor.refresh_waiting(waiting.step_id, missing)
                         self.support.telemetry.add_event(
                             root_span,
@@ -1145,8 +1246,17 @@ class HostedProcurementApplication:
                             {"poc.plan.step.id": waiting.step_id, "poc.changed.ref.count": len(changed)},
                         )
             else:
-                plan = await self._create_plan(request)
+                missing = self._missing_required_fields(request, natural_mode)
+                if natural_mode:
+                    plan = await self._create_plan(
+                        request,
+                        required_missing_fields=missing,
+                    )
+                else:
+                    plan = await self._create_plan(request)
                 session.start_new_plan(request, plan)
+                if natural_mode:
+                    session.governance_state["interaction_mode"] = "natural"
                 session.governance_decisions.append(pre_input)
                 executor = session.plan_executor()
                 self.support.telemetry.add_event(
@@ -1173,6 +1283,18 @@ class HostedProcurementApplication:
                     active_span=root_span,
                 )
 
+            if confirmed_validation is not None:
+                return await self._complete_confirmed_application(
+                    session=session,
+                    executor=executor,
+                    validation=confirmed_validation,
+                    run_id=run_id,
+                    trace_id=trace_id,
+                    resumed=resumed,
+                    root_span=root_span,
+                    confirmation_mode="NATURAL_LANGUAGE",
+                )
+
             resolve_step = next(
                 step for step in session.plan.steps if step.step_id == "S02"
             )
@@ -1180,7 +1302,7 @@ class HostedProcurementApplication:
                 await self._step(
                     executor,
                     "S02",
-                    {"missing": request.missing_required_fields()},
+                    {"missing": self._missing_required_fields(request, natural_mode)},
                     lambda: (True, ["request.complete"], [], []),
                 )
             try:
@@ -1224,66 +1346,201 @@ class HostedProcurementApplication:
                     resumed=resumed,
                     root_span=root_span,
                 )
-            with self.support.telemetry.span(
-                "governance.pre_output", {"poc.agent.role": self.role}
-            ) as governance_span:
-                decision = self.support.middleware.run_pre_output(
-                    role=self.role,
-                    plan_id=session.plan.plan_id,
-                    response_text=draft.model_dump_json(),
-                    ungrounded_product_or_code=False,
-                    missing_calculation_output=draft.amount.calculated_by
-                    != "request-check/scripts/calculate_request.py",
-                    validation_not_passed=False,
-                    plan_not_ready=any(
-                        step.status != PlanStatus.COMPLETED
-                        for step in session.plan.steps
-                        if step.step_type != "present_draft"
-                    ),
+            if natural_mode:
+                confirmation_step = next(
+                    step
+                    for step in session.plan.steps
+                    if step.step_type == "confirm_application"
                 )
-                governance_span.set_attributes(
-                    {
-                        "poc.policy.version": decision.policy_version,
-                        "poc.policy.rule.id": decision.rule_id,
-                        "poc.governance.stage": decision.stage,
-                        "poc.governance.decision": decision.outcome.value,
-                    }
+                with self.support.telemetry.span(
+                    "governance.pre_output", {"poc.agent.role": self.role}
+                ) as governance_span:
+                    decision = self.support.middleware.run_pre_output(
+                        role=self.role,
+                        plan_id=session.plan.plan_id,
+                        response_text=draft.model_dump_json(),
+                        ungrounded_product_or_code=False,
+                        missing_calculation_output=draft.amount.calculated_by
+                        != "request-check/scripts/calculate_request.py",
+                        validation_not_passed=False,
+                        plan_not_ready=any(
+                            step.status != PlanStatus.COMPLETED
+                            for step in session.plan.steps
+                            if step.step_type
+                            not in {"confirm_application", "present_draft"}
+                        ),
+                    )
+                    governance_span.set_attributes(
+                        {
+                            "poc.policy.version": decision.policy_version,
+                            "poc.policy.rule.id": decision.rule_id,
+                            "poc.governance.stage": decision.stage,
+                            "poc.governance.decision": decision.outcome.value,
+                        }
+                    )
+                session.governance_decisions.append(decision)
+                session.governance_state["pending_confirmation"] = {
+                    "validation": validation.model_dump(mode="json")
+                }
+                executor.wait_for_user(
+                    confirmation_step.step_id,
+                    ["user.confirmation"],
+                    evidence_refs=validation.evidence_refs,
+                    reason="explicit application confirmation required",
                 )
-            session.governance_decisions.append(decision)
-            await self._step(
-                executor,
-                session.plan.steps[-1].step_id,
-                {"validation": validation.model_dump(mode="json")},
-                lambda: (
-                    draft,
-                    ["response.validated_draft"],
-                    validation.evidence_refs,
-                    [],
-                ),
-            )
-            with self.support.telemetry.span("response.generate", {"poc.response.validated": True}):
-                status = self._status_summary(session, trace_id, resumed)
+                self.support.telemetry.add_event(
+                    root_span,
+                    "application_confirmation_required",
+                    {"poc.plan.step.id": confirmation_step.step_id},
+                )
                 response_text = json.dumps(
                     {
-                        "business_status": "SUCCESS",
+                        "business_status": "WAITING_USER",
+                        "confirmation_required": True,
                         "validated": True,
                         "application_draft": draft.model_dump(mode="json"),
-                        "observability": status,
+                        "plan_id": session.plan.plan_id,
+                        "plan_version": session.plan.plan_version,
+                        "observability": self._status_summary(
+                            session, trace_id, resumed
+                        ),
                     },
                     ensure_ascii=False,
                     sort_keys=True,
                     default=str,
                 )
-            self.context.after_invocation(session, response_text=response_text)
-            return self._outcome(
-                session,
-                response_text,
-                run_id,
-                trace_id,
-                resumed,
+                self.context.after_invocation(session, response_text=response_text)
+                return self._outcome(
+                    session,
+                    response_text,
+                    run_id,
+                    trace_id,
+                    resumed,
+                    validation=validation,
+                    active_span=root_span,
+                )
+
+            return await self._complete_confirmed_application(
+                session=session,
+                executor=executor,
                 validation=validation,
-                active_span=root_span,
+                run_id=run_id,
+                trace_id=trace_id,
+                resumed=resumed,
+                root_span=root_span,
+                confirmation_mode="STRUCTURED_API",
             )
+
+    @staticmethod
+    def _missing_required_fields(
+        request: ProcurementRequest, natural_mode: bool
+    ) -> list[str]:
+        return (
+            natural_missing_required_fields(request)
+            if natural_mode
+            else request.missing_required_fields()
+        )
+
+    async def _complete_confirmed_application(
+        self,
+        *,
+        session: AgentSession,
+        executor,
+        validation: ValidationResult,
+        run_id: str,
+        trace_id: str,
+        resumed: bool,
+        root_span: Any,
+        confirmation_mode: str,
+    ) -> HostedRunOutcome:
+        draft = session.application_draft
+        if draft is None:
+            raise RuntimeError("confirmed plan has no ApplicationDraft")
+        with self.support.telemetry.span(
+            "governance.pre_output", {"poc.agent.role": self.role}
+        ) as governance_span:
+            decision = self.support.middleware.run_pre_output(
+                role=self.role,
+                plan_id=session.plan.plan_id,
+                response_text=draft.model_dump_json(),
+                ungrounded_product_or_code=False,
+                missing_calculation_output=draft.amount.calculated_by
+                != "request-check/scripts/calculate_request.py",
+                validation_not_passed=False,
+                plan_not_ready=any(
+                    step.status != PlanStatus.COMPLETED
+                    for step in session.plan.steps
+                    if step.step_type not in {"confirm_application", "present_draft"}
+                ),
+            )
+            governance_span.set_attributes(
+                {
+                    "poc.policy.version": decision.policy_version,
+                    "poc.policy.rule.id": decision.rule_id,
+                    "poc.governance.stage": decision.stage,
+                    "poc.governance.decision": decision.outcome.value,
+                }
+            )
+        session.governance_decisions.append(decision)
+        confirmation_step = next(
+            step
+            for step in session.plan.steps
+            if step.step_type == "confirm_application"
+        )
+        await self._step(
+            executor,
+            confirmation_step.step_id,
+            {"confirmation": True, "mode": confirmation_mode},
+            lambda: (
+                True,
+                ["user.confirmation"],
+                validation.evidence_refs,
+                [],
+            ),
+        )
+        presentation_step = next(
+            step
+            for step in session.plan.steps
+            if step.step_type == "present_draft"
+        )
+        await self._step(
+            executor,
+            presentation_step.step_id,
+            {"validation": validation.model_dump(mode="json")},
+            lambda: (
+                draft,
+                ["response.validated_draft"],
+                validation.evidence_refs,
+                [],
+            ),
+        )
+        with self.support.telemetry.span(
+            "response.generate", {"poc.response.validated": True}
+        ):
+            status = self._status_summary(session, trace_id, resumed)
+            response_text = json.dumps(
+                {
+                    "business_status": "SUCCESS",
+                    "validated": True,
+                    "confirmed": True,
+                    "confirmation_mode": confirmation_mode,
+                    "application_draft": draft.model_dump(mode="json"),
+                    "observability": status,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                default=str,
+            )
+        self.context.after_invocation(session, response_text=response_text)
+        return self._outcome(
+            session,
+            response_text,
+            run_id,
+            trace_id,
+            resumed,
+            validation=validation,
+            active_span=root_span,
+        )
 
     def _completed_plan_replay(
         self,
@@ -1326,6 +1583,7 @@ class HostedProcurementApplication:
                 {
                     "business_status": BusinessStatus.SUCCESS.value,
                     "validated": True,
+                    "confirmed": True,
                     "application_draft": draft.model_dump(mode="json"),
                     "observability": self._status_summary(session, trace_id, True),
                 },
@@ -1344,11 +1602,13 @@ class HostedProcurementApplication:
             active_span=root_span,
         )
 
-    @staticmethod
-    def _waiting_user_response(session: AgentSession) -> str:
+    def _waiting_user_response(self, session: AgentSession) -> str:
+        natural_mode = session.governance_state.get("interaction_mode") == "natural"
         payload: dict[str, Any] = {
             "business_status": "WAITING_USER",
-            "missing_required_fields": session.request.missing_required_fields(),
+            "missing_required_fields": self._missing_required_fields(
+                session.request, natural_mode
+            ),
             "plan_id": session.plan.plan_id,
             "plan_version": session.plan.plan_version,
         }
@@ -1572,6 +1832,7 @@ class HostedProcurementApplication:
 
     async def _run_single(self, session, executor, request) -> ValidationResult:
         decisions = session.governance_decisions
+        existing_draft = session.application_draft
 
         def governed(step, name, arguments, operation, *, require_success=True):
             response = self.support.call_tool(
@@ -1653,111 +1914,149 @@ class HostedProcurementApplication:
             session.applicant = applicant
             applicant_evidence = list(applicant_response.evidence_refs)
 
-        def resolve_department():
-            department_response = governed(
-                "S06",
-                "lookup_department",
-                {"identifier": applicant.department_code},
-                lambda: self.support.adapter.lookup_department(
-                    applicant.department_code
-                ),
-            )
-            responses = [department_response]
-            if request.department_name:
-                requested_department_response = governed(
+        department_step = next(
+            step for step in session.plan.steps if step.step_id == "S06"
+        )
+        if department_step.status == PlanStatus.COMPLETED and existing_draft:
+            department_code = existing_draft.applicant.department_code
+            department_evidence = list(department_step.evidence_refs)
+        else:
+            def resolve_department():
+                department_response = governed(
                     "S06",
                     "lookup_department",
-                    {"identifier": request.department_name},
+                    {"identifier": applicant.department_code},
                     lambda: self.support.adapter.lookup_department(
-                        request.department_name or ""
+                        applicant.department_code
                     ),
                 )
-                responses.append(requested_department_response)
-                department = Department.model_validate(
-                    department_response.result["department"]
-                )
-                requested_department = Department.model_validate(
-                    requested_department_response.result["department"]
-                )
-                if requested_department.department_code != department.department_code:
-                    raise BusinessOperationFailed(
-                        tool_name="lookup_department",
-                        step_id="S06",
-                        business_status=BusinessStatus.VALIDATION_FAILED,
-                        evidence_refs=list(
-                            dict.fromkeys(
-                                ref
-                                for response in responses
-                                for ref in response.evidence_refs
-                            )
+                responses = [department_response]
+                if request.department_name:
+                    requested_department_response = governed(
+                        "S06",
+                        "lookup_department",
+                        {"identifier": request.department_name},
+                        lambda: self.support.adapter.lookup_department(
+                            request.department_name or ""
                         ),
-                        warnings=[
-                            "request.department_name does not match applicant department"
-                        ],
-                        tool_call_ids=[response.call_id for response in responses],
                     )
-            return (
-                department_response,
-                ["department"],
-                list(
-                    dict.fromkeys(
-                        ref for response in responses for ref in response.evidence_refs
+                    responses.append(requested_department_response)
+                    department = Department.model_validate(
+                        department_response.result["department"]
                     )
-                ),
-                [response.call_id for response in responses],
-            )
+                    requested_department = Department.model_validate(
+                        requested_department_response.result["department"]
+                    )
+                    if requested_department.department_code != department.department_code:
+                        raise BusinessOperationFailed(
+                            tool_name="lookup_department",
+                            step_id="S06",
+                            business_status=BusinessStatus.VALIDATION_FAILED,
+                            evidence_refs=list(
+                                dict.fromkeys(
+                                    ref
+                                    for response in responses
+                                    for ref in response.evidence_refs
+                                )
+                            ),
+                            warnings=[
+                                "request.department_name does not match applicant department"
+                            ],
+                            tool_call_ids=[response.call_id for response in responses],
+                        )
+                return (
+                    department_response,
+                    ["department"],
+                    list(
+                        dict.fromkeys(
+                            ref for response in responses for ref in response.evidence_refs
+                        )
+                    ),
+                    [response.call_id for response in responses],
+                )
 
-        department_response = await self._step(
-            executor,
-            "S06",
-            {
-                "department_code": applicant.department_code,
-                "requested_department": request.department_name,
-            },
-            resolve_department,
+            department_response = await self._step(
+                executor,
+                "S06",
+                {
+                    "department_code": applicant.department_code,
+                    "requested_department": request.department_name,
+                },
+                resolve_department,
+            )
+            department = Department.model_validate(
+                department_response.result["department"]
+            )
+            department_code = department.department_code
+            department_evidence = list(department_response.evidence_refs)
+
+        account_step = next(
+            step for step in session.plan.steps if step.step_id == "S07"
         )
-        department = Department.model_validate(department_response.result["department"])
-        account_response = await self._step(
-            executor,
-            "S07",
-            {"category": item.category, "purpose": request.purpose},
-            lambda: self._step_tool_result(
-                governed("S07", "lookup_account_code", {"category": item.category, "purpose": request.purpose}, lambda: self.support.adapter.lookup_account_code(item.category, request.purpose or "")),
-                "account",
-            ),
+        if account_step.status == PlanStatus.COMPLETED and existing_draft:
+            draft_account = existing_draft.account
+            account_evidence = list(account_step.evidence_refs)
+        else:
+            account_response = await self._step(
+                executor,
+                "S07",
+                {"category": item.category, "purpose": request.purpose},
+                lambda: self._step_tool_result(
+                    governed("S07", "lookup_account_code", {"category": item.category, "purpose": request.purpose}, lambda: self.support.adapter.lookup_account_code(item.category, request.purpose or "")),
+                    "account",
+                ),
+            )
+            account = AccountCode.model_validate(account_response.result["account_code"])
+            draft_account = DraftAccount(
+                account_code=account.account_code, label=account.label
+            )
+            account_evidence = list(account_response.evidence_refs)
+
+        delivery_step = next(
+            step for step in session.plan.steps if step.step_id == "S08"
         )
-        account = AccountCode.model_validate(account_response.result["account_code"])
-        delivery_response = await self._step(
-            executor,
-            "S08",
-            {"product_code": item.product_code, "quantity": request.quantity, "requested_by": request.constraints.requested_by},
-            lambda: self._step_tool_result(
-                governed("S08", "estimate_delivery", {"product_code": item.product_code, "quantity": request.quantity, "requested_by": request.constraints.requested_by}, lambda: self.support.adapter.estimate_delivery(item.product_code, request.quantity or 0, request.constraints.requested_by)),
-                "delivery",
-            ),
+        if delivery_step.status == PlanStatus.COMPLETED and existing_draft:
+            delivery = existing_draft.delivery
+            delivery_evidence = list(delivery_step.evidence_refs)
+        else:
+            delivery_response = await self._step(
+                executor,
+                "S08",
+                {"product_code": item.product_code, "quantity": request.quantity, "requested_by": request.constraints.requested_by},
+                lambda: self._step_tool_result(
+                    governed("S08", "estimate_delivery", {"product_code": item.product_code, "quantity": request.quantity, "requested_by": request.constraints.requested_by}, lambda: self.support.adapter.estimate_delivery(item.product_code, request.quantity or 0, request.constraints.requested_by)),
+                    "delivery",
+                ),
+            )
+            delivery = DeliveryEstimate.model_validate(delivery_response.result["delivery"])
+            delivery_evidence = list(delivery_response.evidence_refs)
+
+        calculation_step = next(
+            step for step in session.plan.steps if step.step_id == "S09"
         )
-        delivery = DeliveryEstimate.model_validate(delivery_response.result["delivery"])
-        calculation_response = await self._step(
-            executor,
-            "S09",
-            {"quantity": request.quantity, "unit_price": str(item.unit_price)},
-            lambda: self._step_tool_result(
-                governed("S09", "calculate_request", {"quantity": request.quantity, "unit_price": str(item.unit_price)}, lambda: self.support.calculate_with_skill(request.quantity or 0, str(item.unit_price))),
-                "calculation",
-            ),
-        )
-        calculation = CalculationResult.model_validate(calculation_response.result["calculation"])
-        records = [
-            department_response,
-            account_response,
-            delivery_response,
-            calculation_response,
-        ]
+        if calculation_step.status == PlanStatus.COMPLETED and existing_draft:
+            calculation = existing_draft.amount
+            calculation_evidence = list(calculation_step.evidence_refs)
+        else:
+            calculation_response = await self._step(
+                executor,
+                "S09",
+                {"quantity": request.quantity, "unit_price": str(item.unit_price)},
+                lambda: self._step_tool_result(
+                    governed("S09", "calculate_request", {"quantity": request.quantity, "unit_price": str(item.unit_price)}, lambda: self.support.calculate_with_skill(request.quantity or 0, str(item.unit_price))),
+                    "calculation",
+                ),
+            )
+            calculation = CalculationResult.model_validate(calculation_response.result["calculation"])
+            calculation_evidence = list(calculation_response.evidence_refs)
         evidence = list(
             dict.fromkeys(
                 item_evidence
                 + applicant_evidence
-                + [ref for response in records for ref in response.evidence_refs]
+                + department_evidence
+                + account_evidence
+                + delivery_evidence
+                + calculation_evidence
             )
         )
         draft = ApplicationDraft(
@@ -1772,8 +2071,8 @@ class HostedProcurementApplication:
             ),
             amount=calculation,
             delivery=delivery,
-            applicant=DraftApplicant(employee_id=applicant.employee_id, name=applicant.name, department_code=department.department_code),
-            account=DraftAccount(account_code=account.account_code, label=account.label),
+            applicant=DraftApplicant(employee_id=applicant.employee_id, name=applicant.name, department_code=department_code),
+            account=draft_account,
             request_constraints=request.constraints,
             evidence_refs=evidence,
             warnings=delivery.warnings,
@@ -1806,54 +2105,99 @@ class HostedProcurementApplication:
     async def _run_multi(self, session, executor, request) -> ValidationResult:
         if not self.bundle.procurement_tool or not self.bundle.drafting_tool:
             raise RuntimeError("HA-M requires both specialist Agent Tools")
-        initial_snapshot = ProcurementContextSnapshot(
-            request=request,
-            plan_id=session.plan.plan_id,
-            plan_version=session.plan.plan_version,
+        procurement_step = next(
+            step for step in session.plan.steps if step.step_id == "S03"
         )
-        procurement_task = AgentToolTask(
-            task_id=f"task-{uuid4()}",
-            plan_id=session.plan.plan_id,
-            step_ids=["S03"],
-            context_snapshot=initial_snapshot,
-            required_outputs=["item", "applicant", "department", "account_code", "delivery_estimate"],
+        merge_step = next(
+            step for step in session.plan.steps if step.step_id == "S04"
         )
-        procurement_result = await self._step(
-            executor,
-            "S03",
-            procurement_task.model_dump(mode="json"),
-            lambda: self._agent_tool_step(
-                self.bundle.procurement_tool,
-                "agent_as_tool.procurement_specialist",
-                procurement_task,
-                session,
+        cached_snapshot = session.procurement_context_snapshot
+        reuse_procurement = (
+            procurement_step.status == PlanStatus.COMPLETED
+            and merge_step.status == PlanStatus.COMPLETED
+            and cached_snapshot is not None
+            and cached_snapshot.selected_item is not None
+            and cached_snapshot.applicant is not None
+            and cached_snapshot.department is not None
+            and cached_snapshot.account_code is not None
+            and cached_snapshot.delivery_estimate is not None
+        )
+        if reuse_procurement:
+            enriched_snapshot = cached_snapshot.model_copy(
+                update={
+                    "request": request,
+                    "plan_version": session.plan.plan_version,
+                }
+            )
+        else:
+            initial_snapshot = ProcurementContextSnapshot(
+                request=request,
+                plan_id=session.plan.plan_id,
+                plan_version=session.plan.plan_version,
+            )
+            procurement_task = AgentToolTask(
+                task_id=f"task-{uuid4()}",
+                plan_id=session.plan.plan_id,
+                step_ids=["S03"],
+                context_snapshot=initial_snapshot,
+                required_outputs=[
+                    "item",
+                    "applicant",
+                    "department",
+                    "account_code",
+                    "delivery_estimate",
+                ],
+            )
+            procurement_result = await self._step(
+                executor,
                 "S03",
-            ),
-        )
-        item = CatalogItem.model_validate(procurement_result.result["item"])
-        applicant = Applicant.model_validate(procurement_result.result["applicant"])
-        department = Department.model_validate(procurement_result.result["department"])
-        account = AccountCode.model_validate(procurement_result.result["account_code"])
-        delivery = DeliveryEstimate.model_validate(procurement_result.result["delivery_estimate"])
-        session.selected_item = item
-        session.applicant = applicant
-        await self._step(
-            executor,
-            "S04",
-            {"task_id": procurement_result.task_id},
-            lambda: (True, ["procurement_result", "context_snapshot.procurement"], procurement_result.evidence_refs, []),
-        )
-        enriched_snapshot = ProcurementContextSnapshot(
-            request=request,
-            plan_id=session.plan.plan_id,
-            plan_version=session.plan.plan_version,
-            selected_item=item,
-            applicant=applicant,
-            department=department,
-            account_code=account,
-            delivery_estimate=delivery,
-            evidence_refs=procurement_result.evidence_refs,
-        )
+                procurement_task.model_dump(mode="json"),
+                lambda: self._agent_tool_step(
+                    self.bundle.procurement_tool,
+                    "agent_as_tool.procurement_specialist",
+                    procurement_task,
+                    session,
+                    "S03",
+                ),
+            )
+            item = CatalogItem.model_validate(procurement_result.result["item"])
+            applicant = Applicant.model_validate(
+                procurement_result.result["applicant"]
+            )
+            department = Department.model_validate(
+                procurement_result.result["department"]
+            )
+            account = AccountCode.model_validate(
+                procurement_result.result["account_code"]
+            )
+            delivery = DeliveryEstimate.model_validate(
+                procurement_result.result["delivery_estimate"]
+            )
+            session.selected_item = item
+            session.applicant = applicant
+            await self._step(
+                executor,
+                "S04",
+                {"task_id": procurement_result.task_id},
+                lambda: (
+                    True,
+                    ["procurement_result", "context_snapshot.procurement"],
+                    procurement_result.evidence_refs,
+                    [],
+                ),
+            )
+            enriched_snapshot = ProcurementContextSnapshot(
+                request=request,
+                plan_id=session.plan.plan_id,
+                plan_version=session.plan.plan_version,
+                selected_item=item,
+                applicant=applicant,
+                department=department,
+                account_code=account,
+                delivery_estimate=delivery,
+                evidence_refs=procurement_result.evidence_refs,
+            )
+        session.procurement_context_snapshot = enriched_snapshot
         drafting_task = AgentToolTask(
             task_id=f"task-{uuid4()}",
             plan_id=session.plan.plan_id,
@@ -1924,7 +2268,11 @@ class HostedProcurementApplication:
                 delegation_tool_name=tool.name,
                 result=result.result,
             )
-        return result, [f"agent_tool_result.{result.agent_role.value}"], result.evidence_refs, tool_ids
+        output_ref = {
+            AgentRole.PROCUREMENT_SPECIALIST: "procurement_result",
+            AgentRole.DRAFTING_SPECIALIST: "drafting_result",
+        }.get(result.agent_role, f"agent_tool_result.{result.agent_role.value}")
+        return result, [output_ref], result.evidence_refs, tool_ids
 
     @staticmethod
     def _step_tool_result(response: ToolResponse, output_ref: str):
@@ -1932,6 +2280,15 @@ class HostedProcurementApplication:
 
     def _status_summary(self, session: AgentSession, trace_id: str, resumed: bool) -> dict[str, Any]:
         next_step = session.plan_executor().next_step() if session.plan else None
+        if next_step is None and session.plan:
+            next_step = next(
+                (
+                    step
+                    for step in session.plan.steps
+                    if step.status == PlanStatus.WAITING_USER
+                ),
+                None,
+            )
         invocation_decisions = session.governance_decisions[
             self.support.ledger.governance_decision_offset :
         ]

@@ -15,6 +15,7 @@ from .models import (
     CatalogItem,
     ExecutionPlan,
     GovernanceDecision,
+    ProcurementContextSnapshot,
     ProcurementRequest,
     StrictModel,
 )
@@ -56,6 +57,7 @@ class AgentSession(StrictModel):
     request: ProcurementRequest | None = None
     selected_item: CatalogItem | None = None
     applicant: Applicant | None = None
+    procurement_context_snapshot: ProcurementContextSnapshot | None = None
     evidence: dict[str, dict[str, Any]] = Field(default_factory=dict)
     application_draft: ApplicationDraft | None = None
     governance_state: dict[str, Any] = Field(default_factory=dict)
@@ -101,6 +103,7 @@ class AgentSession(StrictModel):
         self.active_plan_id = plan.plan_id
         self.selected_item = None
         self.applicant = None
+        self.procurement_context_snapshot = None
         self.evidence = {}
         self.application_draft = None
         self.governance_state = {}

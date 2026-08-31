@@ -1,11 +1,12 @@
-# Fully resolved constraints validated on Python 3.14 and resolved for Python 3.13.
-# Snapshot date: 2026-08-29.
+# Fully resolved constraints validated on Python 3.13.13 and Python 3.14.4.
+# Snapshot date: 2026-08-30.
 # requirements.txt is the runtime install entry point.
 # Regenerate and test this file whenever a direct dependency changes.
 
 agent-framework-core==1.16.0
 agent-framework-devui==1.0.0b260821
 agent-framework-foundry-hosting==1.0.0b260827
+agent-framework-openai==1.14.1
 agent_governance_toolkit==4.1.0
 agent-governance-toolkit-core==4.1.0
 aiohappyeyeballs==2.7.1
