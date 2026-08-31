@@ -28,12 +28,16 @@ def merge_natural_request(
     merged: dict[str, Any] = current.model_dump(mode="json") if current else dict(pending or {})
     patch_data = patch.model_dump(mode="json", exclude_none=True, exclude_defaults=True)
     patch_constraints = patch_data.pop("constraints", {})
-    specification_entries = patch_constraints.get("specifications")
+    specification_entries = patch_constraints.pop("specifications", None)
     if isinstance(specification_entries, list):
-        patch_constraints["specifications"] = {
+        existing_specifications = dict(
+            (merged.get("constraints") or {}).get("specifications") or {}
+        )
+        existing_specifications.update({
             entry["key"]: entry["value"]
             for entry in specification_entries
-        }
+        })
+        patch_constraints["specifications"] = existing_specifications
     merged.update(patch_data)
     constraints = dict(merged.get("constraints") or {})
     constraints.update(patch_constraints)

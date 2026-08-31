@@ -55,6 +55,8 @@ def natural_intake_fixture(messages, options) -> ProcurementTurnExtraction:
         values["department_name"] = "開発一部"
     if "情報シス" in text:
         values["department_name"] = "情報シス"
+    if "総務部" in text:
+        values["department_name"] = "総務部"
     if text in {"1部", "情報システム1部"}:
         values["department_name"] = "DPT-IS-01"
     if "用途は開発" in text:
@@ -1026,6 +1028,17 @@ def test_devui_ambiguous_department_requires_selection_before_confirmation() -> 
     assert "情報システム1部" in ambiguous.text
     assert "情報システム2部" in ambiguous.text
 
+    invalid = asyncio.run(bundle.coordinator.run("総務部", session=framework_session))
+    assert "情報システム1部" in invalid.text
+    assert "情報システム2部" in invalid.text
+    waiting = AgentSession.restore(
+        framework_session.state["procurement-execution-context"][
+            "serialized_procurement_session"
+        ]
+    )
+    assert waiting.request.department_name is None
+    assert waiting.plan.status == PlanStatus.WAITING_USER
+
     selected = asyncio.run(bundle.coordinator.run("1部", session=framework_session))
     assert "申請者名または社員ID" in selected.text
     preview = asyncio.run(
@@ -1037,6 +1050,19 @@ def test_devui_ambiguous_department_requires_selection_before_confirmation() -> 
     assert "`確定`" in preview.text
     final = asyncio.run(bundle.coordinator.run("確定", session=framework_session))
     assert "購買申請内容を確定しました" in final.text
+
+
+@pytest.mark.integration
+def test_devui_bracket_prefixed_prose_uses_natural_language_intake() -> None:
+    bundle = build_natural_bundle(LogicalPattern.HOSTED_SINGLE)
+    framework_session = FrameworkAgentSession()
+    response = asyncio.run(
+        bundle.coordinator.run(
+            "[緊急] 開発用ノートPCを購入したい", session=framework_session
+        )
+    )
+    assert "購買申請の実行計画を作成しました" in response.text
+    assert "INVALID_INPUT" not in response.text
 
 
 @pytest.mark.integration

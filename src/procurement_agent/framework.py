@@ -235,7 +235,14 @@ class SerializedProcurementContextProvider(ContextProvider):
         except ValidationError as exc:
             if self._invalid_input_gate is not None:
                 pre_input_decision = self._invalid_input_gate(raw)
-            if raw.lstrip().startswith(("{", "[")):
+            stripped = raw.lstrip()
+            structured_input = stripped.startswith("{")
+            if stripped.startswith("["):
+                try:
+                    structured_input = isinstance(json.loads(raw), list)
+                except json.JSONDecodeError:
+                    structured_input = False
+            if structured_input:
                 response = {
                     "business_status": "INVALID_INPUT",
                     "message": "ProcurementRequest JSON does not match the required schema.",
@@ -294,6 +301,7 @@ class SerializedProcurementContextProvider(ContextProvider):
                     patch = patch.model_copy(update={"department_name": None})
                 elif pending_department_options:
                     department_options_for_response = pending_department_options
+                    patch = patch.model_copy(update={"department_name": None})
             elif pending_department_options:
                 department_options_for_response = pending_department_options
             request, pending = merge_natural_request(

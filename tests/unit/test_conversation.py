@@ -146,6 +146,25 @@ def test_natural_request_merge_preserves_previous_turn_values() -> None:
     assert request.constraints.requested_by == date(2026, 9, 30)
 
 
+def test_natural_request_merge_preserves_specifications_across_turns() -> None:
+    current = ProcurementRequest(
+        request_id="REQ-NL-SPECS",
+        query="開発用ノートPC",
+        constraints=RequestConstraints(specifications={"memory": "32GB"}),
+    )
+    patch = ProcurementRequestPatch(
+        constraints=RequestConstraintsPatch(
+            specifications=[SpecificationPatch(key="storage", value="1TB SSD")]
+        )
+    )
+    request, _ = merge_natural_request(patch, current=current)
+    assert request is not None
+    assert request.constraints.specifications == {
+        "memory": "32GB",
+        "storage": "1TB SSD",
+    }
+
+
 def test_department_resolver_returns_both_information_system_candidates(adapter) -> None:
     resolver = DepartmentCandidateResolver(adapter.departments)
     candidates = resolver.candidates("情報シス")
