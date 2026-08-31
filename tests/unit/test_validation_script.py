@@ -49,7 +49,7 @@ def _draft() -> dict:
             "budget_limit": "200000",
             "specifications": {"memory": "32gb"},
         },
-        "evidence_refs": ["catalog:LAPTOP-DEV-14:2026-08-28.1"],
+        "evidence_refs": ["catalog:LAPTOP-DEV-14:2026-08-30.1"],
     }
 
 

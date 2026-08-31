@@ -22,6 +22,18 @@ from agent_framework import (
 )
 
 from .memory import AgentSession
+from .conversation import (
+    format_department_clarification,
+    format_natural_outcome,
+    format_product_question,
+    merge_natural_request,
+    natural_missing_required_fields,
+)
+from .intake import (
+    DepartmentCandidateResolver,
+    LlmIntakeConfigurationError,
+    LlmProcurementIntake,
+)
 from .models import AgentPlanResponse, LogicalPattern, ProcurementRequest
 from .plan import StructuredPlanBuilder
 
@@ -152,8 +164,8 @@ def marker_response_handler(messages: Sequence[Message], options: Mapping[str, A
                 LOCAL_RESPONSE_END_MARKER, 1
             )[0]
     return (
-        "Local Hosted scaffold is ready. Submit one ProcurementRequest JSON object; "
-        "natural-language model parsing requires a configured Foundry model client."
+        "Local Hosted scaffold is ready. Describe the procurement request in Japanese "
+        "or submit one ProcurementRequest JSON object."
     )
 
 
@@ -167,9 +179,20 @@ class SerializedProcurementContextProvider(ContextProvider):
     """
 
     STATE_KEY = "serialized_procurement_session"
+    INTERACTION_MODE_KEY = "interaction_mode"
+    PENDING_REQUEST_KEY = "pending_natural_request"
+    PENDING_DEPARTMENT_KEY = "pending_department_options"
+    LAST_MACHINE_RESPONSE_KEY = "last_machine_response"
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        intake: LlmProcurementIntake,
+        department_resolver: DepartmentCandidateResolver,
+    ) -> None:
         super().__init__(source_id="procurement-execution-context")
+        self._intake = intake
+        self._department_resolver = department_resolver
         self._run_request: Callable[..., Any] | None = None
         self._invalid_input_gate: Callable[[str], Any] | None = None
 
@@ -200,27 +223,98 @@ class SerializedProcurementContextProvider(ContextProvider):
         if self._run_request is None:
             return
         raw = self._last_user_text(context)
+        restored: AgentSession | None = None
+        if serialized := state.get(self.STATE_KEY):
+            restored = AgentSession.restore(serialized)
+        natural_mode = False
+        user_confirmed = False
+        department_options_for_response: list[dict[str, str]] = []
+        pre_input_decision: Any | None = None
         try:
             request = ProcurementRequest.model_validate_json(raw)
         except ValidationError as exc:
             if self._invalid_input_gate is not None:
-                self._invalid_input_gate(raw)
-            response = {
-                "business_status": "INVALID_INPUT",
-                "message": "ProcurementRequest JSON is required in local deterministic mode.",
-                "schema_errors": exc.error_count(),
-            }
-            context.extend_instructions(
-                self.source_id,
-                LOCAL_RESPONSE_MARKER
-                + json.dumps(response, ensure_ascii=False, sort_keys=True)
-                + LOCAL_RESPONSE_END_MARKER,
+                pre_input_decision = self._invalid_input_gate(raw)
+            if raw.lstrip().startswith(("{", "[")):
+                response = {
+                    "business_status": "INVALID_INPUT",
+                    "message": "ProcurementRequest JSON does not match the required schema.",
+                    "schema_errors": exc.error_count(),
+                }
+                context.extend_instructions(
+                    self.source_id,
+                    LOCAL_RESPONSE_MARKER
+                    + json.dumps(response, ensure_ascii=False, sort_keys=True)
+                    + LOCAL_RESPONSE_END_MARKER,
+                )
+                return
+            natural_mode = True
+            expected_fields = (
+                natural_missing_required_fields(restored.request)
+                if restored and restored.request
+                else ["request.query"]
             )
-            return
+            pending_department_options = list(
+                state.get(self.PENDING_DEPARTMENT_KEY) or []
+            )
+            try:
+                intake = await self._intake.extract(
+                    raw,
+                    current_request=restored.request if restored else None,
+                    expected_fields=expected_fields,
+                    department_options=pending_department_options,
+                    confirmation_expected=bool(
+                        restored
+                        and restored.governance_state.get("pending_confirmation")
+                    ),
+                )
+            except LlmIntakeConfigurationError as config_error:
+                context.extend_instructions(
+                    self.source_id,
+                    LOCAL_RESPONSE_MARKER
+                    + "自然言語入力にはLLM設定が必要です。"
+                    + f" {config_error}"
+                    + LOCAL_RESPONSE_END_MARKER,
+                )
+                return
+            user_confirmed = intake.intent == "CONFIRM"
+            patch = intake.request_patch
+            if patch.department_name:
+                candidates = self._department_resolver.candidates(
+                    patch.department_name
+                )
+                if len(candidates) == 1:
+                    patch = patch.model_copy(
+                        update={"department_name": candidates[0]["department_code"]}
+                    )
+                    state.pop(self.PENDING_DEPARTMENT_KEY, None)
+                elif len(candidates) > 1:
+                    department_options_for_response = candidates
+                    state[self.PENDING_DEPARTMENT_KEY] = candidates
+                    patch = patch.model_copy(update={"department_name": None})
+                elif pending_department_options:
+                    department_options_for_response = pending_department_options
+            elif pending_department_options:
+                department_options_for_response = pending_department_options
+            request, pending = merge_natural_request(
+                patch,
+                current=restored.request if restored else None,
+                pending=state.get(self.PENDING_REQUEST_KEY),
+            )
+            state[self.INTERACTION_MODE_KEY] = "natural"
+            if request is None:
+                state[self.PENDING_REQUEST_KEY] = pending
+                context.extend_instructions(
+                    self.source_id,
+                    LOCAL_RESPONSE_MARKER
+                    + format_product_question()
+                    + LOCAL_RESPONSE_END_MARKER,
+                )
+                return
+            state.pop(self.PENDING_REQUEST_KEY, None)
+        else:
+            state[self.INTERACTION_MODE_KEY] = "json"
 
-        restored: AgentSession | None = None
-        if serialized := state.get(self.STATE_KEY):
-            restored = AgentSession.restore(serialized)
         same_request = bool(restored and restored.request == request)
         resume = bool(
             restored
@@ -232,14 +326,36 @@ class SerializedProcurementContextProvider(ContextProvider):
                 or (restored.plan.status.value == "COMPLETED" and same_request)
             )
         )
-        outcome = self._run_request(request, session=restored, resume=resume)
+        outcome = self._run_request(
+            request,
+            session=restored,
+            resume=resume,
+            raw_user_input=raw if natural_mode else None,
+            pre_input_decision=pre_input_decision,
+            user_confirmed=user_confirmed,
+        )
         if inspect.isawaitable(outcome):
             outcome = await outcome
         state[self.STATE_KEY] = outcome.session.serialize()
         state["last_status"] = outcome.status_summary
+        state[self.LAST_MACHINE_RESPONSE_KEY] = outcome.response_text
+        if natural_mode and department_options_for_response:
+            response_text = format_department_clarification(
+                department_options_for_response,
+                outcome.session,
+                outcome.status_summary,
+            )
+        elif natural_mode:
+            response_text = format_natural_outcome(
+                outcome.response_text,
+                outcome.session,
+                outcome.status_summary,
+            )
+        else:
+            response_text = outcome.response_text
         context.extend_instructions(
             self.source_id,
-            LOCAL_RESPONSE_MARKER + outcome.response_text + LOCAL_RESPONSE_END_MARKER,
+            LOCAL_RESPONSE_MARKER + response_text + LOCAL_RESPONSE_END_MARKER,
         )
 
     async def after_run(

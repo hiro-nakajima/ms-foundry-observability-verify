@@ -10,8 +10,10 @@ from pathlib import Path
 import pytest
 from agent_framework import AgentSession as FrameworkAgentSession
 
+from procurement_agent.framework import DeterministicChatClient
 from procurement_agent.governance import GovernanceDenied
 from procurement_agent.hosted import build_local_hosted_bundle
+from procurement_agent.intake import ProcurementRequestPatch, ProcurementTurnExtraction
 from procurement_agent.memory import AgentSession
 from procurement_agent.models import (
     GovernanceMode,
@@ -25,6 +27,54 @@ from trace_pipeline.completeness import trace_completeness
 
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def natural_intake_fixture(messages, options) -> ProcurementTurnExtraction:
+    """Test-only LLM double; production never parses natural language locally."""
+
+    assert options["response_format"] is ProcurementTurnExtraction
+    assert options["tool_choice"] == "none"
+    assert options["tools"] == []
+    text = json.loads(messages[-1].text)["current_user_input"]
+    if text == "確定":
+        return ProcurementTurnExtraction(intent="CONFIRM")
+    values: dict[str, object] = {}
+    if "開発用ノートPC" in text:
+        values["query"] = "開発用ノートPC"
+    if "3台" in text:
+        values["quantity"] = 3
+    if "4台" in text:
+        values["quantity"] = 4
+    if "山田太郎" in text:
+        values["applicant_name"] = "山田太郎"
+    if "鈴木一郎" in text:
+        values["applicant_name"] = "鈴木一郎"
+    if "開発一部" in text:
+        values["department_name"] = "開発一部"
+    if "情報シス" in text:
+        values["department_name"] = "情報シス"
+    if text in {"1部", "情報システム1部"}:
+        values["department_name"] = "DPT-IS-01"
+    if "用途は開発" in text:
+        values["purpose"] = "開発"
+    constraints: dict[str, str] = {}
+    if "2026-09-30" in text or "2026/09/30" in text:
+        constraints["requested_by"] = "2026-09-30"
+    if constraints:
+        values["constraints"] = constraints
+    return ProcurementTurnExtraction(
+        request_patch=ProcurementRequestPatch.model_validate(values)
+    )
+
+
+def build_natural_bundle(pattern: LogicalPattern):
+    return build_local_hosted_bundle(
+        pattern,
+        intake_client=DeterministicChatClient(
+            natural_intake_fixture,
+            client_name="natural-intake-fixture",
+        ),
+    )
 
 
 def complete_request(request_id: str = "REQ-INTEGRATION", quantity: int = 3) -> ProcurementRequest:
@@ -392,7 +442,7 @@ def test_ambiguous_applicant_waits_then_resumes_with_employee_id(
     assert response["clarification"]["field"] == "applicant_name"
     assert {
         option["employee_id"] for option in response["clarification"]["options"]
-    } == {"EMP-001", "EMP-002"}
+    } == {"EMP-001", "EMP-002", "EMP-003", "EMP-004"}
     waiting_step = next(
         step for step in first.session.plan.steps if step.status == PlanStatus.WAITING_USER
     )
@@ -712,6 +762,18 @@ def test_planner_uses_pydantic_response_format_without_tools_and_empty_fallback(
 
 
 @pytest.mark.integration
+def test_configured_factory_uses_azure_openai_for_intake_and_planner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://synthetic.openai.azure.com")
+    monkeypatch.setenv("AZURE_OPENAI_CHAT_MODEL", "synthetic-model-deployment")
+    monkeypatch.setenv("AZURE_OPENAI_API_KEY", "synthetic-test-key")
+    bundle = build_local_hosted_bundle(LogicalPattern.HOSTED_SINGLE)
+    assert type(bundle.planner_client).__name__ == "OpenAIChatClient"
+    assert bundle.context_provider._intake.client is bundle.planner_client
+
+
+@pytest.mark.integration
 def test_framework_session_round_trip_resumes_waiting_plan() -> None:
     first_bundle = build_local_hosted_bundle(LogicalPattern.HOSTED_SINGLE)
     framework_session = FrameworkAgentSession()
@@ -862,6 +924,232 @@ def test_devui_style_same_framework_session_continues_next_turn() -> None:
         "serialized_procurement_session"
     ]
     assert json.loads(serialized)["turn_index"] == 2
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("pattern", [LogicalPattern.HOSTED_SINGLE, LogicalPattern.HOSTED_MULTI])
+def test_devui_natural_language_creates_plan_then_resumes_to_validated_draft(
+    pattern: LogicalPattern,
+) -> None:
+    bundle = build_natural_bundle(pattern)
+    framework_session = FrameworkAgentSession()
+
+    first = asyncio.run(
+        bundle.coordinator.run("開発用ノートPCを購入したい", session=framework_session)
+    )
+    assert "購買申請の実行計画を作成しました" in first.text
+    assert "[入力待ち] 不足情報を確認する" in first.text
+    assert "数量（例: 3台）" in first.text
+    assert "商品コード" in first.text
+
+    second = asyncio.run(
+        bundle.coordinator.run(
+            "数量は3台、部門は開発一部、申請者は山田太郎、用途は開発、"
+            "希望納期は2026-09-30です",
+            session=framework_session,
+        )
+    )
+    assert "検証済み申請内容" in second.text
+    assert "`確定`" in second.text
+    assert "`LAPTOP-DEV-14`" in second.text
+    assert "**594,000 JPY**" in second.text
+    if pattern == LogicalPattern.HOSTED_MULTI:
+        assert (
+            "Agent Tool 委譲: `procurement_specialist` → `drafting_specialist`"
+            in second.text
+        )
+    third = asyncio.run(
+        bundle.coordinator.run("確定", session=framework_session)
+    )
+    assert "購買申請内容を確定しました" in third.text
+    state = framework_session.state["procurement-execution-context"]
+    machine = json.loads(state["last_machine_response"])
+    assert machine["business_status"] == "SUCCESS"
+    assert machine["confirmed"] is True
+    assert machine["observability"]["session_resumed"] is True
+    restored = AgentSession.restore(state["serialized_procurement_session"])
+    assert restored.plan.status == PlanStatus.COMPLETED
+    last_user = next(
+        message for message in reversed(restored.conversation) if message.role == "user"
+    )
+    assert last_user.content == "確定"
+
+
+@pytest.mark.integration
+def test_devui_natural_language_accepts_one_missing_field_per_turn() -> None:
+    bundle = build_natural_bundle(LogicalPattern.HOSTED_SINGLE)
+    framework_session = FrameworkAgentSession()
+    first = asyncio.run(
+        bundle.coordinator.run("開発用ノートPCを購入したい", session=framework_session)
+    )
+    plan_id = json.loads(
+        framework_session.state["procurement-execution-context"][
+            "serialized_procurement_session"
+        ]
+    )["active_plan_id"]
+
+    second = asyncio.run(bundle.coordinator.run("3台です", session=framework_session))
+    assert "部門名または部門コード" in second.text
+    assert "数量（例: 3台）" not in second.text
+
+    third = asyncio.run(
+        bundle.coordinator.run(
+            "部門は開発一部、申請者は山田太郎、用途は開発、希望納期は2026/09/30です",
+            session=framework_session,
+        )
+    )
+    assert "検証済み申請内容" in third.text
+    fourth = asyncio.run(bundle.coordinator.run("確定", session=framework_session))
+    assert "購買申請内容を確定しました" in fourth.text
+    restored = AgentSession.restore(
+        framework_session.state["procurement-execution-context"][
+            "serialized_procurement_session"
+        ]
+    )
+    assert restored.active_plan_id == plan_id
+    assert restored.turn_index == 4
+
+
+@pytest.mark.integration
+def test_devui_ambiguous_department_requires_selection_before_confirmation() -> None:
+    bundle = build_natural_bundle(LogicalPattern.HOSTED_SINGLE)
+    framework_session = FrameworkAgentSession()
+    asyncio.run(
+        bundle.coordinator.run("開発用ノートPCを購入したい", session=framework_session)
+    )
+    asyncio.run(bundle.coordinator.run("3台です", session=framework_session))
+    ambiguous = asyncio.run(
+        bundle.coordinator.run("情報シス", session=framework_session)
+    )
+    assert "情報システム1部" in ambiguous.text
+    assert "情報システム2部" in ambiguous.text
+
+    selected = asyncio.run(bundle.coordinator.run("1部", session=framework_session))
+    assert "申請者名または社員ID" in selected.text
+    preview = asyncio.run(
+        bundle.coordinator.run(
+            "申請者は鈴木一郎、用途は開発、希望納期は2026-09-30です",
+            session=framework_session,
+        )
+    )
+    assert "`確定`" in preview.text
+    final = asyncio.run(bundle.coordinator.run("確定", session=framework_session))
+    assert "購買申請内容を確定しました" in final.text
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    "pattern", [LogicalPattern.HOSTED_SINGLE, LogicalPattern.HOSTED_MULTI]
+)
+def test_devui_change_before_confirmation_invalidates_and_revalidates_draft(
+    pattern: LogicalPattern,
+) -> None:
+    bundle = build_natural_bundle(pattern)
+    framework_session = FrameworkAgentSession()
+    asyncio.run(
+        bundle.coordinator.run("開発用ノートPCを購入したい", session=framework_session)
+    )
+    first_preview = asyncio.run(
+        bundle.coordinator.run(
+            "数量は3台、部門は開発一部、申請者は山田太郎、用途は開発、"
+            "希望納期は2026-09-30です",
+            session=framework_session,
+        )
+    )
+    assert "**594,000 JPY**" in first_preview.text
+
+    revised_preview = asyncio.run(
+        bundle.coordinator.run("4台に変更します", session=framework_session)
+    )
+    assert "**792,000 JPY**" in revised_preview.text
+    assert "`確定`" in revised_preview.text
+    revised_state = framework_session.state["procurement-execution-context"]
+    revised_machine = json.loads(revised_state["last_machine_response"])
+    assert revised_machine["business_status"] == "WAITING_USER"
+    assert revised_machine["confirmation_required"] is True
+    expected_confirmation_step = (
+        "S12" if pattern == LogicalPattern.HOSTED_SINGLE else "S08"
+    )
+    assert (
+        revised_machine["observability"]["current_step"]
+        == expected_confirmation_step
+    )
+    assert revised_machine["application_draft"]["item"]["quantity"] == 4
+    assert revised_machine["plan_version"] == 2
+
+    final = asyncio.run(bundle.coordinator.run("確定", session=framework_session))
+    assert "購買申請内容を確定しました" in final.text
+    final_machine = json.loads(
+        framework_session.state["procurement-execution-context"][
+            "last_machine_response"
+        ]
+    )
+    assert final_machine["application_draft"]["amount"]["total"] == "792000"
+
+
+@pytest.mark.integration
+def test_devui_natural_language_collects_product_before_plan_creation() -> None:
+    bundle = build_natural_bundle(LogicalPattern.HOSTED_SINGLE)
+    framework_session = FrameworkAgentSession()
+    first = asyncio.run(
+        bundle.coordinator.run("購買申請を始めたい", session=framework_session)
+    )
+    assert "購入したい商品を教えてください" in first.text
+    state = framework_session.state["procurement-execution-context"]
+    request_id = state["pending_natural_request"]["request_id"]
+    assert "serialized_procurement_session" not in state
+
+    second = asyncio.run(
+        bundle.coordinator.run("開発用ノートPCです", session=framework_session)
+    )
+    assert "購買申請の実行計画を作成しました" in second.text
+    restored = AgentSession.restore(
+        framework_session.state["procurement-execution-context"][
+            "serialized_procurement_session"
+        ]
+    )
+    assert restored.request.request_id == request_id
+
+
+@pytest.mark.integration
+def test_devui_natural_input_is_governed_before_intake_state_mutation() -> None:
+    bundle = build_local_hosted_bundle(
+        LogicalPattern.HOSTED_SINGLE,
+        governance_mode=GovernanceMode.ENFORCE,
+    )
+    framework_session = FrameworkAgentSession()
+    with pytest.raises(GovernanceDenied):
+        asyncio.run(
+            bundle.coordinator.run(
+                "開発用ノートPC password=synthetic-test-value",
+                session=framework_session,
+            )
+        )
+    assert framework_session.state["procurement-execution-context"] == {}
+
+
+@pytest.mark.integration
+def test_devui_natural_input_without_llm_configuration_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for name in (
+        "AZURE_OPENAI_ENDPOINT",
+        "AZURE_OPENAI_CHAT_MODEL",
+        "AZURE_OPENAI_API_VERSION",
+        "AZURE_OPENAI_API_KEY",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    bundle = build_local_hosted_bundle(LogicalPattern.HOSTED_SINGLE)
+    framework_session = FrameworkAgentSession()
+    response = asyncio.run(
+        bundle.coordinator.run(
+            "開発用ノートPCを購入したい",
+            session=framework_session,
+        )
+    )
+    assert "自然言語入力にはLLM設定が必要です" in response.text
+    state = framework_session.state["procurement-execution-context"]
+    assert "serialized_procurement_session" not in state
 
 
 @pytest.mark.integration

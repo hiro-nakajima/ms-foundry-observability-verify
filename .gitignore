@@ -5,10 +5,12 @@ __pycache__/
 .pytest_cache/
 .coverage
 htmlcov/
+output/playwright/
 build/
 dist/
 *.egg-info/
 .env
+.env.*.local
 artifacts/traces/*
 artifacts/envelopes/*
 artifacts/eval-results/*

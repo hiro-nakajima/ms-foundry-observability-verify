@@ -12,7 +12,7 @@ def _assert_contract(response) -> None:
     assert response.call_id.startswith("tool-")
     assert response.http_status == 200
     assert response.technical_status == TechnicalStatus.SUCCESS
-    assert response.data_version == "2026-08-28.1"
+    assert response.data_version == "2026-08-30.1"
     assert isinstance(response.result, dict)
     assert isinstance(response.evidence_refs, list)
     assert isinstance(response.warnings, list)
@@ -46,7 +46,7 @@ def test_search_and_structured_get_are_separate(adapter) -> None:
     assert first["item"]["product_code"] == "LAPTOP-DEV-14"
     structured = adapter.get_catalog_item(first["item"]["product_code"])
     assert structured.result["item"]["unit_price"] == "180000"
-    assert structured.evidence_refs == ["catalog:LAPTOP-DEV-14:2026-08-28.1"]
+    assert structured.evidence_refs == ["catalog:LAPTOP-DEV-14:2026-08-30.1"]
 
 
 def test_catalog_search_accepts_exact_product_code(adapter) -> None:
@@ -133,7 +133,7 @@ def test_blank_lookup_identifiers_are_business_invalid_input(adapter) -> None:
 def test_ambiguous_partial_identifiers_require_clarification(adapter) -> None:
     applicant = adapter.get_applicant("架空")
     assert applicant.business_status == BusinessStatus.CLARIFICATION_REQUIRED
-    assert len(applicant.result["clarification"]["options"]) == 2
+    assert len(applicant.result["clarification"]["options"]) == 4
     assert applicant.result["clarification"]["required_input_refs"] == [
         "request.applicant_name"
     ]

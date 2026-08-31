@@ -159,6 +159,37 @@ def test_changed_input_invalidates_only_dependent_steps() -> None:
     assert plan.steps[2].status == PlanStatus.COMPLETED
 
 
+def test_invalidation_propagates_across_structured_reference_prefixes() -> None:
+    plan = ExecutionPlan(
+        plan_id="plan-prefixed-invalidation",
+        plan_version=1,
+        goal="invalidate structured child references",
+        status=PlanStatus.RUNNING,
+        steps=[
+            PlanStep(
+                step_id="S1",
+                step_type="applicant",
+                owner=AgentRole.PROCUREMENT_ASSISTANT,
+                input_refs=["request.applicant_name"],
+            ),
+            PlanStep(
+                step_id="S2",
+                step_type="department",
+                owner=AgentRole.PROCUREMENT_ASSISTANT,
+                input_refs=["applicant.department_code"],
+            ),
+        ],
+    )
+    executor = PlanExecutor(plan)
+    executor.start("S1", {"applicant": "old"})
+    executor.complete("S1", output_refs=["applicant"])
+    executor.start("S2", {"department": "old"})
+    executor.complete("S2", output_refs=["department"])
+
+    affected = executor.invalidate_by_refs({"request.applicant_name"})
+    assert affected == ["S1", "S2"]
+
+
 def test_block_marks_unpresented_step_and_plan_blocked() -> None:
     plan = ExecutionPlan(
         plan_id="plan-blocked",

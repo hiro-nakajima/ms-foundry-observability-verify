@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 
-from agent_framework_devui import serve
+from agent_framework.devui import serve
 
 from .hosted import build_local_hosted_bundle
 from .models import GovernanceMode, LogicalPattern

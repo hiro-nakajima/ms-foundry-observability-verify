@@ -80,7 +80,7 @@ def test_successful_tool_without_evidence_is_would_deny_in_shadow() -> None:
     response = ToolResponse(
         call_id="tool-1",
         business_status=BusinessStatus.SUCCESS,
-        data_version="2026-08-28.1",
+        data_version="2026-08-30.1",
         result={"value": 1},
     )
     decision = GovernanceAdapter(POLICY).post_tool(

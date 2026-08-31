@@ -63,7 +63,8 @@ SINGLE_TEMPLATE = (
     ("S09", "calculate_total", AgentRole.PROCUREMENT_ASSISTANT, ["item.unit_price", "request.quantity"]),
     ("S10", "build_draft", AgentRole.PROCUREMENT_ASSISTANT, ["item", "applicant", "department", "account", "delivery", "calculation"]),
     ("S11", "validate_draft", AgentRole.PROCUREMENT_ASSISTANT, ["application_draft", "evidence"]),
-    ("S12", "present_draft", AgentRole.PROCUREMENT_ASSISTANT, ["validation", "application_draft"]),
+    ("S12", "confirm_application", AgentRole.PROCUREMENT_ASSISTANT, ["validation", "application_draft", "user.confirmation"]),
+    ("S13", "present_draft", AgentRole.PROCUREMENT_ASSISTANT, ["user.confirmation", "application_draft"]),
 )
 
 
@@ -89,7 +90,8 @@ MULTI_TEMPLATE = (
     ("S05", "build_draft", AgentRole.DRAFTING_SPECIALIST, ["request", "procurement_result", "context_snapshot"]),
     ("S06", "merge_draft_result", AgentRole.COORDINATOR, ["drafting_result"]),
     ("S07", "validate_draft", AgentRole.COORDINATOR, ["application_draft", "evidence"]),
-    ("S08", "present_draft", AgentRole.COORDINATOR, ["validation", "application_draft"]),
+    ("S08", "confirm_application", AgentRole.COORDINATOR, ["validation", "application_draft", "user.confirmation"]),
+    ("S09", "present_draft", AgentRole.COORDINATOR, ["user.confirmation", "application_draft"]),
 )
 
 
@@ -111,6 +113,7 @@ class StructuredPlanBuilder:
         raw_response: AgentPlanResponse | dict[str, Any] | None = None,
         plan_id: str | None = None,
         plan_version: int = 1,
+        required_missing_fields: list[str] | None = None,
     ) -> ExecutionPlan:
         template = MULTI_TEMPLATE if pattern in {LogicalPattern.PROMPT_MULTI, LogicalPattern.HOSTED_MULTI} else SINGLE_TEMPLATE
         approved = {item[1]: item for item in template}
@@ -154,7 +157,11 @@ class StructuredPlanBuilder:
             ]
 
         now = datetime.now(timezone.utc)
-        missing = request.missing_required_fields()
+        missing = (
+            list(required_missing_fields)
+            if required_missing_fields is not None
+            else request.missing_required_fields()
+        )
         steps = [
             PlanStep(
                 step_id=proposal.step_id,
@@ -378,8 +385,20 @@ class PlanExecutor:
 
         affected: list[str] = []
         propagated = set(changed_refs)
+
+        def related(left: str, right: str) -> bool:
+            return (
+                left == right
+                or left.startswith(right + ".")
+                or right.startswith(left + ".")
+            )
+
         for step in self.plan.steps:
-            if set(step.input_refs) & propagated:
+            if any(
+                related(input_ref, changed_ref)
+                for input_ref in step.input_refs
+                for changed_ref in propagated
+            ):
                 previous_outputs = list(step.output_refs)
                 if step.status != PlanStatus.INVALIDATED:
                     self._transition(step, PlanStatus.INVALIDATED, "upstream input changed")
