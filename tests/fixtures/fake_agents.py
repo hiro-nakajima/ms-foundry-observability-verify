@@ -34,6 +34,7 @@ class RecordedCatalogAgent:
         evidence = [Evidence(
             evidence_id=f"evidence:{item['document_id']}", index_name="procurement-catalog-v1",
             document_id=item["document_id"], source_version=item["source_version"],
+            record_type="product", record_key=item["product_code"],
             rank=item.get("rank"), score=item.get("score"),
         ) for item in documents]
         return CatalogSearchResult(
@@ -59,6 +60,8 @@ class RecordedCodeAgent:
         evidence = [Evidence(
             evidence_id=f"evidence:{item['document_id']}", index_name="procurement-code-master-v1",
             document_id=item["document_id"], source_version=item["source_version"],
+            record_type=item["record_type"],
+            record_key=item.get("account_code") or item.get("department_code"),
         ) for item in documents]
         return CodeDeterminationResult(
             correlation=value.correlation, status=status,

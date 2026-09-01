@@ -10,7 +10,7 @@ Data: version `2026-09-01.1` Synthetic only
 ## Local結果
 
 - Python 3.13.13
-- `pytest`: 108 passed / 1 skipped（Azure E2Eはapply未承認・Credential未指定のため理由付きSKIP）
+- `pytest`: 110 passed / 1 skipped（Azure E2Eはapply未承認・Credential未指定のため理由付きSKIP）
 - Search asset: catalog 10 documents、code master 9 documents、source version一致
 - Deployment asset: Bicep compile PASS、`azd show --no-prompt`で5 split-serviceをparse、Azure environment未作成
 - 独自Session/History、nested Session JSON、旧4構成selector: sourceから削除

@@ -7,11 +7,17 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-from agent_framework import Agent, AgentSession, FunctionInvocationContext, InMemoryHistoryProvider
+from agent_framework import (
+    Agent, AgentSession, ContextProvider, FunctionInvocationContext,
+    InMemoryHistoryProvider, SessionContext,
+)
 from agent_framework_foundry import FoundryAgent, FoundryChatClient
 from azure.identity import DefaultAzureCredential
 
-from .framework import DeterministicChatClient, local_parent_handler
+from .framework import (
+    CONTROLLER_RESULT_END, CONTROLLER_RESULT_START, DeterministicChatClient,
+    controller_result_handler, local_parent_handler,
+)
 from .middleware import ContentGovernanceChatMiddleware, SessionGovernanceAgentMiddleware, ToolGovernanceFunctionMiddleware
 from .models import ExecutionPlan, ProcurementRequest, ScenarioResult
 from .controller import ProcurementController
@@ -56,11 +62,55 @@ class FoundryRuntimeSettings:
 @dataclass
 class HostedAgentBundle:
     parent: Agent
+    planner: Agent
     catalog_proxy: FoundryAgent
     code_proxy: FoundryAgent
     catalog_tool: Any
     code_tool: Any
     history_provider: InMemoryHistoryProvider
+
+
+class ControllerContextProvider(ContextProvider):
+    """Route each exposed parent invocation through the ordered domain Controller.
+
+    Framework history remains owned by ``InMemoryHistoryProvider``. This provider
+    stores no parallel conversation or session object; it only injects the current
+    validated ``ScenarioResult`` before the parent response is generated.
+    """
+
+    def __init__(self, planner: Agent, catalog_tool: Any, code_tool: Any) -> None:
+        super().__init__("procurement-controller-v2")
+        self.planner = planner
+        self.catalog_tool = catalog_tool
+        self.code_tool = code_tool
+
+    @staticmethod
+    def _latest_user_text(context: SessionContext) -> str:
+        for message in reversed(context.input_messages):
+            role = getattr(message.role, "value", message.role)
+            if role == "user" and message.text.strip():
+                return message.text.strip()
+        raise ValueError("a non-empty user request is required")
+
+    async def before_run(
+        self, *, agent: Agent, session: AgentSession,
+        context: SessionContext, state: dict[str, Any],
+    ) -> None:
+        current = load_execution_state(session, required=False)
+        next_turn = (current.turn_number if current else 0) + 1
+        test_case_id = f"HOSTED-{session.session_id}-T{next_turn}"
+        result = await _execute_hosted_components(
+            planner=self.planner,
+            catalog_tool=self.catalog_tool,
+            code_tool=self.code_tool,
+            natural_request=self._latest_user_text(context),
+            session=session,
+            test_case_id=test_case_id,
+        )
+        context.extend_instructions(
+            self.source_id,
+            f"{CONTROLLER_RESULT_START}{result.model_dump_json()}{CONTROLLER_RESULT_END}",
+        )
 
 
 def build_hosted_bundle(
@@ -97,19 +147,28 @@ def build_hosted_bundle(
         propagate_session=False,
     )
     history = InMemoryHistoryProvider("procurement-history", load_messages=True)
-    client = parent_client or FoundryChatClient(
+    planner_client = parent_client or FoundryChatClient(
         model=settings.parent_model,
         project_endpoint=settings.project_endpoint,
         credential=credential,
     )
+    planner = Agent(
+        planner_client,
+        id="procurement-parent-planner-v2",
+        name="procurement_parent_planner",
+        description="Internal structured request and ExecutionPlan generator.",
+        instructions=PARENT_INSTRUCTIONS,
+        additional_properties={"architecture_id": "procurement_application_v2"},
+    )
+    controller_provider = ControllerContextProvider(planner, catalog_tool, code_tool)
     parent = Agent(
-        client,
+        DeterministicChatClient(controller_result_handler, client_name="controller-result"),
         id="procurement-parent-v2",
         name=settings.parent_name,
         description="Single Hosted parent for the revised procurement E2E.",
         instructions=PARENT_INSTRUCTIONS,
         tools=[catalog_tool, code_tool],
-        context_providers=[history],
+        context_providers=[history, controller_provider],
         middleware=[
             SessionGovernanceAgentMiddleware(),
             ContentGovernanceChatMiddleware(),
@@ -121,7 +180,15 @@ def build_hosted_bundle(
             "propagate_child_session": False,
         },
     )
-    return HostedAgentBundle(parent, catalog_proxy, code_proxy, catalog_tool, code_tool, history)
+    return HostedAgentBundle(
+        parent=parent,
+        planner=planner,
+        catalog_proxy=catalog_proxy,
+        code_proxy=code_proxy,
+        catalog_tool=catalog_tool,
+        code_tool=code_tool,
+        history_provider=history,
+    )
 
 
 def build_local_parent_scaffold() -> Agent:
@@ -148,7 +215,15 @@ def _response_model(response: Any, model_type: type[Any]) -> Any:
 async def _invoke_remote_tool(tool: Any, payload: Any, session: AgentSession) -> dict[str, Any]:
     arguments = {"task": payload.model_dump_json()}
     context = FunctionInvocationContext(function=tool, arguments=arguments, session=session)
-    raw = await tool.invoke(arguments=arguments, context=context, skip_parsing=True)
+    result: dict[str, Any] = {}
+
+    async def invoke() -> None:
+        result["raw"] = await tool.invoke(
+            arguments=arguments, context=context, skip_parsing=True,
+        )
+
+    await ToolGovernanceFunctionMiddleware().process(context, invoke)
+    raw = result["raw"]
     if hasattr(raw, "model_dump"):
         return raw.model_dump(mode="json")
     if isinstance(raw, dict):
@@ -161,21 +236,20 @@ async def _invoke_remote_tool(tool: Any, payload: Any, session: AgentSession) ->
     raise ValueError("remote child Agent returned an unsupported result type")
 
 
-async def execute_hosted_turn(
-    bundle: HostedAgentBundle, natural_request: str, *, session: AgentSession | None,
-    test_case_id: str,
+async def _execute_hosted_components(
+    *, planner: Agent, catalog_tool: Any, code_tool: Any, natural_request: str,
+    session: AgentSession | None, test_case_id: str,
 ) -> ScenarioResult:
-    """Natural language → two Pydantic response formats → ordered Controller."""
     if session is None:
         raise ValueError("Framework AgentSession is required; implicit sessions are forbidden")
     if load_execution_state(session, required=False) is None:
         initialize_execution_state(session, test_case_id=test_case_id)
-    request_response = await bundle.parent.run(
+    request_response = await planner.run(
         natural_request, session=session, tools=[],
         options={"response_format": ProcurementRequest, "tool_choice": "none"},
     )
     request = _response_model(request_response, ProcurementRequest)
-    plan_response = await bundle.parent.run(
+    plan_response = await planner.run(
         request.model_dump_json(), session=session, tools=[],
         options={"response_format": ExecutionPlan, "tool_choice": "none"},
     )
@@ -184,9 +258,24 @@ async def execute_hosted_turn(
     except Exception:
         raw_plan = getattr(plan_response, "text", None)
     controller = ProcurementController(
-        lambda payload: _invoke_remote_tool(bundle.catalog_tool, payload, session),
-        lambda payload: _invoke_remote_tool(bundle.code_tool, payload, session),
+        lambda payload: _invoke_remote_tool(catalog_tool, payload, session),
+        lambda payload: _invoke_remote_tool(code_tool, payload, session),
     )
     return await controller.execute(
         request, session=session, test_case_id=test_case_id, raw_plan=raw_plan,
+    )
+
+
+async def execute_hosted_turn(
+    bundle: HostedAgentBundle, natural_request: str, *, session: AgentSession | None,
+    test_case_id: str,
+) -> ScenarioResult:
+    """Contract-test entry point for the same route exposed by Hosted/DevUI."""
+    return await _execute_hosted_components(
+        planner=bundle.planner,
+        catalog_tool=bundle.catalog_tool,
+        code_tool=bundle.code_tool,
+        natural_request=natural_request,
+        session=session,
+        test_case_id=test_case_id,
     )

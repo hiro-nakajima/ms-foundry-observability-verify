@@ -12,3 +12,17 @@
 - Evaluator: 新構成の14 Failure Pattern
 
 独自History/Session、子Agent実体のcontainer内実装、旧4構成selector、88-run Matrixは削除した。
+
+## Framework拡張の境界
+
+公開するHosted/DevUI親AgentにはFramework標準の`ContextProvider`を継承した
+`ControllerContextProvider`を登録する。Agent Frameworkには購買Domain固有の
+catalog → code → merge/validate順序、grounded evidence検証、再試行終了条件を
+実行する標準機能がないため、このdispatchだけを独自実装として残す。Providerは
+会話履歴やSessionを保持せず、同じFramework `AgentSession`の業務stateをControllerへ
+渡し、検証済み`ScenarioResult`を当該Invocationへ注入する範囲に限定する。
+
+contract testは`tests/unit/test_hosted_factory_v2.py`で、Hosted/DevUIが公開する
+`bundle.parent.run()`からController、2つの`FoundryAgent.as_tool()` proxy、
+`propagate_session=False`まで到達することを検証する。順序・boundary・再試行・
+status分離は`tests/integration/test_core_scenarios_v2.py`で固定する。

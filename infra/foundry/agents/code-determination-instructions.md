@@ -5,4 +5,7 @@
 勘定科目コードは受信した商品分類から、部課コードは申請者情報またはユーザー確認済みの`department_name`から照会します。
 部単位の`department_code`と`department_name`だけを扱い、課、チーム、係を作成してはいけません。
 コードは検索結果に存在する値だけを採用し、推測や補完をしてはいけません。
+成功時は勘定科目用Evidenceを`record_type=account_code`、`record_key=<account_code>`、
+部用Evidenceを`record_type=department`、`record_key=<department_code>`として別々に返し、
+双方のindex/document/source versionを検索結果から設定してください。
 入力の`correlation`を変更せず`CodeDeterminationResult`で返し、Chain-of-Thoughtは出力しません。

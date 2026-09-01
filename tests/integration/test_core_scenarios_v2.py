@@ -5,7 +5,11 @@ import pytest
 from pydantic import ValidationError
 
 from procurement_agent.controller import ProcurementController
-from procurement_agent.models import BusinessStatus, CodeDeterminationInput, FailureProfile, PlanStatus, TechnicalStatus
+from procurement_agent.models import (
+    BusinessStatus, CatalogSearchInput, CatalogSearchResult, CodeDeterminationInput,
+    CodeDeterminationResult, FailureLayer, McpStatus, OperationStatus, ParseStatus,
+    PlanStatus, SearchStatus, TechnicalStatus,
+)
 from procurement_agent.observability import TelemetryRecorder, truncate_export
 from procurement_agent.session_state import load_execution_state, restore_framework_session
 from trace_pipeline.detectors import DetectionOutcome, TraceFacts, detect, evaluate_all
@@ -30,6 +34,19 @@ async def test_s1_completes_validated_grounded_application_and_session_resume(va
     assert result.draft.total == 360000
     state = load_execution_state(session)
     assert state.plan.status == PlanStatus.COMPLETED
+    assert state.last_machine_response == {
+        "http_status": 200,
+        "technical_status": "SUCCESS",
+        "mcp_status": "NOT_RUN",
+        "search_status": "NOT_RUN",
+        "parse_status": "NOT_RUN",
+        "business_status": "SUCCESS",
+        "failure_layer": "NONE",
+        "retryable": False,
+        "reason_code": None,
+        "outer_technical_status": "SUCCESS",
+        "outer_business_status": "SUCCESS",
+    }
     assert [event["name"] for event in result.trace["events"]].count("step.completed") == 3
     span_events = {event.name for span in recorder.finished_spans() for event in span.events}
     assert {"plan.created", "step.started", "handoff.payload_validated", "step.completed"} <= span_events
@@ -49,7 +66,8 @@ async def test_s1_completes_validated_grounded_application_and_session_resume(va
 ])
 async def test_s2_failure_profiles_separate_status_layers(valid_request, fixture):
     controller = ProcurementController(RecordedCatalogAgent(), RecordedCodeAgent(fixture))
-    result = await controller.execute(valid_request, session=AgentSession(), test_case_id=f"S2-{fixture}")
+    session = AgentSession()
+    result = await controller.execute(valid_request, session=session, test_case_id=f"S2-{fixture}")
     assert result.scenario_id == "S2"
     assert result.business_status != BusinessStatus.SUCCESS
     assert result.status is not None
@@ -57,6 +75,14 @@ async def test_s2_failure_profiles_separate_status_layers(valid_request, fixture
         assert result.technical_status == TechnicalStatus.SUCCESS
     else:
         assert result.technical_status == TechnicalStatus.ERROR
+    machine_status = load_execution_state(session).last_machine_response
+    assert machine_status["http_status"] == result.status.http_status
+    assert machine_status["mcp_status"] == result.status.mcp_status
+    assert machine_status["search_status"] == result.status.search_status
+    assert machine_status["parse_status"] == result.status.parse_status
+    assert machine_status["business_status"] == result.status.business_status
+    assert machine_status["outer_technical_status"] == result.technical_status
+    assert machine_status["outer_business_status"] == result.business_status
 
 
 @pytest.mark.anyio
@@ -96,15 +122,65 @@ async def test_catalog_success_without_matching_evidence_is_rejected(valid_reque
     code = RecordedCodeAgent()
     async def ungrounded(payload):
         result = await healthy(payload)
-        result.evidence = []
-        return result
-    result = await ProcurementController(ungrounded, code).execute(
-        valid_request, session=AgentSession(), test_case_id="CATALOG-EVIDENCE-MISSING"
-    )
-    assert result.business_status == BusinessStatus.WAITING_USER
-    assert result.status.failure_layer == "VALIDATION"
-    assert len(healthy.calls) == 2
+        raw = result.model_dump(mode="json")
+        raw["evidence"] = []
+        return raw
+    with pytest.raises(ValueError, match="structured child output failed boundary validation"):
+        await ProcurementController(ungrounded, code).execute(
+            valid_request, session=AgentSession(), test_case_id="CATALOG-EVIDENCE-MISSING"
+        )
+    assert len(healthy.calls) == 1
     assert not code.calls
+
+
+@pytest.mark.anyio
+async def test_catalog_infrastructure_failure_after_not_found_retry_is_blocked(valid_request):
+    not_found = RecordedCatalogAgent("catalog-not-found.json")
+    calls = 0
+
+    async def catalog_sequence(payload):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return await not_found(payload)
+        value = CatalogSearchInput.model_validate(payload)
+        return CatalogSearchResult(
+            correlation=value.correlation,
+            status=OperationStatus(
+                http_status=200,
+                technical_status=TechnicalStatus.ERROR,
+                mcp_status=McpStatus.TIMEOUT,
+                search_status=SearchStatus.NOT_RUN,
+                parse_status=ParseStatus.NOT_RUN,
+                business_status=BusinessStatus.BLOCKED,
+                failure_layer=FailureLayer.MCP,
+                retryable=True,
+                reason_code="mcp_timeout",
+            ),
+        )
+
+    result = await ProcurementController(catalog_sequence, RecordedCodeAgent()).execute(
+        valid_request, session=AgentSession(), test_case_id="CATALOG-RETRY-INFRA",
+    )
+    assert result.scenario_id == "S2"
+    assert result.technical_status == TechnicalStatus.ERROR
+    assert result.business_status == BusinessStatus.BLOCKED
+    assert "Toolbox/Search/parse/validation" in result.next_action
+    assert calls == 2
+
+
+@pytest.mark.anyio
+async def test_code_success_requires_account_and_department_evidence():
+    input_payload = json.loads(
+        (Path(__file__).parents[1] / "fixtures/scenarios/s4-complete.json").read_text(encoding="utf-8")
+    )
+    healthy = await RecordedCodeAgent()(CodeDeterminationInput.model_validate(input_payload))
+    payload = healthy.model_dump(mode="json")
+    payload["evidence"] = [
+        item for item in payload["evidence"] if item["record_type"] == "account_code"
+    ]
+    with pytest.raises(ValidationError, match="account and department evidence"):
+        CodeDeterminationResult.model_validate(payload)
 
 
 @pytest.mark.parametrize("fixture", ["s4-missing-category.json", "s4-missing-correlation.json"])

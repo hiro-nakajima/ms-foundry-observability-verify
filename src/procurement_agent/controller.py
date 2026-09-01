@@ -32,7 +32,11 @@ def catalog_result_is_grounded(result: CatalogSearchResult) -> bool:
         None,
     )
     return selected is not None and any(
-        evidence.evidence_id == selected.evidence_id for evidence in result.evidence
+        evidence.evidence_id == selected.evidence_id
+        and evidence.index_name == "procurement-catalog-v1"
+        and evidence.record_type == "product"
+        and evidence.record_key == selected.product_code
+        for evidence in result.evidence
     )
 
 
@@ -41,6 +45,17 @@ def reject_ungrounded_catalog(result: CatalogSearchResult) -> None:
         result.status.business_status = BusinessStatus.VALIDATION_FAILED
         result.status.failure_layer = FailureLayer.VALIDATION
         result.status.reason_code = "catalog_evidence_missing_or_unrelated"
+
+
+def set_machine_status(
+    state: Any, status: OperationStatus, *,
+    outer_technical: TechnicalStatus, outer_business: BusinessStatus,
+) -> None:
+    state.last_machine_response = {
+        **status.model_dump(mode="json"),
+        "outer_technical_status": outer_technical.value,
+        "outer_business_status": outer_business.value,
+    }
 
 
 def correlation(*, state, session: AgentSession, step_id: str, attempt: int) -> CorrelationContext:
@@ -119,6 +134,26 @@ class ProcurementController:
                 self.telemetry.event(catalog_span, "step.retry_scheduled", {"execution.attempt": step.attempt + 1})
         state.catalog_result = catalog
         if not catalog_result_is_grounded(catalog):
+            should_retry = (
+                catalog.status.business_status == BusinessStatus.NOT_FOUND
+                or catalog.status.retryable
+            )
+            if not should_retry:
+                executor.block("catalog", catalog.status.reason_code or "catalog result rejected")
+                set_machine_status(
+                    state, catalog.status,
+                    outer_technical=catalog.status.technical_status,
+                    outer_business=BusinessStatus.BLOCKED,
+                )
+                save_execution_state(session, state)
+                return ScenarioResult(
+                    scenario_id="S2", test_case_id=test_case_id,
+                    technical_status=catalog.status.technical_status,
+                    business_status=BusinessStatus.BLOCKED,
+                    status=catalog.status,
+                    trace={"events": executor.events},
+                    next_action="Catalog Toolbox/Search/parse/validation層を確認して再実行する",
+                )
             executor.retry("catalog", catalog.status.reason_code or "catalog search did not identify a product")
             if state.plan.status.name != "BLOCKED":
                 step = executor.start("catalog", request.model_dump(mode="json") | {"replan": True})
@@ -141,18 +176,38 @@ class ProcurementController:
                         self.telemetry.event(retry_span, "step.completed", {"plan.step.id": "catalog"})
                     else:
                         self.telemetry.event(retry_span, "result.rejected", {"business.status": catalog.status.business_status})
-                        self.telemetry.event(retry_span, "plan.replanned", {"business.status": "WAITING_USER"})
+                        if catalog.status.business_status == BusinessStatus.NOT_FOUND:
+                            self.telemetry.event(retry_span, "plan.replanned", {"business.status": "WAITING_USER"})
+                        else:
+                            self.telemetry.event(retry_span, "step.failed", {
+                                "business.status": catalog.status.business_status,
+                                "failure.layer": catalog.status.failure_layer,
+                            })
                 state.catalog_result = catalog
             if not catalog_result_is_grounded(catalog):
-                executor.wait_for_user("catalog", "catalog item not found after retry; user confirmation required")
+                if catalog.status.business_status == BusinessStatus.NOT_FOUND:
+                    executor.wait_for_user("catalog", "catalog item not found after retry; user confirmation required")
+                    outer_business = BusinessStatus.WAITING_USER
+                    scenario_id = "S3"
+                    next_action = "候補名または型番をユーザーに確認し、新しいPlan versionで再開する"
+                else:
+                    executor.block("catalog", catalog.status.reason_code or "catalog retry failed")
+                    outer_business = BusinessStatus.BLOCKED
+                    scenario_id = "S2"
+                    next_action = "Catalog Toolbox/Search/parse/validation層を確認して再実行する"
+                set_machine_status(
+                    state, catalog.status,
+                    outer_technical=catalog.status.technical_status,
+                    outer_business=outer_business,
+                )
                 save_execution_state(session, state)
                 return ScenarioResult(
-                    scenario_id="S3", test_case_id=test_case_id,
+                    scenario_id=scenario_id, test_case_id=test_case_id,
                     technical_status=catalog.status.technical_status,
-                    business_status=BusinessStatus.WAITING_USER,
+                    business_status=outer_business,
                     status=catalog.status,
                     trace={"events": executor.events},
-                    next_action="候補名または型番をユーザーに確認し、新しいPlan versionで再開する",
+                    next_action=next_action,
                 )
         executor.complete("catalog", output_refs=[item.evidence_id for item in catalog.evidence], reason="grounded catalog candidate selected")
         state.evidence_refs.extend(item.evidence_id for item in catalog.evidence)
@@ -178,6 +233,11 @@ class ProcurementController:
         state.code_result = codes
         if codes.status.business_status != BusinessStatus.SUCCESS:
             executor.block("code", codes.status.reason_code or "code determination failed")
+            set_machine_status(
+                state, codes.status,
+                outer_technical=codes.status.technical_status,
+                outer_business=codes.status.business_status,
+            )
             save_execution_state(session, state)
             return ScenarioResult(
                 scenario_id="S2", test_case_id=test_case_id,
@@ -212,23 +272,39 @@ class ProcurementController:
             if request.constraints.budget_limit is not None and draft.total > request.constraints.budget_limit:
                 executor.block("merge_validate", "budget limit exceeded")
                 self.telemetry.event(merge_span, "result.rejected", {"business.status": "VALIDATION_FAILED"})
+                validation_status = OperationStatus(
+                    business_status=BusinessStatus.VALIDATION_FAILED,
+                    failure_layer=FailureLayer.VALIDATION,
+                    reason_code="budget_limit_exceeded",
+                )
+                set_machine_status(
+                    state, validation_status,
+                    outer_technical=TechnicalStatus.SUCCESS,
+                    outer_business=BusinessStatus.VALIDATION_FAILED,
+                )
                 save_execution_state(session, state)
                 return ScenarioResult(
                     scenario_id="S1", test_case_id=test_case_id,
                     technical_status=TechnicalStatus.SUCCESS,
                     business_status=BusinessStatus.VALIDATION_FAILED,
-                    status=OperationStatus(business_status=BusinessStatus.VALIDATION_FAILED),
+                    status=validation_status,
                     next_action="数量または予算上限をユーザーに確認する",
                 )
             self.telemetry.event(merge_span, "step.completed", {"plan.step.id": step.step_id})
         state.draft = draft
         executor.complete("merge_validate", output_refs=[draft.request_id], reason="validated application ready")
+        success_status = OperationStatus(business_status=BusinessStatus.SUCCESS)
+        set_machine_status(
+            state, success_status,
+            outer_technical=TechnicalStatus.SUCCESS,
+            outer_business=BusinessStatus.SUCCESS,
+        )
         save_execution_state(session, state)
         with self.telemetry.span("response.generate", {"test.case.id": test_case_id, "plan.id": state.plan.plan_id}):
             return ScenarioResult(
                 scenario_id="S1", test_case_id=test_case_id,
                 technical_status=TechnicalStatus.SUCCESS,
                 business_status=BusinessStatus.SUCCESS, draft=draft,
-                status=OperationStatus(business_status=BusinessStatus.SUCCESS),
+                status=success_status,
                 trace={"events": executor.events},
             )

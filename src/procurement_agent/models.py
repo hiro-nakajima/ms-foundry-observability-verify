@@ -210,6 +210,8 @@ class Evidence(StrictModel):
     index_name: Literal["procurement-catalog-v1", "procurement-code-master-v1"]
     document_id: str
     source_version: str
+    record_type: Literal["product", "account_code", "department"]
+    record_key: str = Field(min_length=1)
     rank: int | None = Field(default=None, ge=1)
     score: float | None = None
     content_ref: str | None = None
@@ -242,10 +244,20 @@ class CatalogSearchResult(StrictModel):
 
     @model_validator(mode="after")
     def grounded_selection(self) -> "CatalogSearchResult":
-        if self.selected_product_code and self.selected_product_code not in {
-            candidate.product_code for candidate in self.candidates
-        }:
-            raise ValueError("selected_product_code must exist in candidates")
+        if self.selected_product_code:
+            selected = next(
+                (item for item in self.candidates if item.product_code == self.selected_product_code),
+                None,
+            )
+            if selected is None:
+                raise ValueError("selected_product_code must exist in candidates")
+            if not any(
+                item.evidence_id == selected.evidence_id
+                and item.record_type == "product"
+                and item.record_key == selected.product_code
+                for item in self.evidence
+            ):
+                raise ValueError("selected catalog candidate must have matching product evidence")
         return self
 
 
@@ -265,6 +277,27 @@ class CodeDeterminationResult(StrictModel):
     department_name: str | None = None
     evidence: list[Evidence] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def grounded_codes(self) -> "CodeDeterminationResult":
+        if self.status.business_status == BusinessStatus.SUCCESS:
+            if not all((self.account_code, self.account_name, self.department_code, self.department_name)):
+                raise ValueError("successful code result requires account and department values")
+            account_grounded = any(
+                item.index_name == "procurement-code-master-v1"
+                and item.record_type == "account_code"
+                and item.record_key == self.account_code
+                for item in self.evidence
+            )
+            department_grounded = any(
+                item.index_name == "procurement-code-master-v1"
+                and item.record_type == "department"
+                and item.record_key == self.department_code
+                for item in self.evidence
+            )
+            if not account_grounded or not department_grounded:
+                raise ValueError("successful code result requires matching account and department evidence")
+        return self
 
 
 class ApplicationLine(StrictModel):

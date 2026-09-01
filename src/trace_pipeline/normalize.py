@@ -37,7 +37,10 @@ def build_envelope(
 ) -> TraceEvaluationEnvelope:
     state = load_execution_state(session, required=True)
     assert state is not None
-    finished_spans = list(telemetry.finished_spans())
+    finished_spans = [
+        span for span in telemetry.finished_spans()
+        if (span.attributes or {}).get("test.case.id") == run.case_id
+    ]
     spans = [_span_to_dict(span) for span in finished_spans]
     events = [
         {"span": span.name, "name": event.name, "attributes": dict(event.attributes or {})}

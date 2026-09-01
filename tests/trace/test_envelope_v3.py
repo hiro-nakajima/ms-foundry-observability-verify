@@ -51,6 +51,30 @@ def test_v3_envelope_uses_framework_session_and_no_logical_pattern():
     assert payload["correlation"]["remote_task_id"] == "remote-task-1"
 
 
+def test_v3_envelope_scopes_reused_recorder_to_current_case():
+    session = AgentSession()
+    state = initialize_execution_state(session, test_case_id="TRACE-CASE-2")
+    state.turn_number = 2
+    state.plan = StructuredPlanBuilder().build(None)
+    save_execution_state(session, state)
+    telemetry = TelemetryRecorder()
+    with telemetry.span("plan.create", {"test.case.id": "TRACE-CASE-1"}):
+        pass
+    with telemetry.span("plan.create", {"test.case.id": "TRACE-CASE-2"}) as current:
+        pass
+
+    envelope = build_envelope(
+        run=RunIdentity(run_id="run-2", case_id="TRACE-CASE-2", agent_role="coordinator", agent_definition_name="procurement_parent_agent", agent_definition_version="1", implementation_kind="hosted_framework"),
+        session=session, telemetry=telemetry,
+        user_input=[], response={}, retrieved_contexts=[], system_prompt={},
+        tool_definitions=[], tool_calls=[], tool_output=[],
+    )
+
+    assert len(envelope.agent_trace.spans) == 1
+    assert envelope.agent_trace.spans[0]["attributes"]["test.case.id"] == "TRACE-CASE-2"
+    assert envelope.correlation.trace_id == f"{current.context.trace_id:032x}"
+
+
 def test_content_on_requires_explicit_synthetic_environment():
     import pytest
     with pytest.raises(ValueError, match="explicitly synthetic"):

@@ -55,3 +55,20 @@ class DeterministicChatClient(BaseChatClient):
 
 def local_parent_handler(messages: Sequence[Message], options: Mapping[str, Any]) -> str:
     return "購買申請Agent v2は起動済みです。Controllerへ構造化された依頼を送信してください。"
+
+
+CONTROLLER_RESULT_START = "<procurement-controller-result>"
+CONTROLLER_RESULT_END = "</procurement-controller-result>"
+
+
+def controller_result_handler(messages: Sequence[Message], options: Mapping[str, Any]) -> str:
+    """Return only the validated Controller result injected by the context provider."""
+    instructions = options.get("instructions") or []
+    if isinstance(instructions, str):
+        instructions = [instructions]
+    for instruction in reversed(instructions):
+        start = instruction.find(CONTROLLER_RESULT_START)
+        end = instruction.find(CONTROLLER_RESULT_END)
+        if start >= 0 and end > start:
+            return instruction[start + len(CONTROLLER_RESULT_START):end]
+    raise ValueError("ControllerContextProvider did not supply a machine response")
