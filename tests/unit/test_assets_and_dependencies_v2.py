@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import re
 
 import yaml
 
@@ -33,6 +34,8 @@ def test_search_documents_are_deterministic_and_grounded():
     assert len(catalog) == 10
     assert manifest["catalog_document_count"] == 10
     assert all(item["source_version"] == manifest["source_version"] for item in catalog + codes)
+    assert all(re.fullmatch(r"[A-Za-z0-9_\-=]+", item["document_id"]) for item in catalog + codes)
+    assert all(isinstance(item["unit_price"], (int, float)) for item in catalog)
 
 
 def test_search_upload_batches_have_data_plane_action(tmp_path):

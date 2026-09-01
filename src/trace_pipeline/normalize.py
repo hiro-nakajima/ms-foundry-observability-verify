@@ -10,7 +10,7 @@ from agent_framework import AgentSession
 from procurement_agent.observability import TelemetryRecorder
 from procurement_agent.session_state import load_execution_state
 
-from .envelope import AgentTrace, RunIdentity, SessionIdentity, TraceEvaluationEnvelope
+from .envelope import AgentTrace, CorrelationIdentity, RunIdentity, SessionIdentity, TraceEvaluationEnvelope
 
 
 def _hash(value: str) -> str:
@@ -37,11 +37,31 @@ def build_envelope(
 ) -> TraceEvaluationEnvelope:
     state = load_execution_state(session, required=True)
     assert state is not None
-    spans = [_span_to_dict(span) for span in telemetry.finished_spans()]
+    finished_spans = list(telemetry.finished_spans())
+    spans = [_span_to_dict(span) for span in finished_spans]
     events = [
         {"span": span.name, "name": event.name, "attributes": dict(event.attributes or {})}
-        for span in telemetry.finished_spans() for event in span.events
+        for span in finished_spans for event in span.events
     ]
+    root_span = next((span for span in finished_spans if span.name == "plan.create"), finished_spans[0] if finished_spans else None)
+    child_correlation = (
+        state.code_result.correlation if state.code_result else
+        state.catalog_result.correlation if state.catalog_result else None
+    )
+    conversation = []
+    for turn_index, message in enumerate(session.state.get("messages", []), start=1):
+        if isinstance(message, dict):
+            role = str(message.get("role", "unknown"))
+            content = str(message.get("text") or message.get("contents") or "")
+        else:
+            raw_role = getattr(message, "role", "unknown")
+            role = str(getattr(raw_role, "value", raw_role))
+            content = str(getattr(message, "text", ""))
+        conversation.append({
+            "role": role,
+            "turn_index": turn_index,
+            **telemetry.protect_content("conversation", content),
+        })
     return TraceEvaluationEnvelope(
         run=run,
         session=SessionIdentity(
@@ -49,6 +69,13 @@ def build_envelope(
             service_session_id_hash=_hash(session.service_session_id) if session.service_session_id else None,
             turn_number=state.turn_number,
             resumed=resumed,
+        ),
+        correlation=CorrelationIdentity(
+            trace_id=f"{root_span.context.trace_id:032x}" if root_span else None,
+            span_id=f"{root_span.context.span_id:016x}" if root_span else None,
+            parent_span_id=f"{root_span.parent.span_id:016x}" if root_span and root_span.parent else None,
+            parent_invocation_id=child_correlation.parent_invocation_id if child_correlation else None,
+            remote_task_id=child_correlation.remote_task_id if child_correlation else None,
         ),
         content_profile=telemetry.content_profile,
         user_input=user_input,
@@ -62,7 +89,7 @@ def build_envelope(
             spans=spans, events=events,
             governance_decisions=[item.model_dump(mode="json") for item in state.governance_decisions],
         ),
-        conversation=[],
+        conversation=conversation,
         plan=state.plan.model_dump(mode="json") if state.plan else {},
         statuses=state.last_machine_response or {},
     )

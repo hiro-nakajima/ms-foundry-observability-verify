@@ -14,7 +14,7 @@ from .models import (
     ApplicationDraft, ApplicationLine, BusinessStatus, CatalogSearchInput,
     CatalogSearchResult, CodeDeterminationInput, CodeDeterminationResult,
     CorrelationContext, ExecutionPlan, OperationStatus, ProcurementRequest,
-    ScenarioResult, TechnicalStatus,
+    ScenarioResult, TechnicalStatus, FailureLayer,
 )
 from .observability import TelemetryRecorder
 from .plan import PlanExecutor, StructuredPlanBuilder
@@ -22,6 +22,25 @@ from .session_state import initialize_execution_state, load_execution_state, sav
 
 T = TypeVar("T", bound=BaseModel)
 StructuredInvoker = Callable[[BaseModel], Awaitable[dict[str, Any] | BaseModel]]
+
+
+def catalog_result_is_grounded(result: CatalogSearchResult) -> bool:
+    if result.status.business_status != BusinessStatus.SUCCESS or not result.selected_product_code:
+        return False
+    selected = next(
+        (item for item in result.candidates if item.product_code == result.selected_product_code),
+        None,
+    )
+    return selected is not None and any(
+        evidence.evidence_id == selected.evidence_id for evidence in result.evidence
+    )
+
+
+def reject_ungrounded_catalog(result: CatalogSearchResult) -> None:
+    if result.status.business_status == BusinessStatus.SUCCESS and not catalog_result_is_grounded(result):
+        result.status.business_status = BusinessStatus.VALIDATION_FAILED
+        result.status.failure_layer = FailureLayer.VALIDATION
+        result.status.reason_code = "catalog_evidence_missing_or_unrelated"
 
 
 def correlation(*, state, session: AgentSession, step_id: str, attempt: int) -> CorrelationContext:
@@ -67,8 +86,14 @@ class ProcurementController:
         state.turn_number += 1
         state.test_case_id = test_case_id
         state.request = request
+        previous_version = state.plan.version if state.plan else 0
+        state.current_step_id = None
+        state.catalog_result = None
+        state.code_result = None
+        state.draft = None
+        state.evidence_refs = []
+        state.last_machine_response = None
         with self.telemetry.span("plan.create", {"test.case.id": test_case_id, "app.session.id": session.session_id, "app.turn.number": state.turn_number}) as span:
-            previous_version = state.plan.version if state.plan else 0
             state.plan = StructuredPlanBuilder().build(raw_plan)
             state.plan.version = previous_version + 1
             self.telemetry.event(span, "plan.created", {"plan.id": state.plan.plan_id, "plan.version": state.plan.version})
@@ -86,28 +111,50 @@ class ProcurementController:
             self.telemetry.event(catalog_span, "step.started", {"plan.step.id": "catalog", "execution.attempt": step.attempt})
             self.telemetry.event(catalog_span, "handoff.payload_validated", {"agent.role": "catalog_search"})
             catalog = await invoke_validated(self.catalog_invoker, catalog_input, CatalogSearchResult)
-            if catalog.status.business_status == BusinessStatus.SUCCESS and catalog.selected_product_code:
+            reject_ungrounded_catalog(catalog)
+            if catalog_result_is_grounded(catalog):
                 self.telemetry.event(catalog_span, "step.completed", {"plan.step.id": "catalog"})
             else:
                 self.telemetry.event(catalog_span, "result.rejected", {"business.status": catalog.status.business_status})
                 self.telemetry.event(catalog_span, "step.retry_scheduled", {"execution.attempt": step.attempt + 1})
-                self.telemetry.event(catalog_span, "plan.replanned", {"business.status": "WAITING_USER"})
         state.catalog_result = catalog
-        if catalog.status.business_status != BusinessStatus.SUCCESS or not catalog.selected_product_code:
+        if not catalog_result_is_grounded(catalog):
             executor.retry("catalog", catalog.status.reason_code or "catalog search did not identify a product")
             if state.plan.status.name != "BLOCKED":
-                executor.start("catalog", request.model_dump(mode="json") | {"replan": True})
+                step = executor.start("catalog", request.model_dump(mode="json") | {"replan": True})
+                retry_input = CatalogSearchInput(
+                    query=request.query,
+                    quantity=request.quantity,
+                    constraints=request.constraints,
+                    correlation=correlation(
+                        state=state, session=session, step_id="catalog", attempt=step.attempt
+                    ),
+                )
+                with self.telemetry.span("plan.step.execute", {"test.case.id": test_case_id, "plan.id": state.plan.plan_id, "plan.version": state.plan.version, "plan.step.id": "catalog", "execution.attempt": step.attempt, "agent.role": "catalog_search"}) as retry_span:
+                    self.telemetry.event(retry_span, "step.started", {"plan.step.id": "catalog", "execution.attempt": step.attempt})
+                    self.telemetry.event(retry_span, "handoff.payload_validated", {"agent.role": "catalog_search"})
+                    catalog = await invoke_validated(
+                        self.catalog_invoker, retry_input, CatalogSearchResult
+                    )
+                    reject_ungrounded_catalog(catalog)
+                    if catalog_result_is_grounded(catalog):
+                        self.telemetry.event(retry_span, "step.completed", {"plan.step.id": "catalog"})
+                    else:
+                        self.telemetry.event(retry_span, "result.rejected", {"business.status": catalog.status.business_status})
+                        self.telemetry.event(retry_span, "plan.replanned", {"business.status": "WAITING_USER"})
+                state.catalog_result = catalog
+            if not catalog_result_is_grounded(catalog):
                 executor.wait_for_user("catalog", "catalog item not found after retry; user confirmation required")
-            save_execution_state(session, state)
-            return ScenarioResult(
-                scenario_id="S3", test_case_id=test_case_id,
-                technical_status=catalog.status.technical_status,
-                business_status=BusinessStatus.WAITING_USER,
-                status=catalog.status,
-                trace={"events": executor.events},
-                next_action="候補名または型番をユーザーに確認し、新しいPlan versionで再開する",
-            )
-        executor.complete("catalog", output_refs=[item.evidence_id for item in catalog.candidates], reason="grounded catalog candidate selected")
+                save_execution_state(session, state)
+                return ScenarioResult(
+                    scenario_id="S3", test_case_id=test_case_id,
+                    technical_status=catalog.status.technical_status,
+                    business_status=BusinessStatus.WAITING_USER,
+                    status=catalog.status,
+                    trace={"events": executor.events},
+                    next_action="候補名または型番をユーザーに確認し、新しいPlan versionで再開する",
+                )
+        executor.complete("catalog", output_refs=[item.evidence_id for item in catalog.evidence], reason="grounded catalog candidate selected")
         state.evidence_refs.extend(item.evidence_id for item in catalog.evidence)
         selected = next(item for item in catalog.candidates if item.product_code == catalog.selected_product_code)
 

@@ -39,6 +39,7 @@ async def test_s1_completes_validated_grounded_application_and_session_resume(va
     assert second.business_status == BusinessStatus.SUCCESS
     assert load_execution_state(restored).turn_number == 2
     assert load_execution_state(restored).plan.version == 2
+    assert len(second.draft.evidence_refs) == 3
 
 
 @pytest.mark.anyio
@@ -69,7 +70,41 @@ async def test_s3_not_found_retries_replans_then_waits_for_user(valid_request):
     assert [item["name"] for item in result.trace["events"]] == [
         "step.started", "step.retry_scheduled", "step.started", "plan.replanned"
     ]
+    assert len(catalog.calls) == 2
     assert not codes.calls
+
+
+@pytest.mark.anyio
+async def test_s3_transient_catalog_not_found_recovers_on_real_retry(valid_request):
+    not_found = RecordedCatalogAgent("catalog-not-found.json")
+    healthy = RecordedCatalogAgent("catalog-healthy.json")
+    calls = 0
+    async def catalog_sequence(payload):
+        nonlocal calls
+        calls += 1
+        return await (not_found(payload) if calls == 1 else healthy(payload))
+    result = await ProcurementController(catalog_sequence, RecordedCodeAgent()).execute(
+        valid_request, session=AgentSession(), test_case_id="S3-TRANSIENT"
+    )
+    assert result.business_status == BusinessStatus.SUCCESS
+    assert calls == 2
+
+
+@pytest.mark.anyio
+async def test_catalog_success_without_matching_evidence_is_rejected(valid_request):
+    healthy = RecordedCatalogAgent()
+    code = RecordedCodeAgent()
+    async def ungrounded(payload):
+        result = await healthy(payload)
+        result.evidence = []
+        return result
+    result = await ProcurementController(ungrounded, code).execute(
+        valid_request, session=AgentSession(), test_case_id="CATALOG-EVIDENCE-MISSING"
+    )
+    assert result.business_status == BusinessStatus.WAITING_USER
+    assert result.status.failure_layer == "VALIDATION"
+    assert len(healthy.calls) == 2
+    assert not code.calls
 
 
 @pytest.mark.parametrize("fixture", ["s4-missing-category.json", "s4-missing-correlation.json"])

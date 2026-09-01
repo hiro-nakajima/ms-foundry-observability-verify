@@ -10,6 +10,7 @@ from procurement_agent.models import (
 )
 from procurement_agent.plan import default_steps
 from procurement_agent.session_state import initialize_execution_state
+from procurement_agent.session_state import load_execution_state
 
 
 def make_bundle():
@@ -30,6 +31,15 @@ def test_single_hosted_parent_has_two_remote_foundry_proxy_tools():
     assert bundle.history_provider.load_messages is True
     assert bundle.parent.additional_properties["child_implementation_location"] == "Foundry Agent Service"
     assert bundle.parent.additional_properties["propagate_child_session"] is False
+
+
+@pytest.mark.anyio
+async def test_direct_hosted_parent_initializes_new_framework_session_before_chat():
+    bundle = make_bundle()
+    session = AgentSession()
+    response = await bundle.parent.run("synthetic request", session=session, tools=[])
+    assert response.text
+    assert load_execution_state(session).schema_version == "2.0"
 
 
 @pytest.mark.anyio
@@ -84,7 +94,7 @@ async def test_hosted_turn_uses_request_and_execution_plan_response_formats(vali
             status=OperationStatus(business_status=BusinessStatus.SUCCESS, mcp_status="SUCCESS", search_status="SUCCESS", parse_status="SUCCESS"),
             candidates=[CatalogCandidate(product_code="LAPTOP-DEV-14", product_name="開発用ノートPC 14インチ（架空商品）", category="laptop", unit_price="180000", evidence_id="evidence:catalog:LAPTOP-DEV-14")],
             selected_product_code="LAPTOP-DEV-14",
-            evidence=[Evidence(evidence_id="evidence:catalog:LAPTOP-DEV-14", index_name="procurement-catalog-v1", document_id="catalog:LAPTOP-DEV-14", source_version="2026-09-01.1")],
+            evidence=[Evidence(evidence_id="evidence:catalog:LAPTOP-DEV-14", index_name="procurement-catalog-v1", document_id="catalog-LAPTOP-DEV-14", source_version="2026-09-01.1")],
         )
         return FakeStream(result.model_dump_json())
 
@@ -97,8 +107,8 @@ async def test_hosted_turn_uses_request_and_execution_plan_response_formats(vali
             account_code="7210-EQUIPMENT", account_name="情報機器備品（架空科目）",
             department_code="DPT-DEV", department_name="開発部（架空部署）",
             evidence=[
-                Evidence(evidence_id="evidence:account", index_name="procurement-code-master-v1", document_id="account:7210-EQUIPMENT:laptop", source_version="2026-09-01.1"),
-                Evidence(evidence_id="evidence:department", index_name="procurement-code-master-v1", document_id="department:DPT-DEV", source_version="2026-09-01.1"),
+                Evidence(evidence_id="evidence:account", index_name="procurement-code-master-v1", document_id="account-7210-EQUIPMENT-laptop", source_version="2026-09-01.1"),
+                Evidence(evidence_id="evidence:department", index_name="procurement-code-master-v1", document_id="department-DPT-DEV", source_version="2026-09-01.1"),
             ],
         )
         return FakeStream(result.model_dump_json())

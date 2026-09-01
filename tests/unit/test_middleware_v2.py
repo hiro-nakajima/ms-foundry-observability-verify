@@ -20,6 +20,19 @@ async def test_agent_middleware_uses_framework_session_without_owning_business_t
 
 
 @pytest.mark.anyio
+async def test_agent_middleware_initializes_business_state_in_supplied_framework_session():
+    session = AgentSession()
+    context = AgentContext(agent=object(), messages=[], session=session)
+    called = False
+    async def call_next():
+        nonlocal called
+        called = True
+    await SessionGovernanceAgentMiddleware().process(context, call_next)
+    assert called
+    assert load_execution_state(session).schema_version == "2.0"
+
+
+@pytest.mark.anyio
 async def test_agent_middleware_fails_closed_without_session():
     context = AgentContext(agent=object(), messages=[], session=None)
     with pytest.raises(SessionRequiredError):

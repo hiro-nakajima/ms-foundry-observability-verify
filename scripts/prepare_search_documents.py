@@ -34,14 +34,14 @@ def build_documents() -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[
     catalog_documents = []
     for item in catalog["records"]:
         catalog_documents.append({
-            "document_id": f"catalog:{item['product_code']}",
-            "chunk_id": f"catalog:{item['product_code']}:0",
+            "document_id": f"catalog-{item['product_code']}",
+            "chunk_id": f"catalog-{item['product_code']}-0",
             "source_version": source_version,
             "product_code": item["product_code"],
             "product_name": item["name"],
             "aliases": item.get("keywords", []),
             "category": item["category"],
-            "unit_price": item["unit_price"],
+            "unit_price": float(item["unit_price"]),
             "currency": item["currency"],
             "content": f"{item['name']}。商品コード {item['product_code']}。分類 {item['category']}。価格 {item['unit_price']} {item['currency']}。",
             "specifications_json": json.dumps(item.get("specifications", {}), ensure_ascii=False, sort_keys=True),
@@ -50,7 +50,7 @@ def build_documents() -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[
     code_documents = []
     for item in accounts["records"]:
         for category in item["categories"]:
-            document_id = f"account:{item['account_code']}:{category}"
+            document_id = f"account-{item['account_code']}-{category}"
             code_documents.append({
                 "document_id": document_id,
                 "source_version": source_version,
@@ -64,7 +64,7 @@ def build_documents() -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[
             })
     for item in departments["records"]:
         code_documents.append({
-            "document_id": f"department:{item['department_code']}",
+            "document_id": f"department-{item['department_code']}",
             "source_version": source_version,
             "record_type": "department",
             "lookup_key": item["department_name"],

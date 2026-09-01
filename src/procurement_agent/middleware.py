@@ -7,7 +7,7 @@ from collections.abc import Awaitable, Callable
 from agent_framework import AgentContext, AgentMiddleware, ChatContext, ChatMiddleware, FunctionInvocationContext, FunctionMiddleware
 
 from .models import AgentRole, GovernanceDecision, GovernanceOutcome
-from .session_state import load_context_state, load_execution_state, save_execution_state
+from .session_state import initialize_execution_state, load_context_state, load_execution_state, save_execution_state
 
 ROLE_TOOL_ALLOWLIST = {
     AgentRole.COORDINATOR: {"catalog_search_agent", "code_determination_agent"},
@@ -18,7 +18,10 @@ ROLE_TOOL_ALLOWLIST = {
 
 class SessionGovernanceAgentMiddleware(AgentMiddleware):
     async def process(self, context: AgentContext, call_next: Callable[[], Awaitable[None]]) -> None:
-        load_execution_state(context.session, required=True)
+        state = load_execution_state(context.session, required=False)
+        if state is None:
+            assert context.session is not None
+            initialize_execution_state(context.session)
         await call_next()
 
 

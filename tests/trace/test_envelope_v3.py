@@ -1,8 +1,11 @@
-from agent_framework import AgentSession
+from agent_framework import AgentSession, Message
 
 from procurement_agent.observability import TelemetryRecorder, sanitize_attributes
 from procurement_agent.plan import StructuredPlanBuilder
 from procurement_agent.session_state import initialize_execution_state, save_execution_state
+from procurement_agent.models import (
+    BusinessStatus, CatalogSearchResult, CorrelationContext, OperationStatus,
+)
 from trace_pipeline.envelope import RunIdentity
 from trace_pipeline.normalize import build_envelope
 
@@ -12,7 +15,17 @@ def test_v3_envelope_uses_framework_session_and_no_logical_pattern():
     state = initialize_execution_state(session, test_case_id="TRACE-V3")
     state.turn_number = 2
     state.plan = StructuredPlanBuilder().build(None)
+    state.catalog_result = CatalogSearchResult(
+        correlation=CorrelationContext(
+            test_case_id="TRACE-V3", framework_session_id=session.session_id,
+            turn_number=2, plan_id=state.plan.plan_id, plan_version=1,
+            step_id="catalog", attempt=1, remote_task_id="remote-task-1",
+            parent_invocation_id="parent-invocation-1",
+        ),
+        status=OperationStatus(business_status=BusinessStatus.NOT_FOUND),
+    )
     save_execution_state(session, state)
+    session.state["messages"] = [Message(role="user", contents=["synthetic request"])]
     telemetry = TelemetryRecorder(content_profile="production-like-content-off")
     with telemetry.span("plan.create", {"test.case.id": "TRACE-V3"}):
         pass
@@ -29,6 +42,13 @@ def test_v3_envelope_uses_framework_session_and_no_logical_pattern():
     assert "logical_pattern" not in str(payload)
     assert payload["session"]["turn_number"] == 2
     assert payload["content_profile"] == "production-like-content-off"
+    assert payload["conversation"][0]["role"] == "user"
+    assert payload["conversation"][0]["length"] > 0
+    assert "raw" not in payload["conversation"][0]
+    assert payload["correlation"]["trace_id"]
+    assert payload["correlation"]["span_id"]
+    assert payload["correlation"]["parent_invocation_id"] == "parent-invocation-1"
+    assert payload["correlation"]["remote_task_id"] == "remote-task-1"
 
 
 def test_content_on_requires_explicit_synthetic_environment():
