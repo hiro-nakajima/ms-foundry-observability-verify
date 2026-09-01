@@ -1,0 +1,10 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "searchServiceName": {"value": "REPLACE_EXISTING_SEARCH_SERVICE"},
+    "runtimePrincipalId": {"value": "00000000-0000-0000-0000-000000000000"},
+    "indexManagerPrincipalId": {"value": "00000000-0000-0000-0000-000000000000"},
+    "documentIngestorPrincipalId": {"value": "00000000-0000-0000-0000-000000000000"}
+  }
+}

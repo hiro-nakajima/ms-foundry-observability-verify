@@ -1,17 +1,20 @@
-"""Shared domain, plan, tool, session, governance, and trace schemas.
+"""Observable procurement domain contracts for the revised architecture.
 
-Only observable state is modeled here. The schemas intentionally contain no
-chain-of-thought or hidden model reasoning fields.
+The models contain only user-visible or operational state. Hidden reasoning and
+chain-of-thought are intentionally not represented.
 """
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from decimal import Decimal
 from enum import StrEnum
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+
+ARCHITECTURE_ID = "procurement_application_v2"
 
 
 def utc_now() -> datetime:
@@ -32,19 +35,87 @@ class PlanStatus(StrEnum):
     INVALIDATED = "INVALIDATED"
 
 
-class BusinessStatus(StrEnum):
-    SUCCESS = "SUCCESS"
-    CLARIFICATION_REQUIRED = "CLARIFICATION_REQUIRED"
-    NOT_FOUND = "NOT_FOUND"
-    INVALID_INPUT = "INVALID_INPUT"
-    INSUFFICIENT_STOCK = "INSUFFICIENT_STOCK"
-    VALIDATION_FAILED = "VALIDATION_FAILED"
-    BLOCKED = "BLOCKED"
+class StepType(StrEnum):
+    CATALOG_SEARCH = "catalog_search"
+    CODE_DETERMINATION = "code_determination"
+    MERGE_VALIDATE = "merge_validate"
+
+
+class AgentRole(StrEnum):
+    COORDINATOR = "coordinator"
+    CATALOG_SEARCH = "catalog_search"
+    CODE_DETERMINATION = "code_determination"
+
+
+class ImplementationKind(StrEnum):
+    HOSTED_FRAMEWORK = "hosted_framework"
+    PROMPT_MANAGED = "prompt_managed"
+    FOUNDRY_AGENT_AS_TOOL_REMOTE_PROXY = "foundry_agent_as_tool_remote_proxy"
+    LOCAL_RECORDED_MCP_FIXTURE = "local_recorded_mcp_fixture"
+
+
+class PlanGenerationSource(StrEnum):
+    MODEL_STRUCTURED = "MODEL_STRUCTURED"
+    DETERMINISTIC_DEFAULT = "DETERMINISTIC_DEFAULT"
+    EMPTY_RESPONSE_FALLBACK = "EMPTY_RESPONSE_FALLBACK"
+    PARSE_FAILURE_FALLBACK = "PARSE_FAILURE_FALLBACK"
+    REQUIRED_STEP_FALLBACK = "REQUIRED_STEP_FALLBACK"
 
 
 class TechnicalStatus(StrEnum):
     SUCCESS = "SUCCESS"
     ERROR = "ERROR"
+
+
+class BusinessStatus(StrEnum):
+    SUCCESS = "SUCCESS"
+    WAITING_USER = "WAITING_USER"
+    NOT_FOUND = "NOT_FOUND"
+    INVALID_INPUT = "INVALID_INPUT"
+    VALIDATION_FAILED = "VALIDATION_FAILED"
+    BLOCKED = "BLOCKED"
+
+
+class McpStatus(StrEnum):
+    NOT_RUN = "NOT_RUN"
+    SUCCESS = "SUCCESS"
+    ERROR = "ERROR"
+    TIMEOUT = "TIMEOUT"
+    PROTOCOL_ERROR = "PROTOCOL_ERROR"
+
+
+class SearchStatus(StrEnum):
+    NOT_RUN = "NOT_RUN"
+    SUCCESS = "SUCCESS"
+    NOT_FOUND = "NOT_FOUND"
+    INDEX_MISSING = "INDEX_MISSING"
+    PERMISSION_DENIED = "PERMISSION_DENIED"
+    ERROR = "ERROR"
+
+
+class ParseStatus(StrEnum):
+    NOT_RUN = "NOT_RUN"
+    SUCCESS = "SUCCESS"
+    INVALID_JSON = "INVALID_JSON"
+    SCHEMA_INVALID = "SCHEMA_INVALID"
+
+
+class FailureLayer(StrEnum):
+    NONE = "NONE"
+    MCP = "MCP"
+    SEARCH = "SEARCH"
+    PARSE = "PARSE"
+    VALIDATION = "VALIDATION"
+
+
+class FailureProfile(StrEnum):
+    NORMAL = "normal"
+    NOT_FOUND = "not_found"
+    INDEX_MISSING = "index_missing"
+    PERMISSION = "permission"
+    BUSINESS_INVALID = "business_invalid"
+    TIMEOUT = "timeout"
+    PROTOCOL_INVALID = "protocol_invalid"
 
 
 class GovernanceMode(StrEnum):
@@ -58,116 +129,46 @@ class GovernanceOutcome(StrEnum):
     WOULD_DENY = "WOULD_DENY"
 
 
-class LogicalPattern(StrEnum):
-    PROMPT_SINGLE = "PA-S"
-    PROMPT_MULTI = "PA-M"
-    HOSTED_SINGLE = "HA-S"
-    HOSTED_MULTI = "HA-M"
-
-
-class AgentRole(StrEnum):
-    PROCUREMENT_ASSISTANT = "procurement_assistant"
-    COORDINATOR = "coordinator"
-    PROCUREMENT_SPECIALIST = "procurement_specialist"
-    DRAFTING_SPECIALIST = "drafting_specialist"
-
-
-class ImplementationKind(StrEnum):
-    LOCAL_DETERMINISTIC = "local_deterministic"
-    IN_PROCESS_AGENT_AS_TOOL = "in_process_agent_as_tool"
-    REMOTE_AGENT_TOOL = "remote_agent_tool"
-    A2A_AGENT_TOOL = "a2a_agent_tool"
-
-
-class PlanGenerationSource(StrEnum):
-    MODEL_STRUCTURED = "MODEL_STRUCTURED"
-    DETERMINISTIC_DEFAULT = "DETERMINISTIC_DEFAULT"
-    EMPTY_RESPONSE_FALLBACK = "EMPTY_RESPONSE_FALLBACK"
-
-
 class RequestConstraints(StrictModel):
-    requested_by: date | None = None
+    requested_by: str | None = None
     budget_limit: Decimal | None = Field(default=None, ge=0)
     specifications: dict[str, str] = Field(default_factory=dict)
 
 
 class ProcurementRequest(StrictModel):
-    request_id: str
+    request_id: str = Field(min_length=1)
     query: str = Field(min_length=1)
-    quantity: int | None = Field(default=None, gt=0)
-    applicant_name: str | None = None
-    department_name: str | None = None
-    purpose: str | None = None
+    quantity: int = Field(gt=0)
+    applicant_name: str = Field(min_length=1)
+    department_name: str = Field(min_length=1)
+    purpose: str = Field(min_length=1)
     constraints: RequestConstraints = Field(default_factory=RequestConstraints)
-
-    def missing_required_fields(self) -> list[str]:
-        missing: list[str] = []
-        if self.quantity is None:
-            missing.append("quantity")
-        if not self.applicant_name:
-            missing.append("applicant_name")
-        if not self.purpose:
-            missing.append("purpose")
-        if self.constraints.requested_by is None:
-            missing.append("constraints.requested_by")
-        return missing
-
-
-class PlanStepProposal(StrictModel):
-    """Model-produced plan step. Runtime status is never accepted from the model."""
-
-    step_id: str = Field(min_length=1)
-    step_type: str = Field(min_length=1)
-    owner: AgentRole
-    input_refs: list[str] = Field(default_factory=list)
-
-
-class AgentPlanResponse(StrictModel):
-    """Pydantic response_format used only at the plan-generation boundary.
-
-    Defaults make an empty structured response parseable. PlanBuilder then turns
-    an empty step list into an explicit, traced deterministic fallback rather
-    than accidentally reusing steps left in a previous session.
-    """
-
-    goal: str = ""
-    steps: list[PlanStepProposal] = Field(default_factory=list)
-    missing_required_fields: list[str] = Field(default_factory=list)
 
 
 class PlanStep(StrictModel):
     step_id: str = Field(min_length=1)
-    step_type: str = Field(min_length=1)
+    step_type: StepType
     owner: AgentRole
     status: PlanStatus = PlanStatus.PENDING
+    attempt: int = Field(default=0, ge=0)
     input_refs: list[str] = Field(default_factory=list)
     output_refs: list[str] = Field(default_factory=list)
-    evidence_refs: list[str] = Field(default_factory=list)
-    tool_call_ids: list[str] = Field(default_factory=list)
-    attempt: int = Field(default=0, ge=0)
+    input_hash: str | None = None
+    completion_reason: str | None = None
     started_at: datetime | None = None
     ended_at: datetime | None = None
-    completion_reason: str | None = None
-    input_hash: str | None = None
-
-    @model_validator(mode="after")
-    def validate_timestamps(self) -> "PlanStep":
-        if self.status == PlanStatus.RUNNING and self.started_at is None:
-            raise ValueError("RUNNING step requires started_at")
-        if self.status in {PlanStatus.COMPLETED, PlanStatus.FAILED, PlanStatus.BLOCKED}:
-            if self.ended_at is None or not self.completion_reason:
-                raise ValueError(f"{self.status} step requires ended_at and completion_reason")
-        return self
 
 
 class ExecutionPlan(StrictModel):
-    plan_id: str
-    plan_version: int = Field(ge=1)
-    goal: str = Field(min_length=1)
+    """Pydantic response format and runtime plan for the parent planner."""
+
+    plan_id: str = ""
+    version: int = Field(default=1, ge=1)
+    steps: list[PlanStep] = Field(default_factory=list)
+    completion_condition: Literal["validated_application_ready"] = "validated_application_ready"
     status: PlanStatus = PlanStatus.PENDING
-    steps: list[PlanStep]
     generation_source: PlanGenerationSource = PlanGenerationSource.DETERMINISTIC_DEFAULT
-    warnings: list[str] = Field(default_factory=list)
+    fallback_reason: str | None = None
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 
@@ -176,158 +177,121 @@ class ExecutionPlan(StrictModel):
     def unique_step_ids(cls, steps: list[PlanStep]) -> list[PlanStep]:
         ids = [step.step_id for step in steps]
         if len(ids) != len(set(ids)):
-            raise ValueError("step_id must be unique within a plan")
+            raise ValueError("step_id must be unique")
         return steps
 
 
-class CatalogItem(StrictModel):
+class OperationStatus(StrictModel):
+    http_status: int = Field(default=200, ge=100, le=599)
+    technical_status: TechnicalStatus = TechnicalStatus.SUCCESS
+    mcp_status: McpStatus = McpStatus.NOT_RUN
+    search_status: SearchStatus = SearchStatus.NOT_RUN
+    parse_status: ParseStatus = ParseStatus.NOT_RUN
+    business_status: BusinessStatus
+    failure_layer: FailureLayer = FailureLayer.NONE
+    retryable: bool = False
+    reason_code: str | None = None
+
+
+class CorrelationContext(StrictModel):
+    test_case_id: str = Field(min_length=1)
+    framework_session_id: str = Field(min_length=1)
+    turn_number: int = Field(ge=1)
+    plan_id: str = Field(min_length=1)
+    plan_version: int = Field(ge=1)
+    step_id: str = Field(min_length=1)
+    attempt: int = Field(ge=1)
+    remote_task_id: str = Field(min_length=1)
+    parent_invocation_id: str = Field(min_length=1)
+
+
+class Evidence(StrictModel):
+    evidence_id: str
+    index_name: Literal["procurement-catalog-v1", "procurement-code-master-v1"]
+    document_id: str
+    source_version: str
+    rank: int | None = Field(default=None, ge=1)
+    score: float | None = None
+    content_ref: str | None = None
+
+
+class CatalogCandidate(StrictModel):
     product_code: str
-    name: str
+    product_name: str
     category: str
-    keywords: list[str]
-    specifications: dict[str, str]
     unit_price: Decimal = Field(ge=0)
-    currency: Literal["JPY"]
-    stock: int = Field(ge=0)
-    lead_time_days: int = Field(ge=0)
-    valid_from: date
-    valid_to: date
+    currency: Literal["JPY"] = "JPY"
+    specifications: dict[str, str] = Field(default_factory=dict)
+    evidence_id: str
 
 
-class AccountCode(StrictModel):
-    account_code: str
-    label: str
-    categories: list[str]
-    purposes: list[str]
-    valid_from: date
-    valid_to: date
-
-
-class Department(StrictModel):
-    department_code: str
-    name: str
-    valid_from: date
-    valid_to: date
-
-
-class Applicant(StrictModel):
-    employee_id: str
-    name: str
-    department_code: str
-    active: bool
-    synthetic: Literal[True] = True
-
-
-class DeliveryEstimate(StrictModel):
-    product_code: str
+class CatalogSearchInput(StrictModel):
+    query: str = Field(min_length=1)
     quantity: int = Field(gt=0)
-    requested_by: date | None = None
-    estimated_on: date
-    meets_request: bool
-    rule_id: str
+    constraints: RequestConstraints
+    correlation: CorrelationContext
+
+
+class CatalogSearchResult(StrictModel):
+    correlation: CorrelationContext
+    status: OperationStatus
+    candidates: list[CatalogCandidate] = Field(default_factory=list)
+    selected_product_code: str | None = None
+    evidence: list[Evidence] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def grounded_selection(self) -> "CatalogSearchResult":
+        if self.selected_product_code and self.selected_product_code not in {
+            candidate.product_code for candidate in self.candidates
+        }:
+            raise ValueError("selected_product_code must exist in candidates")
+        return self
+
+
+class CodeDeterminationInput(StrictModel):
+    selected_product_code: str = Field(min_length=1)
+    product_category: str = Field(min_length=1)
+    department_name: str = Field(min_length=1)
+    correlation: CorrelationContext
+
+
+class CodeDeterminationResult(StrictModel):
+    correlation: CorrelationContext
+    status: OperationStatus
+    account_code: str | None = None
+    account_name: str | None = None
+    department_code: str | None = None
+    department_name: str | None = None
+    evidence: list[Evidence] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
 
 
-class CalculationResult(StrictModel):
-    currency: Literal["JPY"] = "JPY"
-    quantity: int = Field(gt=0)
-    unit_price: Decimal = Field(ge=0)
-    subtotal: Decimal = Field(ge=0)
-    discount: Decimal = Field(ge=0)
-    taxable_amount: Decimal = Field(ge=0)
-    tax: Decimal = Field(ge=0)
-    total: Decimal = Field(ge=0)
-    tax_rate: Decimal = Field(ge=0)
-    discount_rate: Decimal = Field(ge=0)
-    rounding_mode: str
-    calculated_by: str
-
-
-class DraftItem(StrictModel):
+class ApplicationLine(StrictModel):
     product_code: str
-    name: str
+    product_name: str
+    category: str
     quantity: int = Field(gt=0)
     unit_price: Decimal = Field(ge=0)
-    currency: Literal["JPY"]
-    specifications: dict[str, str] = Field(default_factory=dict)
-
-
-class DraftApplicant(StrictModel):
-    employee_id: str
-    name: str
-    department_code: str
-
-
-class DraftAccount(StrictModel):
+    currency: Literal["JPY"] = "JPY"
+    subtotal: Decimal = Field(ge=0)
     account_code: str
-    label: str
+    account_name: str
 
 
 class ApplicationDraft(StrictModel):
     request_id: str
-    status: Literal["DRAFT_READY"] = "DRAFT_READY"
-    item: DraftItem
-    amount: CalculationResult
-    delivery: DeliveryEstimate
-    applicant: DraftApplicant
-    account: DraftAccount
-    request_constraints: RequestConstraints = Field(default_factory=RequestConstraints)
+    status: Literal["VALIDATED"] = "VALIDATED"
+    lines: list[ApplicationLine] = Field(min_length=1)
+    department_code: str
+    department_name: str
+    total: Decimal = Field(ge=0)
     evidence_refs: list[str] = Field(min_length=1)
-    warnings: list[str] = Field(default_factory=list)
-
-
-class ValidationResult(StrictModel):
-    valid: bool
-    violations: list[str] = Field(default_factory=list)
-    checks: dict[str, bool] = Field(default_factory=dict)
-    evidence_refs: list[str] = Field(default_factory=list)
-
-
-class ToolResponse(StrictModel):
-    call_id: str
-    http_status: int = Field(default=200, ge=100, le=599)
-    technical_status: TechnicalStatus = TechnicalStatus.SUCCESS
-    business_status: BusinessStatus
-    data_version: str
-    result: dict[str, Any] = Field(default_factory=dict)
-    evidence_refs: list[str] = Field(default_factory=list)
-    warnings: list[str] = Field(default_factory=list)
-
-
-class ProcurementContextSnapshot(StrictModel):
-    snapshot_version: str = "1.0"
-    request: ProcurementRequest
-    plan_id: str
-    plan_version: int
-    selected_item: CatalogItem | None = None
-    applicant: Applicant | None = None
-    department: Department | None = None
-    account_code: AccountCode | None = None
-    delivery_estimate: DeliveryEstimate | None = None
-    calculation: CalculationResult | None = None
-    evidence_refs: list[str] = Field(default_factory=list)
-
-
-class AgentToolTask(StrictModel):
-    task_id: str
-    plan_id: str
-    step_ids: list[str]
-    context_snapshot: ProcurementContextSnapshot
-    required_outputs: list[str]
-
-
-class AgentToolResult(StrictModel):
-    task_id: str
-    agent_role: AgentRole
-    business_status: BusinessStatus
-    result: dict[str, Any]
-    evidence_refs: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
 
 
 class GovernanceDecision(StrictModel):
     policy_version: str
-    rule_id: str
     stage: Literal["pre_input", "pre_tool", "post_tool", "pre_output"]
     outcome: GovernanceOutcome
     reason: str
@@ -336,3 +300,16 @@ class GovernanceDecision(StrictModel):
     plan_id: str | None = None
     step_id: str | None = None
     created_at: datetime = Field(default_factory=utc_now)
+
+
+class ScenarioResult(StrictModel):
+    scenario_id: Literal["S1", "S2", "S3", "S4", "S5"]
+    test_case_id: str
+    technical_status: TechnicalStatus
+    business_status: BusinessStatus
+    draft: ApplicationDraft | None = None
+    status: OperationStatus | None = None
+    trace: dict[str, Any] = Field(default_factory=dict)
+    injection_requested: str | None = None
+    injection_activated: bool = False
+    next_action: str | None = None

@@ -1,0 +1,17 @@
+{
+  "name": "procurement-catalog-v1",
+  "fields": [
+    {"name":"document_id","type":"Edm.String","key":true,"retrievable":true,"searchable":false,"filterable":true,"sortable":true,"facetable":false},
+    {"name":"chunk_id","type":"Edm.String","retrievable":true,"searchable":false,"filterable":true,"sortable":false,"facetable":false},
+    {"name":"source_version","type":"Edm.String","retrievable":true,"searchable":false,"filterable":true,"sortable":false,"facetable":false},
+    {"name":"product_code","type":"Edm.String","retrievable":true,"searchable":true,"filterable":true,"sortable":true,"facetable":false},
+    {"name":"product_name","type":"Edm.String","retrievable":true,"searchable":true,"filterable":false,"sortable":false,"facetable":false,"analyzer":"ja.microsoft"},
+    {"name":"aliases","type":"Collection(Edm.String)","retrievable":true,"searchable":true,"filterable":true,"facetable":false,"analyzer":"ja.microsoft"},
+    {"name":"category","type":"Edm.String","retrievable":true,"searchable":true,"filterable":true,"sortable":true,"facetable":true},
+    {"name":"unit_price","type":"Edm.Double","retrievable":true,"searchable":false,"filterable":true,"sortable":true,"facetable":false},
+    {"name":"currency","type":"Edm.String","retrievable":true,"searchable":false,"filterable":true,"sortable":false,"facetable":true},
+    {"name":"content","type":"Edm.String","retrievable":true,"searchable":true,"filterable":false,"sortable":false,"facetable":false,"analyzer":"ja.microsoft"},
+    {"name":"specifications_json","type":"Edm.String","retrievable":true,"searchable":false,"filterable":false,"sortable":false,"facetable":false},
+    {"name":"active","type":"Edm.Boolean","retrievable":true,"searchable":false,"filterable":true,"sortable":false,"facetable":true}
+  ]
+}

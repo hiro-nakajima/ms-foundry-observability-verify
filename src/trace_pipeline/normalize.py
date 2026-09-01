@@ -1,12 +1,14 @@
-"""Local normalizer from session and OTel spans to the evaluation envelope."""
+"""Normalize Framework session state and application spans without nested sessions."""
 
 from __future__ import annotations
 
 import hashlib
 from typing import Any
 
-from procurement_agent.memory import AgentSession
+from agent_framework import AgentSession
+
 from procurement_agent.observability import TelemetryRecorder
+from procurement_agent.session_state import load_execution_state
 
 from .envelope import AgentTrace, RunIdentity, SessionIdentity, TraceEvaluationEnvelope
 
@@ -27,58 +29,28 @@ def _span_to_dict(span) -> dict[str, Any]:
 
 
 def build_envelope(
-    *,
-    run: RunIdentity,
-    session: AgentSession,
-    telemetry: TelemetryRecorder,
-    user_input: list[dict[str, Any]],
-    response: dict[str, Any],
-    retrieved_contexts: list[dict[str, Any]],
-    system_prompt: dict[str, Any],
-    tool_definitions: list[dict[str, Any]],
-    tool_calls: list[dict[str, Any]],
-    tool_output: list[dict[str, Any]],
-    delegations: list[dict[str, Any]] | None = None,
-    governance_decisions: list[Any] | None = None,
-    validations: list[dict[str, Any]] | None = None,
-    resumed: bool = False,
-    trace_id: str | None = None,
-    active_spans: list[Any] | None = None,
+    *, run: RunIdentity, session: AgentSession, telemetry: TelemetryRecorder,
+    user_input: list[dict[str, Any]], response: dict[str, Any],
+    retrieved_contexts: list[dict[str, Any]], system_prompt: dict[str, Any],
+    tool_definitions: list[dict[str, Any]], tool_calls: list[dict[str, Any]],
+    tool_output: list[dict[str, Any]], resumed: bool = False,
 ) -> TraceEvaluationEnvelope:
-    finished = list(telemetry.finished_spans()) + list(active_spans or [])
-    if trace_id is not None:
-        expected = int(trace_id, 16)
-        finished = [span for span in finished if span.context.trace_id == expected]
-    unique: dict[int, Any] = {span.context.span_id: span for span in finished}
-    finished = list(unique.values())
-    spans = [_span_to_dict(span) for span in finished]
+    state = load_execution_state(session, required=True)
+    assert state is not None
+    spans = [_span_to_dict(span) for span in telemetry.finished_spans()]
     events = [
         {"span": span.name, "name": event.name, "attributes": dict(event.attributes or {})}
-        for span in finished
-        for event in span.events
+        for span in telemetry.finished_spans() for event in span.events
     ]
-    plan = session.plan.model_dump(mode="json") if session.plan else {}
-    if "goal" in plan:
-        plan["goal"] = telemetry.protect_content("plan_goal", plan["goal"])
-    protected_validations = []
-    for validation in validations or []:
-        protected_validations.append(
-            {
-                "valid": bool(validation.get("valid")),
-                "violation_count": len(validation.get("violations", [])),
-                "checks": dict(validation.get("checks", {})),
-                "evidence_refs": list(validation.get("evidence_refs", [])),
-                **telemetry.protect_content("validation", validation),
-            }
-        )
     return TraceEvaluationEnvelope(
         run=run,
         session=SessionIdentity(
-            session_id_hash=_hash(session.session_id),
-            conversation_id_hash=_hash(session.conversation_id),
-            turn_count=session.turn_index,
+            framework_session_id_hash=_hash(session.session_id),
+            service_session_id_hash=_hash(session.service_session_id) if session.service_session_id else None,
+            turn_number=state.turn_number,
             resumed=resumed,
         ),
+        content_profile=telemetry.content_profile,
         user_input=user_input,
         response=response,
         retrieved_contexts=retrieved_contexts,
@@ -87,27 +59,10 @@ def build_envelope(
         tool_calls=tool_calls,
         tool_output=tool_output,
         agent_trace=AgentTrace(
-            spans=spans,
-            events=events,
-            delegations=delegations or [],
-            governance_decisions=[
-                item.model_dump(mode="json")
-                for item in (
-                    session.governance_decisions
-                    if governance_decisions is None
-                    else governance_decisions
-                )
-            ],
-            validations=protected_validations,
+            spans=spans, events=events,
+            governance_decisions=[item.model_dump(mode="json") for item in state.governance_decisions],
         ),
-        conversation=[
-            {
-                "role": message.role,
-                "turn_index": message.turn_index,
-                "content_hash": message.content_hash,
-                **telemetry.protect_content("conversation", message.content),
-            }
-            for message in session.conversation
-        ],
-        plan=plan,
+        conversation=[],
+        plan=state.plan.model_dump(mode="json") if state.plan else {},
+        statuses=state.last_machine_response or {},
     )

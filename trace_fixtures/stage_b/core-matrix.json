@@ -1,0 +1,8 @@
+[
+  {"scenario_id":"S2","pattern_id":"TV-02","injection_requested":true,"injection_activated":true,"facts":{"schema_version":"1.0","case_id":"S2-TV-02","technical_status":"SUCCESS","validation_coverage_complete":false}},
+  {"scenario_id":"S2","pattern_id":"TV-03","injection_requested":true,"injection_activated":true,"facts":{"schema_version":"1.0","case_id":"S2-TV-03","technical_status":"SUCCESS","evidence_consistent":false}},
+  {"scenario_id":"S3","pattern_id":"SD-03","injection_requested":true,"injection_activated":true,"facts":{"schema_version":"1.0","case_id":"S3-SD-03","technical_status":"SUCCESS","duplicate_step":true}},
+  {"scenario_id":"S3","pattern_id":"SD-05","injection_requested":true,"injection_activated":true,"facts":{"schema_version":"1.0","case_id":"S3-SD-05","technical_status":"SUCCESS","actions_after_terminal":1}},
+  {"scenario_id":"S4","pattern_id":"MA-04","injection_requested":true,"injection_activated":true,"facts":{"schema_version":"1.0","case_id":"S4-MA-04","technical_status":"SUCCESS","handoff_required_fields_missing":["product_category"]}},
+  {"scenario_id":"S4","pattern_id":"MA-05","injection_requested":true,"injection_activated":true,"facts":{"schema_version":"1.0","case_id":"S4-MA-05","technical_status":"SUCCESS","received_values_used":false}}
+]

@@ -1,0 +1,8 @@
+{
+  "schema_version": "1.0",
+  "definitions": [
+    {"name":"catalog_search_agent","version":"1","kind":"prompt","toolboxes":["catalog-search-toolbox"],"response_schema":"CatalogSearchResult"},
+    {"name":"code_determination_agent","version":"1","kind":"prompt","toolboxes":["code-master-toolbox"],"response_schema":"CodeDeterminationResult"}
+  ],
+  "container_includes_child_implementations": false
+}

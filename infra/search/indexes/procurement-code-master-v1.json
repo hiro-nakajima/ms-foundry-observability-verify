@@ -1,0 +1,14 @@
+{
+  "name": "procurement-code-master-v1",
+  "fields": [
+    {"name":"document_id","type":"Edm.String","key":true,"retrievable":true,"searchable":false,"filterable":true,"sortable":true,"facetable":false},
+    {"name":"source_version","type":"Edm.String","retrievable":true,"searchable":false,"filterable":true,"sortable":false,"facetable":false},
+    {"name":"record_type","type":"Edm.String","retrievable":true,"searchable":true,"filterable":true,"sortable":true,"facetable":true},
+    {"name":"lookup_key","type":"Edm.String","retrievable":true,"searchable":true,"filterable":true,"sortable":true,"facetable":false},
+    {"name":"aliases","type":"Collection(Edm.String)","retrievable":true,"searchable":true,"filterable":true,"facetable":false,"analyzer":"ja.microsoft"},
+    {"name":"account_code","type":"Edm.String","retrievable":true,"searchable":true,"filterable":true,"sortable":true,"facetable":false},
+    {"name":"department_code","type":"Edm.String","retrievable":true,"searchable":true,"filterable":true,"sortable":true,"facetable":false},
+    {"name":"display_name","type":"Edm.String","retrievable":true,"searchable":true,"filterable":false,"sortable":false,"facetable":false,"analyzer":"ja.microsoft"},
+    {"name":"active","type":"Edm.Boolean","retrievable":true,"searchable":false,"filterable":true,"sortable":false,"facetable":true}
+  ]
+}

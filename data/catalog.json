@@ -1,46 +1,17 @@
 {
-  "schema_version": "1.0",
-  "data_version": "2026-08-30.1",
+  "schema_version": "2.0",
+  "data_version": "2026-09-01.1",
   "synthetic": true,
   "records": [
-    {
-      "product_code": "LAPTOP-DEV-14",
-      "name": "開発用ノートPC 14インチ（架空商品）",
-      "category": "laptop",
-      "keywords": ["開発用", "ノートPC", "developer", "高性能"],
-      "specifications": {"memory": "32GB", "storage": "1TB SSD", "os": "Windows 11 Pro"},
-      "unit_price": "180000",
-      "currency": "JPY",
-      "stock": 25,
-      "lead_time_days": 14,
-      "valid_from": "2026-01-01",
-      "valid_to": "2026-12-31"
-    },
-    {
-      "product_code": "LAPTOP-OFFICE-13",
-      "name": "一般業務用ノートPC 13インチ（架空商品）",
-      "category": "laptop",
-      "keywords": ["一般業務", "ノートPC", "office", "軽量"],
-      "specifications": {"memory": "16GB", "storage": "512GB SSD", "os": "Windows 11 Pro"},
-      "unit_price": "120000",
-      "currency": "JPY",
-      "stock": 40,
-      "lead_time_days": 7,
-      "valid_from": "2026-01-01",
-      "valid_to": "2026-12-31"
-    },
-    {
-      "product_code": "MONITOR-DEV-27",
-      "name": "開発用モニター 27インチ（架空商品）",
-      "category": "monitor",
-      "keywords": ["開発用", "モニター", "4K"],
-      "specifications": {"resolution": "3840x2160", "panel": "IPS"},
-      "unit_price": "60000",
-      "currency": "JPY",
-      "stock": 18,
-      "lead_time_days": 10,
-      "valid_from": "2026-01-01",
-      "valid_to": "2026-12-31"
-    }
+    {"product_code":"LAPTOP-DEV-14","name":"開発用ノートPC 14インチ（架空商品）","category":"laptop","keywords":["開発用","ノートPC","高性能"],"specifications":{"memory":"32GB","storage":"1TB SSD","os":"Windows 11 Pro"},"unit_price":"180000","currency":"JPY","stock":25,"lead_time_days":14,"valid_from":"2026-01-01","valid_to":"2026-12-31"},
+    {"product_code":"LAPTOP-OFFICE-13","name":"一般業務用ノートPC 13インチ（架空商品）","category":"laptop","keywords":["一般業務","ノートPC","軽量"],"specifications":{"memory":"16GB","storage":"512GB SSD","os":"Windows 11 Pro"},"unit_price":"120000","currency":"JPY","stock":40,"lead_time_days":7,"valid_from":"2026-01-01","valid_to":"2026-12-31"},
+    {"product_code":"MONITOR-DEV-27","name":"開発用モニター 27インチ（架空商品）","category":"monitor","keywords":["開発用","モニター","4K"],"specifications":{"resolution":"3840x2160","panel":"IPS"},"unit_price":"60000","currency":"JPY","stock":18,"lead_time_days":10,"valid_from":"2026-01-01","valid_to":"2026-12-31"},
+    {"product_code":"DOCK-USB4-01","name":"USB4ドッキングステーション（架空商品）","category":"peripheral","keywords":["ドック","USB4","ノートPC周辺機器"],"specifications":{"ports":"12","power_delivery":"100W"},"unit_price":"28000","currency":"JPY","stock":30,"lead_time_days":5,"valid_from":"2026-01-01","valid_to":"2026-12-31"},
+    {"product_code":"HEADSET-USB-01","name":"会議用USBヘッドセット（架空商品）","category":"peripheral","keywords":["ヘッドセット","会議","USB"],"specifications":{"microphone":"noise-cancelling","connection":"USB-C"},"unit_price":"16000","currency":"JPY","stock":50,"lead_time_days":3,"valid_from":"2026-01-01","valid_to":"2026-12-31"},
+    {"product_code":"KEYBOARD-ERG-01","name":"エルゴノミクスキーボード（架空商品）","category":"peripheral","keywords":["キーボード","エルゴノミクス"],"specifications":{"layout":"JIS","connection":"wireless"},"unit_price":"14000","currency":"JPY","stock":35,"lead_time_days":4,"valid_from":"2026-01-01","valid_to":"2026-12-31"},
+    {"product_code":"MOUSE-WL-01","name":"業務用ワイヤレスマウス（架空商品）","category":"peripheral","keywords":["マウス","ワイヤレス","業務用"],"specifications":{"buttons":"6","connection":"Bluetooth"},"unit_price":"8000","currency":"JPY","stock":80,"lead_time_days":2,"valid_from":"2026-01-01","valid_to":"2026-12-31"},
+    {"product_code":"TABLET-BIZ-11","name":"業務用タブレット 11インチ（架空商品）","category":"tablet","keywords":["タブレット","業務用","11インチ"],"specifications":{"storage":"256GB","network":"Wi-Fi"},"unit_price":"95000","currency":"JPY","stock":20,"lead_time_days":9,"valid_from":"2026-01-01","valid_to":"2026-12-31"},
+    {"product_code":"DESK-ADJ-01","name":"電動昇降デスク（架空商品）","category":"furniture","keywords":["デスク","昇降","執務環境"],"specifications":{"width":"1400mm","color":"white"},"unit_price":"78000","currency":"JPY","stock":12,"lead_time_days":21,"valid_from":"2026-01-01","valid_to":"2026-12-31"},
+    {"product_code":"CHAIR-ERG-01","name":"エルゴノミクスチェア（架空商品）","category":"furniture","keywords":["チェア","椅子","エルゴノミクス"],"specifications":{"back":"mesh","armrest":"adjustable"},"unit_price":"65000","currency":"JPY","stock":15,"lead_time_days":18,"valid_from":"2026-01-01","valid_to":"2026-12-31"}
   ]
 }

@@ -1,0 +1,9 @@
+union isfuzzy=true traces, dependencies, requests, customEvents
+| extend caseId=tostring(customDimensions["test.case.id"]),
+         businessStatus=tostring(customDimensions["business.status"]),
+         mcpStatus=tostring(customDimensions["mcp.status"]),
+         searchStatus=tostring(customDimensions["search.status"]),
+         parseStatus=tostring(customDimensions["parse.status"])
+| where isnotempty(caseId)
+| project timestamp, operation_Id, operation_ParentId, name, caseId, resultCode, businessStatus, mcpStatus, searchStatus, parseStatus
+| order by timestamp asc

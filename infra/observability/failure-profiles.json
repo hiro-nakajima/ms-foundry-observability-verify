@@ -1,0 +1,12 @@
+{
+  "schema_version":"1.0",
+  "profiles":[
+    {"name":"not_found","path":"Toolbox/Search","technical_status":"SUCCESS","search_status":"NOT_FOUND","failure_layer":"NONE"},
+    {"name":"index_missing","path":"Toolbox/Search","technical_status":"ERROR","search_status":"INDEX_MISSING","failure_layer":"SEARCH"},
+    {"name":"permission","path":"Toolbox/Search","technical_status":"ERROR","search_status":"PERMISSION_DENIED","failure_layer":"SEARCH"},
+    {"name":"business_invalid","path":"Toolbox/Search","technical_status":"SUCCESS","business_status":"VALIDATION_FAILED","failure_layer":"VALIDATION"},
+    {"name":"timeout","path":"Local MCP fixture","technical_status":"ERROR","mcp_status":"TIMEOUT","failure_layer":"MCP"},
+    {"name":"protocol_invalid","path":"Local MCP fixture","technical_status":"ERROR","mcp_status":"PROTOCOL_ERROR","failure_layer":"MCP"}
+  ],
+  "t4_only":["dns","route","private_link","private_collector"]
+}

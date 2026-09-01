@@ -4,8 +4,8 @@
 agent-framework-core==1.16.0
 agent-framework-devui==1.0.0b260821
 agent-framework-foundry-hosting==1.0.0b260827
+agent-framework-foundry==1.11.0
 agent-framework-openai==1.14.1
-agent-governance-toolkit[core]==4.1.0
 azure-identity==1.26.0b2
 opentelemetry-api==1.43.0
 opentelemetry-sdk==1.43.0

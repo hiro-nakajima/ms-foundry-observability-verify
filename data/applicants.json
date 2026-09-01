@@ -1,11 +1,11 @@
 {
-  "schema_version": "1.0",
-  "data_version": "2026-08-30.1",
+  "schema_version": "2.0",
+  "data_version": "2026-09-01.1",
   "synthetic": true,
   "records": [
-    {"employee_id": "EMP-001", "name": "山田太郎（架空）", "department_code": "DPT-DEV-01", "active": true, "synthetic": true},
-    {"employee_id": "EMP-002", "name": "佐藤花子（架空）", "department_code": "DPT-OPS-01", "active": true, "synthetic": true},
-    {"employee_id": "EMP-003", "name": "鈴木一郎（架空）", "department_code": "DPT-IS-01", "active": true, "synthetic": true},
-    {"employee_id": "EMP-004", "name": "高橋美咲（架空）", "department_code": "DPT-IS-02", "active": true, "synthetic": true}
+    {"employee_id":"SYN-EMP-001","name":"架空申請者A","department_code":"DPT-DEV","active":true,"synthetic":true},
+    {"employee_id":"SYN-EMP-002","name":"架空申請者B","department_code":"DPT-OPS","active":true,"synthetic":true},
+    {"employee_id":"SYN-EMP-003","name":"架空申請者C","department_code":"DPT-IS","active":true,"synthetic":true},
+    {"employee_id":"SYN-EMP-004","name":"架空申請者D","department_code":"DPT-SALES","active":true,"synthetic":true}
   ]
 }

@@ -1,11 +1,11 @@
 {
-  "schema_version": "1.0",
-  "data_version": "2026-08-30.1",
+  "schema_version": "2.0",
+  "data_version": "2026-09-01.1",
   "synthetic": true,
   "records": [
-    {"department_code": "DPT-DEV-01", "name": "開発一部（架空部署）", "valid_from": "2026-01-01", "valid_to": "2026-12-31"},
-    {"department_code": "DPT-OPS-01", "name": "運用一部（架空部署）", "valid_from": "2026-01-01", "valid_to": "2026-12-31"},
-    {"department_code": "DPT-IS-01", "name": "情報システム1部（架空部署）", "valid_from": "2026-01-01", "valid_to": "2026-12-31"},
-    {"department_code": "DPT-IS-02", "name": "情報システム2部（架空部署）", "valid_from": "2026-01-01", "valid_to": "2026-12-31"}
+    {"department_code":"DPT-DEV","department_name":"開発部（架空部署）","aliases":["開発部","開発"],"valid_from":"2026-01-01","valid_to":"2026-12-31"},
+    {"department_code":"DPT-OPS","department_name":"運用部（架空部署）","aliases":["運用部","運用"],"valid_from":"2026-01-01","valid_to":"2026-12-31"},
+    {"department_code":"DPT-IS","department_name":"情報システム部（架空部署）","aliases":["情報システム部","情報システム","情シス"],"valid_from":"2026-01-01","valid_to":"2026-12-31"},
+    {"department_code":"DPT-SALES","department_name":"営業部（架空部署）","aliases":["営業部","営業"],"valid_from":"2026-01-01","valid_to":"2026-12-31"}
   ]
 }

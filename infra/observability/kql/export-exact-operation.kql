@@ -1,0 +1,6 @@
+// Replace the synthetic placeholder only after an approved Azure run.
+let targetOperationId = "REPLACE_WITH_EXACT_OPERATION_ID";
+union isfuzzy=true traces, dependencies, requests, customEvents
+| where operation_Id == targetOperationId
+| project timestamp, itemType, operation_Id, operation_ParentId, id, name, success, resultCode, customDimensions
+| order by timestamp asc

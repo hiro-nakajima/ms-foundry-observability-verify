@@ -1,0 +1,67 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/azure-dev/main/schemas/v1.0/azure.yaml.json
+requiredVersions:
+  azd: ">=1.27.1"
+  extensions:
+    azure.ai.agents: ">=1.0.0-beta.8"
+    azure.ai.projects: ">=1.0.0-beta.4"
+
+name: foundry-procurement-agent-observability-v2
+metadata:
+  architecture: procurement_application_v2
+  azure_apply_requires_approval: "true"
+
+services:
+  ai-project:
+    host: azure.ai.project
+    endpoint: ${FOUNDRY_PROJECT_ENDPOINT}
+
+  procurement-search-connection:
+    host: azure.ai.connection
+    uses:
+      - ai-project
+    category: CognitiveSearch
+    target: ${PROCUREMENT_SEARCH_ENDPOINT}
+    authType: ManagedIdentity
+
+  catalog-search-toolbox:
+    host: azure.ai.toolbox
+    uses:
+      - ai-project
+      - procurement-search-connection
+    description: Version 1 synthetic procurement catalog Search tool.
+    tools:
+      - type: azure_ai_search
+        connection: procurement-search-connection
+
+  code-master-toolbox:
+    host: azure.ai.toolbox
+    uses:
+      - ai-project
+      - procurement-search-connection
+    description: Version 1 synthetic account and department code Search tool.
+    tools:
+      - type: azure_ai_search
+        connection: procurement-search-connection
+
+  procurement-parent:
+    host: azure.ai.agent
+    project: .
+    uses:
+      - ai-project
+    kind: hosted
+    name: procurement_parent_agent
+    description: Single Microsoft Agent Framework Hosted parent for procurement v2.
+    startupCommand: python -m procurement_agent.hosted_app
+    protocols:
+      - protocol: responses
+        version: 2.0.0
+    env:
+      PROCUREMENT_PARENT_MODEL_DEPLOYMENT: ${PROCUREMENT_PARENT_MODEL_DEPLOYMENT}
+      PROCUREMENT_CATALOG_AGENT_NAME: catalog_search_agent
+      PROCUREMENT_CATALOG_AGENT_VERSION: "1"
+      PROCUREMENT_CODE_AGENT_NAME: code_determination_agent
+      PROCUREMENT_CODE_AGENT_VERSION: "1"
+    codeConfiguration:
+      runtime: python_3_13
+      entryPoint: main.py
+      dependencyResolution: remote_build
