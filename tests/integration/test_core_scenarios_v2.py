@@ -271,6 +271,14 @@ async def test_inconsistent_child_success_status_is_rejected(valid_request, fail
     state = load_execution_state(session)
     assert state.plan.status == PlanStatus.BLOCKED
     assert state.last_machine_response["outer_business_status"] == "BLOCKED"
+    failed_role = "catalog_search" if failed_step == "catalog" else "code_determination"
+    failed_span = next(
+        span for span in controller.telemetry.finished_spans()
+        if span.name == "plan.step.execute" and span.attributes["agent.role"] == failed_role
+    )
+    failed_events = {event.name for event in failed_span.events}
+    assert "result.rejected" in failed_events
+    assert "step.completed" not in failed_events
 
 
 @pytest.mark.anyio

@@ -501,7 +501,7 @@ class ProcurementController:
                 outer_technical=codes.status.technical_status,
                 outer_business=codes.status.business_status,
             )
-            if codes.status.business_status == BusinessStatus.SUCCESS:
+            if child_operation_succeeded(codes.status):
                 self.telemetry.event(code_span, "step.completed", {"plan.step.id": "code"})
             else:
                 self.telemetry.event(code_span, "result.rejected", {"business.status": codes.status.business_status})
