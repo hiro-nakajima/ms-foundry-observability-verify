@@ -31,6 +31,7 @@ def test_single_hosted_parent_has_two_remote_foundry_proxy_tools():
     assert bundle.history_provider.load_messages is True
     assert bundle.parent.additional_properties["child_implementation_location"] == "Foundry Agent Service"
     assert bundle.parent.additional_properties["propagate_child_session"] is False
+    assert bundle.telemetry.uses_global_provider is True
 
 
 @pytest.mark.anyio
@@ -115,7 +116,11 @@ async def test_hosted_turn_uses_request_and_execution_plan_response_formats(vali
     response = await bundle.parent.run("開発用ノートPCを2台申請", session=exposed_session)
     exposed_result = ScenarioResult.model_validate_json(response.text)
     assert exposed_result.business_status == BusinessStatus.SUCCESS
-    assert load_execution_state(exposed_session).plan.status.name == "COMPLETED"
+    exposed_state = load_execution_state(exposed_session)
+    assert exposed_state.plan.status.name == "COMPLETED"
+    assert [item.tool_name for item in exposed_state.governance_decisions] == [
+        "catalog_search_agent", "code_determination_agent",
+    ]
     assert [call["response_format"] for call in client.calls] == [
         "ProcurementRequest", "ExecutionPlan", "ProcurementRequest", "ExecutionPlan",
     ]

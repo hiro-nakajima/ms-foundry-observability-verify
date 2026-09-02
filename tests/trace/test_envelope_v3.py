@@ -1,4 +1,7 @@
 from agent_framework import AgentSession, Message
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from procurement_agent.observability import TelemetryRecorder, sanitize_attributes
 from procurement_agent.plan import StructuredPlanBuilder
@@ -79,6 +82,17 @@ def test_content_on_requires_explicit_synthetic_environment():
     import pytest
     with pytest.raises(ValueError, match="explicitly synthetic"):
         TelemetryRecorder(content_profile="synthetic-content-on")
+
+
+def test_hosted_recorder_emits_to_supplied_runtime_provider():
+    provider = TracerProvider()
+    exporter = InMemorySpanExporter()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    telemetry = TelemetryRecorder(tracer_provider=provider)
+    with telemetry.span("plan.create", {"test.case.id": "HOSTED-EXPORT"}):
+        pass
+    assert telemetry.uses_global_provider is True
+    assert [item.name for item in exporter.get_finished_spans()] == ["plan.create"]
 
 
 def test_secret_token_and_chain_of_thought_attributes_are_removed():

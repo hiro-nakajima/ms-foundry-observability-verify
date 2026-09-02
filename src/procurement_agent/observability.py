@@ -54,14 +54,26 @@ class TelemetryRecorder:
         self, *,
         content_profile: Literal["synthetic-content-on", "production-like-content-off"] = "production-like-content-off",
         synthetic_environment: bool = False,
+        tracer_provider: trace.TracerProvider | None = None,
     ) -> None:
         if content_profile == "synthetic-content-on" and not synthetic_environment:
             raise ValueError("synthetic-content-on requires an explicitly synthetic environment")
         self.content_profile = content_profile
-        self.exporter = InMemorySpanExporter()
-        self.provider = TracerProvider(resource=Resource.create({"service.name": "foundry-procurement-agent"}))
-        self.provider.add_span_processor(SimpleSpanProcessor(self.exporter))
+        self.exporter: InMemorySpanExporter | None
+        self.uses_global_provider = tracer_provider is not None
+        if tracer_provider is None:
+            self.exporter = InMemorySpanExporter()
+            self.provider = TracerProvider(resource=Resource.create({"service.name": "foundry-procurement-agent"}))
+            self.provider.add_span_processor(SimpleSpanProcessor(self.exporter))
+        else:
+            self.exporter = None
+            self.provider = tracer_provider
         self.tracer = self.provider.get_tracer("procurement.application", "2.0.0")
+
+    @classmethod
+    def for_hosted_runtime(cls) -> "TelemetryRecorder":
+        """Emit through the host-configured global OTel provider/App Insights exporter."""
+        return cls(tracer_provider=trace.get_tracer_provider())
 
     @property
     def record_raw_content(self) -> bool:
@@ -86,6 +98,8 @@ class TelemetryRecorder:
         return result
 
     def finished_spans(self):
+        if self.exporter is None:
+            raise RuntimeError("hosted recorder exports through the global provider; query the configured backend")
         return self.exporter.get_finished_spans()
 
 

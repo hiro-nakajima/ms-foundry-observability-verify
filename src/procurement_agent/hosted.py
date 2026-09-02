@@ -21,6 +21,7 @@ from .framework import (
 from .middleware import ContentGovernanceChatMiddleware, SessionGovernanceAgentMiddleware, ToolGovernanceFunctionMiddleware
 from .models import ExecutionPlan, ProcurementRequest, ScenarioResult
 from .controller import ProcurementController
+from .observability import TelemetryRecorder
 from .session_state import initialize_execution_state, load_execution_state
 
 
@@ -68,6 +69,7 @@ class HostedAgentBundle:
     catalog_tool: Any
     code_tool: Any
     history_provider: InMemoryHistoryProvider
+    telemetry: TelemetryRecorder
 
 
 class ControllerContextProvider(ContextProvider):
@@ -78,11 +80,15 @@ class ControllerContextProvider(ContextProvider):
     validated ``ScenarioResult`` before the parent response is generated.
     """
 
-    def __init__(self, planner: Agent, catalog_tool: Any, code_tool: Any) -> None:
+    def __init__(
+        self, planner: Agent, catalog_tool: Any, code_tool: Any,
+        telemetry: TelemetryRecorder,
+    ) -> None:
         super().__init__("procurement-controller-v2")
         self.planner = planner
         self.catalog_tool = catalog_tool
         self.code_tool = code_tool
+        self.telemetry = telemetry
 
     @staticmethod
     def _latest_user_text(context: SessionContext) -> str:
@@ -106,6 +112,7 @@ class ControllerContextProvider(ContextProvider):
             natural_request=self._latest_user_text(context),
             session=session,
             test_case_id=test_case_id,
+            telemetry=self.telemetry,
         )
         context.extend_instructions(
             self.source_id,
@@ -160,7 +167,10 @@ def build_hosted_bundle(
         instructions=PARENT_INSTRUCTIONS,
         additional_properties={"architecture_id": "procurement_application_v2"},
     )
-    controller_provider = ControllerContextProvider(planner, catalog_tool, code_tool)
+    telemetry = TelemetryRecorder.for_hosted_runtime()
+    controller_provider = ControllerContextProvider(
+        planner, catalog_tool, code_tool, telemetry,
+    )
     parent = Agent(
         DeterministicChatClient(controller_result_handler, client_name="controller-result"),
         id="procurement-parent-v2",
@@ -188,6 +198,7 @@ def build_hosted_bundle(
         catalog_tool=catalog_tool,
         code_tool=code_tool,
         history_provider=history,
+        telemetry=telemetry,
     )
 
 
@@ -238,7 +249,7 @@ async def _invoke_remote_tool(tool: Any, payload: Any, session: AgentSession) ->
 
 async def _execute_hosted_components(
     *, planner: Agent, catalog_tool: Any, code_tool: Any, natural_request: str,
-    session: AgentSession | None, test_case_id: str,
+    session: AgentSession | None, test_case_id: str, telemetry: TelemetryRecorder,
 ) -> ScenarioResult:
     if session is None:
         raise ValueError("Framework AgentSession is required; implicit sessions are forbidden")
@@ -260,6 +271,7 @@ async def _execute_hosted_components(
     controller = ProcurementController(
         lambda payload: _invoke_remote_tool(catalog_tool, payload, session),
         lambda payload: _invoke_remote_tool(code_tool, payload, session),
+        telemetry=telemetry,
     )
     return await controller.execute(
         request, session=session, test_case_id=test_case_id, raw_plan=raw_plan,
@@ -278,4 +290,5 @@ async def execute_hosted_turn(
         natural_request=natural_request,
         session=session,
         test_case_id=test_case_id,
+        telemetry=bundle.telemetry,
     )

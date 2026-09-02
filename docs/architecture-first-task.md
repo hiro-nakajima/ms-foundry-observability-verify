@@ -26,3 +26,10 @@ contract testは`tests/unit/test_hosted_factory_v2.py`で、Hosted/DevUIが公�
 `bundle.parent.run()`からController、2つの`FoundryAgent.as_tool()` proxy、
 `propagate_session=False`まで到達することを検証する。順序・boundary・再試行・
 status分離は`tests/integration/test_core_scenarios_v2.py`で固定する。
+
+Hosted/DevUIの業務custom spanはrequestごとのprivate exporterを作らず、hostが構成する
+global OpenTelemetry providerへ送る。Local envelope/Detector testだけは独立した
+in-memory providerを明示利用する。Stage BのFault Profileは
+`trace_pipeline.stage_b.StageBInjectionHarness`に限定し、実際の子呼出し、boundary
+reject、terminal後action、誤った受理を発火させる。Detector入力は注入値を直接設定せず、
+そのrunのcall/event/state artifactから`derive_trace_facts()`で導出する。

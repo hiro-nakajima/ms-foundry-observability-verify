@@ -51,11 +51,24 @@ def set_machine_status(
     state: Any, status: OperationStatus, *,
     outer_technical: TechnicalStatus, outer_business: BusinessStatus,
 ) -> None:
+    step_statuses: dict[str, Any] = {}
+    if state.catalog_result is not None:
+        step_statuses["catalog"] = state.catalog_result.status.model_dump(mode="json")
+    if state.code_result is not None:
+        step_statuses["code"] = state.code_result.status.model_dump(mode="json")
     state.last_machine_response = {
         **status.model_dump(mode="json"),
         "outer_technical_status": outer_technical.value,
         "outer_business_status": outer_business.value,
+        "step_statuses": step_statuses,
     }
+
+
+def refresh_governance_decisions(state: Any, session: AgentSession) -> None:
+    """Merge FunctionMiddleware mutations before the Controller saves its state copy."""
+    persisted = load_execution_state(session, required=True)
+    assert persisted is not None
+    state.governance_decisions = persisted.governance_decisions
 
 
 def correlation(*, state, session: AgentSession, step_id: str, attempt: int) -> CorrelationContext:
@@ -78,9 +91,16 @@ async def invoke_validated(invoker: StructuredInvoker, payload: BaseModel, resul
     validated_input = type(payload).model_validate(payload.model_dump(mode="json"))
     raw = await invoker(validated_input)
     try:
-        return result_type.model_validate(raw.model_dump(mode="json") if isinstance(raw, BaseModel) else raw)
+        result = result_type.model_validate(
+            raw.model_dump(mode="json") if isinstance(raw, BaseModel) else raw
+        )
     except ValidationError as exc:
         raise ValueError(f"structured child output failed boundary validation: {exc.error_count()}") from exc
+    input_correlation = getattr(validated_input, "correlation", None)
+    result_correlation = getattr(result, "correlation", None)
+    if input_correlation is not None and result_correlation != input_correlation:
+        raise ValueError("structured child output changed the supplied correlation")
+    return result
 
 
 class ProcurementController:
@@ -126,6 +146,7 @@ class ProcurementController:
             self.telemetry.event(catalog_span, "step.started", {"plan.step.id": "catalog", "execution.attempt": step.attempt})
             self.telemetry.event(catalog_span, "handoff.payload_validated", {"agent.role": "catalog_search"})
             catalog = await invoke_validated(self.catalog_invoker, catalog_input, CatalogSearchResult)
+            refresh_governance_decisions(state, session)
             reject_ungrounded_catalog(catalog)
             if catalog_result_is_grounded(catalog):
                 self.telemetry.event(catalog_span, "step.completed", {"plan.step.id": "catalog"})
@@ -171,6 +192,7 @@ class ProcurementController:
                     catalog = await invoke_validated(
                         self.catalog_invoker, retry_input, CatalogSearchResult
                     )
+                    refresh_governance_decisions(state, session)
                     reject_ungrounded_catalog(catalog)
                     if catalog_result_is_grounded(catalog):
                         self.telemetry.event(retry_span, "step.completed", {"plan.step.id": "catalog"})
@@ -226,6 +248,7 @@ class ProcurementController:
             self.telemetry.event(code_span, "step.started", {"plan.step.id": "code", "execution.attempt": step.attempt})
             self.telemetry.event(code_span, "handoff.payload_validated", {"agent.role": "code_determination"})
             codes = await invoke_validated(self.code_invoker, code_input, CodeDeterminationResult)
+            refresh_governance_decisions(state, session)
             if codes.status.business_status == BusinessStatus.SUCCESS:
                 self.telemetry.event(code_span, "step.completed", {"plan.step.id": "code"})
             else:
@@ -272,11 +295,11 @@ class ProcurementController:
             if request.constraints.budget_limit is not None and draft.total > request.constraints.budget_limit:
                 executor.block("merge_validate", "budget limit exceeded")
                 self.telemetry.event(merge_span, "result.rejected", {"business.status": "VALIDATION_FAILED"})
-                validation_status = OperationStatus(
-                    business_status=BusinessStatus.VALIDATION_FAILED,
-                    failure_layer=FailureLayer.VALIDATION,
-                    reason_code="budget_limit_exceeded",
-                )
+                validation_status = codes.status.model_copy(update={
+                    "business_status": BusinessStatus.VALIDATION_FAILED,
+                    "failure_layer": FailureLayer.VALIDATION,
+                    "reason_code": "budget_limit_exceeded",
+                })
                 set_machine_status(
                     state, validation_status,
                     outer_technical=TechnicalStatus.SUCCESS,
@@ -293,7 +316,12 @@ class ProcurementController:
             self.telemetry.event(merge_span, "step.completed", {"plan.step.id": step.step_id})
         state.draft = draft
         executor.complete("merge_validate", output_refs=[draft.request_id], reason="validated application ready")
-        success_status = OperationStatus(business_status=BusinessStatus.SUCCESS)
+        success_status = codes.status.model_copy(update={
+            "business_status": BusinessStatus.SUCCESS,
+            "failure_layer": FailureLayer.NONE,
+            "reason_code": None,
+            "retryable": False,
+        })
         set_machine_status(
             state, success_status,
             outer_technical=TechnicalStatus.SUCCESS,

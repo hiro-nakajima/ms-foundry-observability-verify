@@ -13,6 +13,8 @@ from procurement_agent.models import (
 from procurement_agent.observability import TelemetryRecorder, truncate_export
 from procurement_agent.session_state import load_execution_state, restore_framework_session
 from trace_pipeline.detectors import DetectionOutcome, TraceFacts, detect, evaluate_all
+from trace_pipeline.envelope import RunIdentity
+from trace_pipeline.normalize import build_envelope
 from tests.fixtures.fake_agents import RecordedCatalogAgent, RecordedCodeAgent
 
 
@@ -34,19 +36,30 @@ async def test_s1_completes_validated_grounded_application_and_session_resume(va
     assert result.draft.total == 360000
     state = load_execution_state(session)
     assert state.plan.status == PlanStatus.COMPLETED
-    assert state.last_machine_response == {
-        "http_status": 200,
-        "technical_status": "SUCCESS",
-        "mcp_status": "NOT_RUN",
-        "search_status": "NOT_RUN",
-        "parse_status": "NOT_RUN",
-        "business_status": "SUCCESS",
-        "failure_layer": "NONE",
-        "retryable": False,
-        "reason_code": None,
-        "outer_technical_status": "SUCCESS",
-        "outer_business_status": "SUCCESS",
-    }
+    assert state.last_machine_response["http_status"] == 200
+    assert state.last_machine_response["mcp_status"] == "SUCCESS"
+    assert state.last_machine_response["search_status"] == "SUCCESS"
+    assert state.last_machine_response["parse_status"] == "SUCCESS"
+    assert state.last_machine_response["business_status"] == "SUCCESS"
+    assert state.last_machine_response["outer_technical_status"] == "SUCCESS"
+    assert state.last_machine_response["outer_business_status"] == "SUCCESS"
+    assert set(state.last_machine_response["step_statuses"]) == {"catalog", "code"}
+    assert all(
+        item["mcp_status"] == item["search_status"] == item["parse_status"] == "SUCCESS"
+        for item in state.last_machine_response["step_statuses"].values()
+    )
+    envelope = build_envelope(
+        run=RunIdentity(
+            run_id="run-s1-healthy", case_id="S1-HEALTHY", agent_role="coordinator",
+            agent_definition_name="procurement_parent_agent", agent_definition_version="1",
+            implementation_kind="hosted_framework",
+        ),
+        session=session, telemetry=recorder,
+        user_input=[], response={}, retrieved_contexts=[], system_prompt={},
+        tool_definitions=[], tool_calls=[], tool_output=[],
+    )
+    assert envelope.statuses["mcp_status"] == "SUCCESS"
+    assert set(envelope.statuses["step_statuses"]) == {"catalog", "code"}
     assert [event["name"] for event in result.trace["events"]].count("step.completed") == 3
     span_events = {event.name for span in recorder.finished_spans() for event in span.events}
     assert {"plan.created", "step.started", "handoff.payload_validated", "step.completed"} <= span_events
@@ -181,6 +194,22 @@ async def test_code_success_requires_account_and_department_evidence():
     ]
     with pytest.raises(ValidationError, match="account and department evidence"):
         CodeDeterminationResult.model_validate(payload)
+
+
+@pytest.mark.anyio
+async def test_child_result_cannot_change_parent_supplied_correlation(valid_request):
+    healthy = RecordedCatalogAgent()
+
+    async def forged_correlation(payload):
+        result = await healthy(payload)
+        raw = result.model_dump(mode="json")
+        raw["correlation"]["test_case_id"] = "FORGED-CASE"
+        return raw
+
+    with pytest.raises(ValueError, match="changed the supplied correlation"):
+        await ProcurementController(forged_correlation, RecordedCodeAgent()).execute(
+            valid_request, session=AgentSession(), test_case_id="CORRELATION-ORIGINAL",
+        )
 
 
 @pytest.mark.parametrize("fixture", ["s4-missing-category.json", "s4-missing-correlation.json"])

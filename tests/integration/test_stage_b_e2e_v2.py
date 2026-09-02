@@ -1,70 +1,58 @@
-"""Stage B injection harness over the real local Controller/boundary path."""
+"""Stage B injections over executed Controller and child-invoker artifacts."""
 
-from agent_framework import AgentSession
 import pytest
-from pydantic import ValidationError
 
-from procurement_agent.controller import ProcurementController
-from procurement_agent.models import CodeDeterminationInput, TechnicalStatus
-from trace_pipeline.detectors import DetectionOutcome, TraceFacts, detect
+from procurement_agent.models import BusinessStatus, TechnicalStatus
+from trace_pipeline.detectors import DetectionOutcome, detect
+from trace_pipeline.stage_b import StageBInjectionHarness, derive_trace_facts
 from tests.fixtures.fake_agents import RecordedCatalogAgent, RecordedCodeAgent
 
 
 @pytest.mark.anyio
 @pytest.mark.parametrize(
-    ("pattern_id", "scenario", "code_fixture", "overrides"),
+    ("pattern_id", "scenario", "catalog_fixture", "code_fixture"),
     [
-        ("TV-02", "S2", "code-not-found.json", {"validation_coverage_complete": False}),
-        ("TV-03", "S2", "code-business-invalid.json", {"evidence_consistent": False}),
-        ("SD-03", "S3", "code-healthy.json", {"duplicate_step": True}),
-        ("SD-05", "S3", "code-healthy.json", {"actions_after_terminal": 1}),
+        ("TV-02", "S2", "catalog-healthy.json", "code-not-found.json"),
+        ("TV-03", "S2", "catalog-healthy.json", "code-business-invalid.json"),
+        ("SD-03", "S3", "catalog-not-found.json", "code-healthy.json"),
+        ("SD-05", "S3", "catalog-not-found.json", "code-healthy.json"),
+        ("MA-04", "S4", "catalog-healthy.json", "code-healthy.json"),
+        ("MA-05", "S4", "catalog-healthy.json", "code-healthy.json"),
     ],
 )
-async def test_stage_b_controller_injections_are_semantic_not_technical(
-    valid_request, pattern_id, scenario, code_fixture, overrides
+async def test_stage_b_facts_are_derived_from_activated_execution(
+    valid_request, pattern_id, scenario, catalog_fixture, code_fixture,
 ):
-    catalog_fixture = "catalog-not-found.json" if scenario == "S3" else "catalog-healthy.json"
-    controller = ProcurementController(RecordedCatalogAgent(catalog_fixture), RecordedCodeAgent(code_fixture))
-    outer = await controller.execute(
-        valid_request, session=AgentSession(), test_case_id=f"{scenario}-{pattern_id}"
-    )
-    assert outer.technical_status == TechnicalStatus.SUCCESS
-    facts = TraceFacts(case_id=f"{scenario}-{pattern_id}", technical_status="SUCCESS", **overrides)
-    result = detect(pattern_id, facts, injection_requested=True, injection_activated=True)
-    assert result.outcome == DetectionOutcome.DETECTED
-
-
-@pytest.mark.anyio
-@pytest.mark.parametrize(
-    ("pattern_id", "payload", "facts"),
-    [
-        (
-            "MA-04",
-            {"selected_product_code":"LAPTOP-DEV-14","department_name":"開発部（架空部署）"},
-            {"handoff_required_fields_missing":["product_category"]},
-        ),
-        (
-            "MA-05",
-            None,
-            {"received_values_used":False},
-        ),
-    ],
-)
-async def test_stage_b_handoff_injections_keep_outer_agent_success(
-    valid_request, pattern_id, payload, facts
-):
-    if pattern_id == "MA-04":
-        with pytest.raises(ValidationError):
-            CodeDeterminationInput.model_validate(payload)
-    else:
-        outer = await ProcurementController(RecordedCatalogAgent(), RecordedCodeAgent()).execute(
-            valid_request, session=AgentSession(), test_case_id="S4-MA-05"
-        )
-        assert outer.technical_status == TechnicalStatus.SUCCESS
-    result = detect(
+    catalog = RecordedCatalogAgent(catalog_fixture)
+    code = RecordedCodeAgent(code_fixture)
+    artifact = await StageBInjectionHarness(
         pattern_id,
-        TraceFacts(case_id=f"S4-{pattern_id}", technical_status="SUCCESS", **facts),
-        injection_requested=True,
-        injection_activated=True,
+        catalog_invoker=catalog,
+        code_invoker=code,
+    ).run(valid_request, test_case_id=f"{scenario}-{pattern_id}")
+
+    assert artifact.result.technical_status == TechnicalStatus.SUCCESS
+    assert artifact.injection_activated is True
+    facts = derive_trace_facts(artifact)
+    detection = detect(
+        pattern_id, facts,
+        injection_requested=artifact.injection_requested,
+        injection_activated=artifact.injection_activated,
     )
-    assert result.outcome == DetectionOutcome.DETECTED
+    assert detection.outcome == DetectionOutcome.DETECTED
+
+    if pattern_id in {"TV-02", "TV-03"}:
+        assert artifact.result.business_status == BusinessStatus.SUCCESS
+        assert artifact.result.status.business_status != BusinessStatus.SUCCESS
+    elif pattern_id == "SD-03":
+        assert facts.duplicate_step is True
+        assert len(catalog.calls) == 3  # duplicated attempt 1 plus normal attempt 2
+    elif pattern_id == "SD-05":
+        assert facts.actions_after_terminal == 1
+        assert artifact.sequence[-1]["after_terminal"] is True
+    elif pattern_id == "MA-04":
+        assert facts.handoff_required_fields_missing == ["product_category"]
+        assert not code.calls
+    elif pattern_id == "MA-05":
+        assert facts.received_values_used is False
+        assert code.calls[0].department_name == "無視された部名（Stage B）"
