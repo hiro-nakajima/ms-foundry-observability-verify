@@ -13,8 +13,8 @@ from pydantic import BaseModel, ValidationError
 from .models import (
     ApplicationDraft, ApplicationLine, BusinessStatus, CatalogSearchInput,
     CatalogSearchResult, CodeDeterminationInput, CodeDeterminationResult,
-    CorrelationContext, ExecutionPlan, OperationStatus, ProcurementRequest,
-    ScenarioResult, TechnicalStatus, FailureLayer, ParseStatus,
+    CorrelationContext, ExecutionPlan, FailureLayer, McpStatus, OperationStatus,
+    ParseStatus, ProcurementRequest, ScenarioResult, SearchStatus, TechnicalStatus,
 )
 from .observability import TelemetryRecorder
 from .plan import PlanExecutor, StructuredPlanBuilder
@@ -32,6 +32,48 @@ class ChildCorrelationMismatchError(ValueError):
     def __init__(self, message: str, *, child_status: OperationStatus | None = None) -> None:
         super().__init__(message)
         self.child_status = child_status
+
+
+class ChildInvocationError(RuntimeError):
+    def __init__(self, *, status: OperationStatus, exception_type: str) -> None:
+        super().__init__(f"child invocation failed: {exception_type}")
+        self.status = status
+
+
+def classify_child_invocation_exception(exc: Exception) -> OperationStatus:
+    """Map proxy/transport failures without persisting exception content."""
+    if isinstance(exc, TimeoutError):
+        return OperationStatus(
+            technical_status=TechnicalStatus.ERROR,
+            mcp_status=McpStatus.TIMEOUT,
+            search_status=SearchStatus.NOT_RUN,
+            parse_status=ParseStatus.NOT_RUN,
+            business_status=BusinessStatus.BLOCKED,
+            failure_layer=FailureLayer.MCP,
+            retryable=True,
+            reason_code="child_transport_timeout",
+        )
+    if isinstance(exc, PermissionError):
+        return OperationStatus(
+            technical_status=TechnicalStatus.ERROR,
+            mcp_status=McpStatus.ERROR,
+            search_status=SearchStatus.NOT_RUN,
+            parse_status=ParseStatus.NOT_RUN,
+            business_status=BusinessStatus.BLOCKED,
+            failure_layer=FailureLayer.MCP,
+            retryable=False,
+            reason_code="child_transport_permission_denied",
+        )
+    return OperationStatus(
+        technical_status=TechnicalStatus.ERROR,
+        mcp_status=McpStatus.ERROR,
+        search_status=SearchStatus.NOT_RUN,
+        parse_status=ParseStatus.NOT_RUN,
+        business_status=BusinessStatus.BLOCKED,
+        failure_layer=FailureLayer.MCP,
+        retryable=False,
+        reason_code="child_invocation_error",
+    )
 
 
 def catalog_result_is_grounded(result: CatalogSearchResult) -> bool:
@@ -154,6 +196,11 @@ async def invoke_validated(invoker: StructuredInvoker, payload: BaseModel, resul
         raise StructuredChildOutputError(
             f"structured child output failed boundary validation: {error_count}"
         ) from exc
+    except Exception as exc:
+        raise ChildInvocationError(
+            status=classify_child_invocation_exception(exc),
+            exception_type=type(exc).__name__,
+        ) from exc
     input_correlation = getattr(validated_input, "correlation", None)
     result_correlation = getattr(result, "correlation", None)
     if input_correlation is not None and result_correlation != input_correlation:
@@ -194,19 +241,27 @@ class ProcurementController:
             self.telemetry.event(span, "response.status", attributes)
 
     def _boundary_failure_result(
-        self, *, exc: StructuredChildOutputError | ChildCorrelationMismatchError,
+        self, *, exc: StructuredChildOutputError | ChildCorrelationMismatchError | ChildInvocationError,
         executor: PlanExecutor, state: Any, session: AgentSession,
         test_case_id: str, step_id: str,
     ) -> ScenarioResult:
         refresh_governance_decisions(state, session)
         executor.block(step_id, str(exc))
-        if isinstance(exc, ChildCorrelationMismatchError) and exc.child_status is not None:
+        if isinstance(exc, ChildInvocationError):
+            status = exc.status
+            scenario_id = "S2"
+            outer_technical = TechnicalStatus.ERROR
+            next_action = "子Agent proxyの認証、接続、MCP transportを確認して再実行する"
+        elif isinstance(exc, ChildCorrelationMismatchError) and exc.child_status is not None:
             status = exc.child_status.model_copy(update={
                 "business_status": BusinessStatus.BLOCKED,
                 "failure_layer": FailureLayer.VALIDATION,
                 "retryable": False,
                 "reason_code": "child_correlation_mismatch",
             })
+            scenario_id = "S4"
+            outer_technical = TechnicalStatus.SUCCESS
+            next_action = "Structured child outputとcorrelationを修正して再実行する"
         else:
             status = OperationStatus(
                 technical_status=TechnicalStatus.ERROR,
@@ -215,18 +270,21 @@ class ProcurementController:
                 failure_layer=FailureLayer.PARSE,
                 reason_code="child_output_schema_invalid",
             )
+            scenario_id = "S4"
+            outer_technical = TechnicalStatus.SUCCESS
+            next_action = "Structured child outputとcorrelationを修正して再実行する"
         self._finalize_status(
             state=state, session=session, test_case_id=test_case_id,
-            status=status, outer_technical=TechnicalStatus.SUCCESS,
+            status=status, outer_technical=outer_technical,
             outer_business=BusinessStatus.BLOCKED,
         )
         return ScenarioResult(
-            scenario_id="S4", test_case_id=test_case_id,
-            technical_status=TechnicalStatus.SUCCESS,
+            scenario_id=scenario_id, test_case_id=test_case_id,
+            technical_status=outer_technical,
             business_status=BusinessStatus.BLOCKED,
             status=status,
             trace={"events": executor.events},
-            next_action="Structured child outputとcorrelationを修正して再実行する",
+            next_action=next_action,
         )
 
     async def execute(
@@ -276,7 +334,7 @@ class ProcurementController:
             self.telemetry.event(catalog_span, "handoff.payload_validated", {"agent.role": "catalog_search"})
             try:
                 catalog = await invoke_validated(self.catalog_invoker, catalog_input, CatalogSearchResult)
-            except (StructuredChildOutputError, ChildCorrelationMismatchError) as exc:
+            except (StructuredChildOutputError, ChildCorrelationMismatchError, ChildInvocationError) as exc:
                 self.telemetry.event(catalog_span, "handoff.output_rejected", {"reason": str(exc)})
                 return self._boundary_failure_result(
                     exc=exc, executor=executor, state=state, session=session,
@@ -293,7 +351,8 @@ class ProcurementController:
                 self.telemetry.event(catalog_span, "step.completed", {"plan.step.id": "catalog"})
             else:
                 self.telemetry.event(catalog_span, "result.rejected", {"business.status": catalog.status.business_status})
-                self.telemetry.event(catalog_span, "step.retry_scheduled", {"execution.attempt": step.attempt + 1})
+                if catalog.status.business_status == BusinessStatus.NOT_FOUND or catalog.status.retryable:
+                    self.telemetry.event(catalog_span, "step.retry_scheduled", {"execution.attempt": step.attempt + 1})
         state.catalog_result = catalog
         if not catalog_result_is_grounded(catalog):
             should_retry = (
@@ -342,7 +401,7 @@ class ProcurementController:
                         catalog = await invoke_validated(
                             self.catalog_invoker, retry_input, CatalogSearchResult
                         )
-                    except (StructuredChildOutputError, ChildCorrelationMismatchError) as exc:
+                    except (StructuredChildOutputError, ChildCorrelationMismatchError, ChildInvocationError) as exc:
                         self.telemetry.event(retry_span, "handoff.output_rejected", {"reason": str(exc)})
                         return self._boundary_failure_result(
                             exc=exc, executor=executor, state=state, session=session,
@@ -418,7 +477,7 @@ class ProcurementController:
             self.telemetry.event(code_span, "handoff.payload_validated", {"agent.role": "code_determination"})
             try:
                 codes = await invoke_validated(self.code_invoker, code_input, CodeDeterminationResult)
-            except (StructuredChildOutputError, ChildCorrelationMismatchError) as exc:
+            except (StructuredChildOutputError, ChildCorrelationMismatchError, ChildInvocationError) as exc:
                 self.telemetry.event(code_span, "handoff.output_rejected", {"reason": str(exc)})
                 return self._boundary_failure_result(
                     exc=exc, executor=executor, state=state, session=session,

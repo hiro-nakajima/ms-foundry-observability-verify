@@ -154,6 +154,79 @@ async def test_s3_transient_catalog_not_found_recovers_on_real_retry(valid_reque
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("failure", "reason_code", "mcp_status", "retryable"),
+    [
+        (TimeoutError("synthetic timeout"), "child_transport_timeout", McpStatus.TIMEOUT, True),
+        (PermissionError("synthetic denied"), "child_transport_permission_denied", McpStatus.ERROR, False),
+        (RuntimeError("synthetic runtime"), "child_invocation_error", McpStatus.ERROR, False),
+    ],
+)
+async def test_child_transport_exception_is_terminal_and_observable(
+    valid_request, failure, reason_code, mcp_status, retryable,
+):
+    async def failing_child(_payload):
+        raise failure
+
+    session = AgentSession()
+    controller = ProcurementController(failing_child, RecordedCodeAgent())
+    result = await controller.execute(
+        valid_request, session=session, test_case_id=f"CHILD-{reason_code}",
+    )
+
+    assert result.scenario_id == "S2"
+    assert result.technical_status == TechnicalStatus.ERROR
+    assert result.business_status == BusinessStatus.BLOCKED
+    assert result.status.reason_code == reason_code
+    assert result.status.mcp_status == mcp_status
+    assert result.status.retryable is retryable
+    state = load_execution_state(session)
+    assert state.plan.status == PlanStatus.BLOCKED
+    assert state.plan.steps[0].status == PlanStatus.BLOCKED
+    assert state.last_machine_response["reason_code"] == reason_code
+    assert not any(
+        event.name == "step.retry_scheduled"
+        for span in controller.telemetry.finished_spans()
+        for event in span.events
+    )
+    response_span = next(
+        span for span in controller.telemetry.finished_spans()
+        if span.name == "response.generate"
+    )
+    assert response_span.attributes["technical.status"] == TechnicalStatus.ERROR
+    assert response_span.attributes["mcp.status"] == mcp_status
+
+
+@pytest.mark.anyio
+async def test_non_retryable_catalog_rejection_does_not_emit_retry_scheduled(valid_request):
+    async def rejected(payload):
+        value = CatalogSearchInput.model_validate(payload)
+        return CatalogSearchResult(
+            correlation=value.correlation,
+            status=OperationStatus(
+                technical_status=TechnicalStatus.ERROR,
+                mcp_status=McpStatus.ERROR,
+                business_status=BusinessStatus.BLOCKED,
+                failure_layer=FailureLayer.MCP,
+                retryable=False,
+                reason_code="catalog_transport_failed",
+            ),
+        )
+
+    controller = ProcurementController(rejected, RecordedCodeAgent())
+    result = await controller.execute(
+        valid_request, session=AgentSession(), test_case_id="CATALOG-NO-RETRY",
+    )
+
+    assert result.scenario_id == "S2"
+    assert not any(
+        event.name == "step.retry_scheduled"
+        for span in controller.telemetry.finished_spans()
+        for event in span.events
+    )
+
+
+@pytest.mark.anyio
 async def test_catalog_success_without_matching_evidence_is_rejected(valid_request):
     healthy = RecordedCatalogAgent()
     code = RecordedCodeAgent()
