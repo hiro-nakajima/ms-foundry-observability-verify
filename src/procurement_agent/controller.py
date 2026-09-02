@@ -76,8 +76,20 @@ def classify_child_invocation_exception(exc: Exception) -> OperationStatus:
     )
 
 
+def child_operation_succeeded(status: OperationStatus) -> bool:
+    """Require coherent success across every child operation status layer."""
+    return (
+        status.technical_status == TechnicalStatus.SUCCESS
+        and status.mcp_status == McpStatus.SUCCESS
+        and status.search_status == SearchStatus.SUCCESS
+        and status.parse_status == ParseStatus.SUCCESS
+        and status.business_status == BusinessStatus.SUCCESS
+        and status.failure_layer == FailureLayer.NONE
+    )
+
+
 def catalog_result_is_grounded(result: CatalogSearchResult) -> bool:
-    if result.status.business_status != BusinessStatus.SUCCESS or not result.selected_product_code:
+    if not child_operation_succeeded(result.status) or not result.selected_product_code:
         return False
     selected = next(
         (item for item in result.candidates if item.product_code == result.selected_product_code),
@@ -93,7 +105,7 @@ def catalog_result_is_grounded(result: CatalogSearchResult) -> bool:
 
 
 def reject_ungrounded_catalog(result: CatalogSearchResult) -> None:
-    if result.status.business_status == BusinessStatus.SUCCESS and not catalog_result_is_grounded(result):
+    if child_operation_succeeded(result.status) and not catalog_result_is_grounded(result):
         result.status.business_status = BusinessStatus.VALIDATION_FAILED
         result.status.failure_layer = FailureLayer.VALIDATION
         result.status.reason_code = "catalog_evidence_missing_or_unrelated"
@@ -494,18 +506,23 @@ class ProcurementController:
             else:
                 self.telemetry.event(code_span, "result.rejected", {"business.status": codes.status.business_status})
         state.code_result = codes
-        if codes.status.business_status != BusinessStatus.SUCCESS:
+        if not child_operation_succeeded(codes.status):
             executor.block("code", codes.status.reason_code or "code determination failed")
+            outer_business = (
+                codes.status.business_status
+                if codes.status.business_status != BusinessStatus.SUCCESS
+                else BusinessStatus.BLOCKED
+            )
             self._finalize_status(
                 state=state, session=session, test_case_id=test_case_id,
                 status=codes.status,
                 outer_technical=codes.status.technical_status,
-                outer_business=codes.status.business_status,
+                outer_business=outer_business,
             )
             return ScenarioResult(
                 scenario_id="S2", test_case_id=test_case_id,
                 technical_status=codes.status.technical_status,
-                business_status=codes.status.business_status,
+                business_status=outer_business,
                 status=codes.status, trace={"events": executor.events},
                 next_action="Failure profileを解除し、Code Toolbox/Search/parse/validation層を確認して再実行する",
             )

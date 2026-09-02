@@ -1,4 +1,4 @@
-from agent_framework import AgentSession
+from agent_framework import AgentSession, InMemoryHistoryProvider
 import json
 from pathlib import Path
 import pytest
@@ -48,13 +48,15 @@ async def test_s1_completes_validated_grounded_application_and_session_resume(va
         item["mcp_status"] == item["search_status"] == item["parse_status"] == "SUCCESS"
         for item in state.last_machine_response["step_statuses"].values()
     )
-    envelope = build_envelope(
+    envelope = await build_envelope(
         run=RunIdentity(
             run_id="run-s1-healthy", case_id="S1-HEALTHY", agent_role="coordinator",
             agent_definition_name="procurement_parent_agent", agent_definition_version="1",
             implementation_kind="hosted_framework",
         ),
-        session=session, telemetry=recorder,
+        session=session,
+        history_provider=InMemoryHistoryProvider("procurement-history", load_messages=True),
+        telemetry=recorder,
         user_input=[], response={}, retrieved_contexts=[], system_prompt={},
         tool_definitions=[], tool_calls=[], tool_output=[],
     )
@@ -224,6 +226,51 @@ async def test_non_retryable_catalog_rejection_does_not_emit_retry_scheduled(val
         for span in controller.telemetry.finished_spans()
         for event in span.events
     )
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("failed_step", ["catalog", "code"])
+async def test_inconsistent_child_success_status_is_rejected(valid_request, failed_step):
+    healthy_catalog = RecordedCatalogAgent()
+    healthy_code = RecordedCodeAgent()
+
+    async def inconsistent_catalog(payload):
+        result = await healthy_catalog(payload)
+        result.status = result.status.model_copy(update={
+            "technical_status": TechnicalStatus.ERROR,
+            "mcp_status": McpStatus.TIMEOUT,
+            "failure_layer": FailureLayer.MCP,
+            "reason_code": "inconsistent_catalog_status",
+        })
+        return result
+
+    async def inconsistent_code(payload):
+        result = await healthy_code(payload)
+        result.status = result.status.model_copy(update={
+            "technical_status": TechnicalStatus.ERROR,
+            "mcp_status": McpStatus.TIMEOUT,
+            "failure_layer": FailureLayer.MCP,
+            "reason_code": "inconsistent_code_status",
+        })
+        return result
+
+    controller = ProcurementController(
+        inconsistent_catalog if failed_step == "catalog" else healthy_catalog,
+        inconsistent_code if failed_step == "code" else healthy_code,
+    )
+    session = AgentSession()
+    result = await controller.execute(
+        valid_request, session=session, test_case_id=f"INCONSISTENT-{failed_step}",
+    )
+
+    assert result.scenario_id == "S2"
+    assert result.technical_status == TechnicalStatus.ERROR
+    assert result.business_status == BusinessStatus.BLOCKED
+    assert result.draft is None
+    assert result.status.business_status == BusinessStatus.SUCCESS
+    state = load_execution_state(session)
+    assert state.plan.status == PlanStatus.BLOCKED
+    assert state.last_machine_response["outer_business_status"] == "BLOCKED"
 
 
 @pytest.mark.anyio

@@ -1,4 +1,5 @@
-from agent_framework import AgentSession, Message
+import pytest
+from agent_framework import AgentSession, InMemoryHistoryProvider, Message
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -13,7 +14,8 @@ from trace_pipeline.envelope import RunIdentity
 from trace_pipeline.normalize import build_envelope
 
 
-def test_v3_envelope_uses_framework_session_and_no_logical_pattern():
+@pytest.mark.anyio
+async def test_v3_envelope_uses_framework_session_and_no_logical_pattern():
     session = AgentSession()
     state = initialize_execution_state(session, test_case_id="TRACE-V3")
     state.turn_number = 2
@@ -28,13 +30,18 @@ def test_v3_envelope_uses_framework_session_and_no_logical_pattern():
         status=OperationStatus(business_status=BusinessStatus.NOT_FOUND),
     )
     save_execution_state(session, state)
-    session.state["messages"] = [Message(role="user", contents=["synthetic request"])]
+    history = InMemoryHistoryProvider("procurement-history", load_messages=True)
+    await history.save_messages(
+        session.session_id,
+        [Message(role="user", contents=["synthetic request"])],
+        state=session.state,
+    )
     telemetry = TelemetryRecorder(content_profile="production-like-content-off")
     with telemetry.span("plan.create", {"test.case.id": "TRACE-V3"}):
         pass
-    envelope = build_envelope(
+    envelope = await build_envelope(
         run=RunIdentity(run_id="run-1", case_id="TRACE-V3", agent_role="coordinator", agent_definition_name="procurement_parent_agent", agent_definition_version="1", implementation_kind="hosted_framework"),
-        session=session, telemetry=telemetry,
+        session=session, history_provider=history, telemetry=telemetry,
         user_input=[{"sha256":"a"}], response={"sha256":"b"}, retrieved_contexts=[{"document_id":"d"}],
         system_prompt={"version":"1"}, tool_definitions=[{"name":"catalog_search_agent"}],
         tool_calls=[{"name":"catalog_search_agent"}], tool_output=[{"status":"SUCCESS"}],
@@ -55,7 +62,8 @@ def test_v3_envelope_uses_framework_session_and_no_logical_pattern():
     assert payload["correlation"]["child_invocations"][0]["step_id"] == "catalog"
 
 
-def test_v3_envelope_scopes_reused_recorder_to_current_case():
+@pytest.mark.anyio
+async def test_v3_envelope_scopes_reused_recorder_to_current_case():
     session = AgentSession()
     state = initialize_execution_state(session, test_case_id="TRACE-CASE-2")
     state.turn_number = 2
@@ -67,9 +75,11 @@ def test_v3_envelope_scopes_reused_recorder_to_current_case():
     with telemetry.span("plan.create", {"test.case.id": "TRACE-CASE-2"}) as current:
         pass
 
-    envelope = build_envelope(
+    envelope = await build_envelope(
         run=RunIdentity(run_id="run-2", case_id="TRACE-CASE-2", agent_role="coordinator", agent_definition_name="procurement_parent_agent", agent_definition_version="1", implementation_kind="hosted_framework"),
-        session=session, telemetry=telemetry,
+        session=session,
+        history_provider=InMemoryHistoryProvider("procurement-history", load_messages=True),
+        telemetry=telemetry,
         user_input=[], response={}, retrieved_contexts=[], system_prompt={},
         tool_definitions=[], tool_calls=[], tool_output=[],
     )

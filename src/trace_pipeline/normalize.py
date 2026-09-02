@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 from typing import Any
 
-from agent_framework import AgentSession
+from agent_framework import AgentSession, HistoryProvider
 
 from procurement_agent.observability import TelemetryRecorder
 from procurement_agent.session_state import load_execution_state
@@ -28,8 +28,9 @@ def _span_to_dict(span) -> dict[str, Any]:
     }
 
 
-def build_envelope(
-    *, run: RunIdentity, session: AgentSession, telemetry: TelemetryRecorder,
+async def build_envelope(
+    *, run: RunIdentity, session: AgentSession, history_provider: HistoryProvider,
+    telemetry: TelemetryRecorder,
     user_input: list[dict[str, Any]], response: dict[str, Any],
     retrieved_contexts: list[dict[str, Any]], system_prompt: dict[str, Any],
     tool_definitions: list[dict[str, Any]], tool_calls: list[dict[str, Any]],
@@ -53,8 +54,11 @@ def build_envelope(
             if child_result is not None and child_result.correlation not in child_correlations:
                 child_correlations.append(child_result.correlation)
     child_correlation = child_correlations[-1] if child_correlations else None
+    history_messages = await history_provider.get_messages(
+        session.session_id, state=session.state,
+    )
     conversation = []
-    for turn_index, message in enumerate(session.state.get("messages", []), start=1):
+    for turn_index, message in enumerate(history_messages, start=1):
         if isinstance(message, dict):
             role = str(message.get("role", "unknown"))
             content = str(message.get("text") or message.get("contents") or "")
