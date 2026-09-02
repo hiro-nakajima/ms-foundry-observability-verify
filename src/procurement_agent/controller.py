@@ -14,7 +14,7 @@ from .models import (
     ApplicationDraft, ApplicationLine, BusinessStatus, CatalogSearchInput,
     CatalogSearchResult, CodeDeterminationInput, CodeDeterminationResult,
     CorrelationContext, ExecutionPlan, OperationStatus, ProcurementRequest,
-    ScenarioResult, TechnicalStatus, FailureLayer,
+    ScenarioResult, TechnicalStatus, FailureLayer, ParseStatus,
 )
 from .observability import TelemetryRecorder
 from .plan import PlanExecutor, StructuredPlanBuilder
@@ -22,6 +22,16 @@ from .session_state import initialize_execution_state, load_execution_state, sav
 
 T = TypeVar("T", bound=BaseModel)
 StructuredInvoker = Callable[[BaseModel], Awaitable[dict[str, Any] | BaseModel]]
+
+
+class StructuredChildOutputError(ValueError):
+    pass
+
+
+class ChildCorrelationMismatchError(ValueError):
+    def __init__(self, message: str, *, child_status: OperationStatus | None = None) -> None:
+        super().__init__(message)
+        self.child_status = child_status
 
 
 def catalog_result_is_grounded(result: CatalogSearchResult) -> bool:
@@ -64,6 +74,51 @@ def set_machine_status(
     }
 
 
+def operation_status_attributes(
+    status: OperationStatus, *, outer_technical: TechnicalStatus,
+    outer_business: BusinessStatus,
+) -> dict[str, Any]:
+    return {
+        "http.status_code": status.http_status,
+        "technical.status": status.technical_status.value,
+        "outer.technical.status": outer_technical.value,
+        "mcp.status": status.mcp_status.value,
+        "search.status": status.search_status.value,
+        "parse.status": status.parse_status.value,
+        "business.status": outer_business.value,
+        "inner.business.status": status.business_status.value,
+        "failure.layer": status.failure_layer.value,
+        "retryable": status.retryable,
+        "reason.code": status.reason_code or "none",
+    }
+
+
+def correlation_attributes(value: CorrelationContext) -> dict[str, Any]:
+    return {
+        "test.case.id": value.test_case_id,
+        "app.session.id": value.framework_session_id,
+        "app.turn.number": value.turn_number,
+        "plan.id": value.plan_id,
+        "plan.version": value.plan_version,
+        "plan.step.id": value.step_id,
+        "execution.attempt": value.attempt,
+        "parent.invocation.id": value.parent_invocation_id,
+        "remote.task.id": value.remote_task_id,
+    }
+
+
+def apply_operation_status(
+    span: Any, status: OperationStatus, *, outer_technical: TechnicalStatus,
+    outer_business: BusinessStatus,
+) -> None:
+    for key, value in operation_status_attributes(
+        status,
+        outer_technical=outer_technical,
+        outer_business=outer_business,
+    ).items():
+        span.set_attribute(key, value)
+
+
 def refresh_governance_decisions(state: Any, session: AgentSession) -> None:
     """Merge FunctionMiddleware mutations before the Controller saves its state copy."""
     persisted = load_execution_state(session, required=True)
@@ -89,17 +144,23 @@ def correlation(*, state, session: AgentSession, step_id: str, attempt: int) -> 
 async def invoke_validated(invoker: StructuredInvoker, payload: BaseModel, result_type: type[T]) -> T:
     """Validate both sides of the parent/child boundary before state mutation."""
     validated_input = type(payload).model_validate(payload.model_dump(mode="json"))
-    raw = await invoker(validated_input)
     try:
+        raw = await invoker(validated_input)
         result = result_type.model_validate(
             raw.model_dump(mode="json") if isinstance(raw, BaseModel) else raw
         )
-    except ValidationError as exc:
-        raise ValueError(f"structured child output failed boundary validation: {exc.error_count()}") from exc
+    except (ValidationError, json.JSONDecodeError) as exc:
+        error_count = exc.error_count() if isinstance(exc, ValidationError) else 1
+        raise StructuredChildOutputError(
+            f"structured child output failed boundary validation: {error_count}"
+        ) from exc
     input_correlation = getattr(validated_input, "correlation", None)
     result_correlation = getattr(result, "correlation", None)
     if input_correlation is not None and result_correlation != input_correlation:
-        raise ValueError("structured child output changed the supplied correlation")
+        raise ChildCorrelationMismatchError(
+            "structured child output changed the supplied correlation",
+            child_status=getattr(result, "status", None),
+        )
     return result
 
 
@@ -108,6 +169,65 @@ class ProcurementController:
         self.catalog_invoker = catalog_invoker
         self.code_invoker = code_invoker
         self.telemetry = telemetry or TelemetryRecorder()
+
+    def _finalize_status(
+        self, *, state: Any, session: AgentSession, test_case_id: str,
+        status: OperationStatus, outer_technical: TechnicalStatus,
+        outer_business: BusinessStatus,
+    ) -> None:
+        set_machine_status(
+            state, status,
+            outer_technical=outer_technical,
+            outer_business=outer_business,
+        )
+        save_execution_state(session, state)
+        attributes = {
+            "test.case.id": test_case_id,
+            "plan.id": state.plan.plan_id if state.plan else "none",
+            **operation_status_attributes(
+                status,
+                outer_technical=outer_technical,
+                outer_business=outer_business,
+            ),
+        }
+        with self.telemetry.span("response.generate", attributes) as span:
+            self.telemetry.event(span, "response.status", attributes)
+
+    def _boundary_failure_result(
+        self, *, exc: StructuredChildOutputError | ChildCorrelationMismatchError,
+        executor: PlanExecutor, state: Any, session: AgentSession,
+        test_case_id: str, step_id: str,
+    ) -> ScenarioResult:
+        refresh_governance_decisions(state, session)
+        executor.block(step_id, str(exc))
+        if isinstance(exc, ChildCorrelationMismatchError) and exc.child_status is not None:
+            status = exc.child_status.model_copy(update={
+                "business_status": BusinessStatus.BLOCKED,
+                "failure_layer": FailureLayer.VALIDATION,
+                "retryable": False,
+                "reason_code": "child_correlation_mismatch",
+            })
+        else:
+            status = OperationStatus(
+                technical_status=TechnicalStatus.ERROR,
+                parse_status=ParseStatus.SCHEMA_INVALID,
+                business_status=BusinessStatus.BLOCKED,
+                failure_layer=FailureLayer.PARSE,
+                reason_code="child_output_schema_invalid",
+            )
+        self._finalize_status(
+            state=state, session=session, test_case_id=test_case_id,
+            status=status, outer_technical=TechnicalStatus.SUCCESS,
+            outer_business=BusinessStatus.BLOCKED,
+        )
+        return ScenarioResult(
+            scenario_id="S4", test_case_id=test_case_id,
+            technical_status=TechnicalStatus.SUCCESS,
+            business_status=BusinessStatus.BLOCKED,
+            status=status,
+            trace={"events": executor.events},
+            next_action="Structured child outputとcorrelationを修正して再実行する",
+        )
 
     async def execute(
         self, request: ProcurementRequest, *, session: AgentSession | None,
@@ -127,6 +247,7 @@ class ProcurementController:
         state.code_result = None
         state.draft = None
         state.evidence_refs = []
+        state.child_correlations = []
         state.last_machine_response = None
         with self.telemetry.span("plan.create", {"test.case.id": test_case_id, "app.session.id": session.session_id, "app.turn.number": state.turn_number}) as span:
             state.plan = StructuredPlanBuilder().build(raw_plan)
@@ -142,12 +263,32 @@ class ProcurementController:
             query=request.query, quantity=request.quantity, constraints=request.constraints,
             correlation=correlation(state=state, session=session, step_id="catalog", attempt=step.attempt),
         )
-        with self.telemetry.span("plan.step.execute", {"test.case.id": test_case_id, "plan.id": state.plan.plan_id, "plan.version": state.plan.version, "plan.step.id": "catalog", "execution.attempt": step.attempt, "agent.role": "catalog_search"}) as catalog_span:
+        state.child_correlations.append(catalog_input.correlation)
+        save_execution_state(session, state)
+        with self.telemetry.span("plan.step.execute", {
+            **correlation_attributes(catalog_input.correlation),
+            "agent.role": "catalog_search",
+            "agent.definition.id": "catalog_search_agent",
+            "toolbox.name": "catalog-search-toolbox",
+            "search.index.name": "procurement-catalog-v1",
+        }) as catalog_span:
             self.telemetry.event(catalog_span, "step.started", {"plan.step.id": "catalog", "execution.attempt": step.attempt})
             self.telemetry.event(catalog_span, "handoff.payload_validated", {"agent.role": "catalog_search"})
-            catalog = await invoke_validated(self.catalog_invoker, catalog_input, CatalogSearchResult)
+            try:
+                catalog = await invoke_validated(self.catalog_invoker, catalog_input, CatalogSearchResult)
+            except (StructuredChildOutputError, ChildCorrelationMismatchError) as exc:
+                self.telemetry.event(catalog_span, "handoff.output_rejected", {"reason": str(exc)})
+                return self._boundary_failure_result(
+                    exc=exc, executor=executor, state=state, session=session,
+                    test_case_id=test_case_id, step_id="catalog",
+                )
             refresh_governance_decisions(state, session)
             reject_ungrounded_catalog(catalog)
+            apply_operation_status(
+                catalog_span, catalog.status,
+                outer_technical=catalog.status.technical_status,
+                outer_business=catalog.status.business_status,
+            )
             if catalog_result_is_grounded(catalog):
                 self.telemetry.event(catalog_span, "step.completed", {"plan.step.id": "catalog"})
             else:
@@ -161,12 +302,12 @@ class ProcurementController:
             )
             if not should_retry:
                 executor.block("catalog", catalog.status.reason_code or "catalog result rejected")
-                set_machine_status(
-                    state, catalog.status,
+                self._finalize_status(
+                    state=state, session=session, test_case_id=test_case_id,
+                    status=catalog.status,
                     outer_technical=catalog.status.technical_status,
                     outer_business=BusinessStatus.BLOCKED,
                 )
-                save_execution_state(session, state)
                 return ScenarioResult(
                     scenario_id="S2", test_case_id=test_case_id,
                     technical_status=catalog.status.technical_status,
@@ -186,14 +327,34 @@ class ProcurementController:
                         state=state, session=session, step_id="catalog", attempt=step.attempt
                     ),
                 )
-                with self.telemetry.span("plan.step.execute", {"test.case.id": test_case_id, "plan.id": state.plan.plan_id, "plan.version": state.plan.version, "plan.step.id": "catalog", "execution.attempt": step.attempt, "agent.role": "catalog_search"}) as retry_span:
+                state.child_correlations.append(retry_input.correlation)
+                save_execution_state(session, state)
+                with self.telemetry.span("plan.step.execute", {
+                    **correlation_attributes(retry_input.correlation),
+                    "agent.role": "catalog_search",
+                    "agent.definition.id": "catalog_search_agent",
+                    "toolbox.name": "catalog-search-toolbox",
+                    "search.index.name": "procurement-catalog-v1",
+                }) as retry_span:
                     self.telemetry.event(retry_span, "step.started", {"plan.step.id": "catalog", "execution.attempt": step.attempt})
                     self.telemetry.event(retry_span, "handoff.payload_validated", {"agent.role": "catalog_search"})
-                    catalog = await invoke_validated(
-                        self.catalog_invoker, retry_input, CatalogSearchResult
-                    )
+                    try:
+                        catalog = await invoke_validated(
+                            self.catalog_invoker, retry_input, CatalogSearchResult
+                        )
+                    except (StructuredChildOutputError, ChildCorrelationMismatchError) as exc:
+                        self.telemetry.event(retry_span, "handoff.output_rejected", {"reason": str(exc)})
+                        return self._boundary_failure_result(
+                            exc=exc, executor=executor, state=state, session=session,
+                            test_case_id=test_case_id, step_id="catalog",
+                        )
                     refresh_governance_decisions(state, session)
                     reject_ungrounded_catalog(catalog)
+                    apply_operation_status(
+                        retry_span, catalog.status,
+                        outer_technical=catalog.status.technical_status,
+                        outer_business=catalog.status.business_status,
+                    )
                     if catalog_result_is_grounded(catalog):
                         self.telemetry.event(retry_span, "step.completed", {"plan.step.id": "catalog"})
                     else:
@@ -217,12 +378,12 @@ class ProcurementController:
                     outer_business = BusinessStatus.BLOCKED
                     scenario_id = "S2"
                     next_action = "Catalog Toolbox/Search/parse/validation層を確認して再実行する"
-                set_machine_status(
-                    state, catalog.status,
+                self._finalize_status(
+                    state=state, session=session, test_case_id=test_case_id,
+                    status=catalog.status,
                     outer_technical=catalog.status.technical_status,
                     outer_business=outer_business,
                 )
-                save_execution_state(session, state)
                 return ScenarioResult(
                     scenario_id=scenario_id, test_case_id=test_case_id,
                     technical_status=catalog.status.technical_status,
@@ -244,11 +405,31 @@ class ProcurementController:
             department_name=request.department_name,
             correlation=correlation(state=state, session=session, step_id="code", attempt=step.attempt),
         )
-        with self.telemetry.span("plan.step.execute", {"test.case.id": test_case_id, "plan.id": state.plan.plan_id, "plan.version": state.plan.version, "plan.step.id": "code", "execution.attempt": step.attempt, "agent.role": "code_determination"}) as code_span:
+        state.child_correlations.append(code_input.correlation)
+        save_execution_state(session, state)
+        with self.telemetry.span("plan.step.execute", {
+            **correlation_attributes(code_input.correlation),
+            "agent.role": "code_determination",
+            "agent.definition.id": "code_determination_agent",
+            "toolbox.name": "code-master-toolbox",
+            "search.index.name": "procurement-code-master-v1",
+        }) as code_span:
             self.telemetry.event(code_span, "step.started", {"plan.step.id": "code", "execution.attempt": step.attempt})
             self.telemetry.event(code_span, "handoff.payload_validated", {"agent.role": "code_determination"})
-            codes = await invoke_validated(self.code_invoker, code_input, CodeDeterminationResult)
+            try:
+                codes = await invoke_validated(self.code_invoker, code_input, CodeDeterminationResult)
+            except (StructuredChildOutputError, ChildCorrelationMismatchError) as exc:
+                self.telemetry.event(code_span, "handoff.output_rejected", {"reason": str(exc)})
+                return self._boundary_failure_result(
+                    exc=exc, executor=executor, state=state, session=session,
+                    test_case_id=test_case_id, step_id="code",
+                )
             refresh_governance_decisions(state, session)
+            apply_operation_status(
+                code_span, codes.status,
+                outer_technical=codes.status.technical_status,
+                outer_business=codes.status.business_status,
+            )
             if codes.status.business_status == BusinessStatus.SUCCESS:
                 self.telemetry.event(code_span, "step.completed", {"plan.step.id": "code"})
             else:
@@ -256,12 +437,12 @@ class ProcurementController:
         state.code_result = codes
         if codes.status.business_status != BusinessStatus.SUCCESS:
             executor.block("code", codes.status.reason_code or "code determination failed")
-            set_machine_status(
-                state, codes.status,
+            self._finalize_status(
+                state=state, session=session, test_case_id=test_case_id,
+                status=codes.status,
                 outer_technical=codes.status.technical_status,
                 outer_business=codes.status.business_status,
             )
-            save_execution_state(session, state)
             return ScenarioResult(
                 scenario_id="S2", test_case_id=test_case_id,
                 technical_status=codes.status.technical_status,
@@ -300,12 +481,12 @@ class ProcurementController:
                     "failure_layer": FailureLayer.VALIDATION,
                     "reason_code": "budget_limit_exceeded",
                 })
-                set_machine_status(
-                    state, validation_status,
+                self._finalize_status(
+                    state=state, session=session, test_case_id=test_case_id,
+                    status=validation_status,
                     outer_technical=TechnicalStatus.SUCCESS,
                     outer_business=BusinessStatus.VALIDATION_FAILED,
                 )
-                save_execution_state(session, state)
                 return ScenarioResult(
                     scenario_id="S1", test_case_id=test_case_id,
                     technical_status=TechnicalStatus.SUCCESS,
@@ -322,17 +503,16 @@ class ProcurementController:
             "reason_code": None,
             "retryable": False,
         })
-        set_machine_status(
-            state, success_status,
+        self._finalize_status(
+            state=state, session=session, test_case_id=test_case_id,
+            status=success_status,
             outer_technical=TechnicalStatus.SUCCESS,
             outer_business=BusinessStatus.SUCCESS,
         )
-        save_execution_state(session, state)
-        with self.telemetry.span("response.generate", {"test.case.id": test_case_id, "plan.id": state.plan.plan_id}):
-            return ScenarioResult(
-                scenario_id="S1", test_case_id=test_case_id,
-                technical_status=TechnicalStatus.SUCCESS,
-                business_status=BusinessStatus.SUCCESS, draft=draft,
-                status=success_status,
-                trace={"events": executor.events},
-            )
+        return ScenarioResult(
+            scenario_id="S1", test_case_id=test_case_id,
+            technical_status=TechnicalStatus.SUCCESS,
+            business_status=BusinessStatus.SUCCESS, draft=draft,
+            status=success_status,
+            trace={"events": executor.events},
+        )

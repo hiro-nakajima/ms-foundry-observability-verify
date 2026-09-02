@@ -44,6 +44,15 @@ async def test_stage_b_facts_are_derived_from_activated_execution(
     if pattern_id in {"TV-02", "TV-03"}:
         assert artifact.result.business_status == BusinessStatus.SUCCESS
         assert artifact.result.status.business_status != BusinessStatus.SUCCESS
+        assert artifact.result.draft.status == "VALIDATED"
+        assert all(
+            item["kind"] not in {"validation.skipped", "evidence.accepted_without_match"}
+            for item in artifact.sequence
+        )
+        if pattern_id == "TV-02":
+            assert facts.validation_coverage_complete is False
+        else:
+            assert facts.evidence_consistent is False
     elif pattern_id == "SD-03":
         assert facts.duplicate_step is True
         assert len(catalog.calls) == 3  # duplicated attempt 1 plus normal attempt 2

@@ -4,15 +4,16 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import Any, Awaitable, Callable, Literal
 
 from agent_framework import AgentSession
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
 from procurement_agent.controller import ProcurementController, set_machine_status
 from procurement_agent.models import (
-    BusinessStatus, CatalogSearchInput, CodeDeterminationInput, FailureLayer,
-    OperationStatus, ParseStatus, PlanStatus, ProcurementRequest, ScenarioResult,
+    ApplicationDraft, ApplicationLine, BusinessStatus, CatalogSearchInput,
+    CodeDeterminationInput, PlanStatus, ProcurementRequest, ScenarioResult,
     TechnicalStatus,
 )
 from procurement_agent.plan import stable_input_hash
@@ -122,52 +123,53 @@ class StageBInjectionHarness:
     ) -> StageBArtifact:
         session = session or AgentSession()
         controller = ProcurementController(self._catalog, self._code)
-        try:
-            result = await controller.execute(
-                request, session=session, test_case_id=test_case_id,
-            )
-        except ValidationError:
-            if self.pattern_id != "MA-04" or not self.injection_activated:
-                raise
-            status = OperationStatus(
-                technical_status=TechnicalStatus.SUCCESS,
-                parse_status=ParseStatus.SCHEMA_INVALID,
-                business_status=BusinessStatus.BLOCKED,
-                failure_layer=FailureLayer.VALIDATION,
-                reason_code="handoff_required_field_missing",
-            )
-            state = load_execution_state(session)
-            assert state is not None and state.plan is not None
-            state.plan.status = PlanStatus.BLOCKED
-            set_machine_status(
-                state, status,
-                outer_technical=TechnicalStatus.SUCCESS,
-                outer_business=BusinessStatus.BLOCKED,
-            )
-            save_execution_state(session, state)
-            result = ScenarioResult(
-                scenario_id="S4", test_case_id=test_case_id,
-                technical_status=TechnicalStatus.SUCCESS,
-                business_status=BusinessStatus.BLOCKED,
-                status=status,
-                next_action="欠落したStructured handoff fieldを復元して再実行する",
-            )
+        result = await controller.execute(
+            request, session=session, test_case_id=test_case_id,
+        )
 
         if self.pattern_id in {"TV-02", "TV-03"}:
             inner_failure = result.status is not None and result.status.business_status != BusinessStatus.SUCCESS
             if inner_failure:
-                event_kind = (
-                    "validation.skipped" if self.pattern_id == "TV-02"
-                    else "evidence.accepted_without_match"
-                )
-                self.sequence.append({"kind": event_kind})
-                result = result.model_copy(update={
-                    "business_status": BusinessStatus.SUCCESS,
-                    "next_action": None,
-                })
                 state = load_execution_state(session)
-                assert state is not None and state.plan is not None
+                assert state is not None and state.plan is not None and state.catalog_result is not None
+                candidate = next(
+                    item for item in state.catalog_result.candidates
+                    if item.product_code == state.catalog_result.selected_product_code
+                )
+                subtotal = Decimal(candidate.unit_price) * request.quantity
+                invalid_draft = ApplicationDraft(
+                    request_id=request.request_id,
+                    lines=[ApplicationLine(
+                        product_code=candidate.product_code,
+                        product_name=candidate.product_name,
+                        category=candidate.category,
+                        quantity=request.quantity,
+                        unit_price=candidate.unit_price,
+                        currency=candidate.currency,
+                        subtotal=subtotal,
+                        account_code="UNVALIDATED-ACCOUNT",
+                        account_name="未検証勘定科目（Stage B）",
+                    )],
+                    department_code="UNVALIDATED-DEPARTMENT",
+                    department_name=request.department_name,
+                    total=subtotal,
+                    evidence_refs=[item.evidence_id for item in state.catalog_result.evidence],
+                    warnings=["Stage B semantic fault: failed code output was accepted"],
+                )
+                for step in state.plan.steps:
+                    step.status = PlanStatus.COMPLETED
                 state.plan.status = PlanStatus.COMPLETED
+                state.draft = invalid_draft
+                self.sequence.append({"kind": "response.generated"})
+                result = ScenarioResult(
+                    scenario_id="S2",
+                    test_case_id=test_case_id,
+                    technical_status=TechnicalStatus.SUCCESS,
+                    business_status=BusinessStatus.SUCCESS,
+                    draft=invalid_draft,
+                    status=result.status,
+                    trace=result.trace,
+                )
                 set_machine_status(
                     state, result.status,
                     outer_technical=TechnicalStatus.SUCCESS,
@@ -249,6 +251,19 @@ def derive_trace_facts(artifact: StageBArtifact) -> TraceFacts:
             for name in ("product_category", "department_name")
         )
 
+    failed_tool_output = any(
+        item.get("business_status") not in {None, BusinessStatus.SUCCESS.value}
+        for item in artifact.tool_outputs
+    )
+    validated_draft = artifact.response.get("draft") or {}
+    plan_completed = artifact.plan.get("status") == PlanStatus.COMPLETED.value
+    validation_coverage_complete = not (
+        failed_tool_output
+        and validated_draft.get("status") == "VALIDATED"
+        and plan_completed
+    )
+    evidence_consistent = _draft_matches_evidence(validated_draft, artifact.retrieved_contexts)
+
     return TraceFacts(
         case_id=artifact.case_id,
         technical_status=artifact.result.technical_status.value,
@@ -257,8 +272,8 @@ def derive_trace_facts(artifact: StageBArtifact) -> TraceFacts:
         actions_after_terminal=actions_after_terminal,
         handoff_required_fields_missing=artifact.boundary_missing_fields,
         received_values_used=received_values_used,
-        validation_coverage_complete="validation.skipped" not in kinds,
-        evidence_consistent="evidence.accepted_without_match" not in kinds,
+        validation_coverage_complete=validation_coverage_complete,
+        evidence_consistent=evidence_consistent,
     )
 
 
@@ -271,3 +286,28 @@ def _output_summary(step_id: str, value: dict[str, Any] | BaseModel) -> dict[str
         "business_status": status.get("business_status"),
         "failure_layer": status.get("failure_layer"),
     }
+
+
+def _draft_matches_evidence(
+    draft: dict[str, Any], retrieved_contexts: list[dict[str, Any]],
+) -> bool:
+    if not draft:
+        return True
+    account_keys = {
+        item.get("record_key") for item in retrieved_contexts
+        if item.get("record_type") == "account_code"
+    }
+    department_keys = {
+        item.get("record_key") for item in retrieved_contexts
+        if item.get("record_type") == "department"
+    }
+    product_keys = {
+        item.get("record_key") for item in retrieved_contexts
+        if item.get("record_type") == "product"
+    }
+    lines = draft.get("lines") or []
+    return bool(lines) and all(
+        line.get("product_code") in product_keys
+        and line.get("account_code") in account_keys
+        for line in lines
+    ) and draft.get("department_code") in department_keys

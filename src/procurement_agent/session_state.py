@@ -7,7 +7,7 @@ from typing import Any, Literal
 from agent_framework import AgentSession, FunctionInvocationContext
 from pydantic import Field, ValidationError
 
-from .models import ARCHITECTURE_ID, ApplicationDraft, CatalogSearchResult, CodeDeterminationResult, ExecutionPlan, GovernanceDecision, ProcurementRequest, StrictModel
+from .models import ARCHITECTURE_ID, ApplicationDraft, CatalogSearchResult, CodeDeterminationResult, CorrelationContext, ExecutionPlan, GovernanceDecision, ProcurementRequest, StrictModel
 
 
 EXECUTION_STATE_KEY = "procurement.execution.v2"
@@ -41,6 +41,7 @@ class ProcurementExecutionState(StrictModel):
     code_result: CodeDeterminationResult | None = None
     draft: ApplicationDraft | None = None
     evidence_refs: list[str] = Field(default_factory=list)
+    child_correlations: list[CorrelationContext] = Field(default_factory=list)
     completed_step_keys: list[str] = Field(default_factory=list)
     governance_decisions: list[GovernanceDecision] = Field(default_factory=list)
     last_machine_response: dict[str, Any] | None = None

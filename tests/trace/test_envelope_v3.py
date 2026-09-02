@@ -52,6 +52,7 @@ def test_v3_envelope_uses_framework_session_and_no_logical_pattern():
     assert payload["correlation"]["span_id"]
     assert payload["correlation"]["parent_invocation_id"] == "parent-invocation-1"
     assert payload["correlation"]["remote_task_id"] == "remote-task-1"
+    assert payload["correlation"]["child_invocations"][0]["step_id"] == "catalog"
 
 
 def test_v3_envelope_scopes_reused_recorder_to_current_case():

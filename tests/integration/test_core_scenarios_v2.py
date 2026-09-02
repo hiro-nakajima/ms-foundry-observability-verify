@@ -60,15 +60,29 @@ async def test_s1_completes_validated_grounded_application_and_session_resume(va
     )
     assert envelope.statuses["mcp_status"] == "SUCCESS"
     assert set(envelope.statuses["step_statuses"]) == {"catalog", "code"}
+    assert [item["step_id"] for item in envelope.correlation.child_invocations] == [
+        "catalog", "code",
+    ]
     assert [event["name"] for event in result.trace["events"]].count("step.completed") == 3
-    span_events = {event.name for span in recorder.finished_spans() for event in span.events}
+    finished_spans = recorder.finished_spans()
+    span_events = {event.name for span in finished_spans for event in span.events}
     assert {"plan.created", "step.started", "handoff.payload_validated", "step.completed"} <= span_events
+    response_span = next(span for span in finished_spans if span.name == "response.generate")
+    assert response_span.attributes["mcp.status"] == "SUCCESS"
+    assert response_span.attributes["search.status"] == "SUCCESS"
+    assert response_span.attributes["parse.status"] == "SUCCESS"
+    child_spans = [span for span in finished_spans if span.name == "plan.step.execute"]
+    assert {span.attributes["parent.invocation.id"] for span in child_spans} == {
+        item.parent_invocation_id for item in state.child_correlations
+    }
     restored = restore_framework_session(session.to_dict())
     assert load_execution_state(restored).draft == result.draft
+    assert len(load_execution_state(restored).child_correlations) == 2
     second = await controller.execute(valid_request, session=restored, test_case_id="S1-HEALTHY-2")
     assert second.business_status == BusinessStatus.SUCCESS
     assert load_execution_state(restored).turn_number == 2
     assert load_execution_state(restored).plan.version == 2
+    assert len(load_execution_state(restored).child_correlations) == 2
     assert len(second.draft.evidence_refs) == 3
 
 
@@ -96,6 +110,14 @@ async def test_s2_failure_profiles_separate_status_layers(valid_request, fixture
     assert machine_status["business_status"] == result.status.business_status
     assert machine_status["outer_technical_status"] == result.technical_status
     assert machine_status["outer_business_status"] == result.business_status
+    response_span = next(
+        span for span in controller.telemetry.finished_spans()
+        if span.name == "response.generate"
+    )
+    assert response_span.attributes["mcp.status"] == result.status.mcp_status
+    assert response_span.attributes["search.status"] == result.status.search_status
+    assert response_span.attributes["parse.status"] == result.status.parse_status
+    assert response_span.attributes["business.status"] == result.business_status
 
 
 @pytest.mark.anyio
@@ -103,7 +125,8 @@ async def test_s3_not_found_retries_replans_then_waits_for_user(valid_request):
     catalog = RecordedCatalogAgent("catalog-not-found.json")
     codes = RecordedCodeAgent()
     controller = ProcurementController(catalog, codes)
-    result = await controller.execute(valid_request, session=AgentSession(), test_case_id="S3-NOT-FOUND")
+    session = AgentSession()
+    result = await controller.execute(valid_request, session=session, test_case_id="S3-NOT-FOUND")
     assert result.scenario_id == "S3"
     assert result.business_status == BusinessStatus.WAITING_USER
     assert [item["name"] for item in result.trace["events"]] == [
@@ -111,6 +134,7 @@ async def test_s3_not_found_retries_replans_then_waits_for_user(valid_request):
     ]
     assert len(catalog.calls) == 2
     assert not codes.calls
+    assert [item.attempt for item in load_execution_state(session).child_correlations] == [1, 2]
 
 
 @pytest.mark.anyio
@@ -138,10 +162,16 @@ async def test_catalog_success_without_matching_evidence_is_rejected(valid_reque
         raw = result.model_dump(mode="json")
         raw["evidence"] = []
         return raw
-    with pytest.raises(ValueError, match="structured child output failed boundary validation"):
-        await ProcurementController(ungrounded, code).execute(
-            valid_request, session=AgentSession(), test_case_id="CATALOG-EVIDENCE-MISSING"
-        )
+    session = AgentSession()
+    result = await ProcurementController(ungrounded, code).execute(
+        valid_request, session=session, test_case_id="CATALOG-EVIDENCE-MISSING"
+    )
+    assert result.scenario_id == "S4"
+    assert result.technical_status == TechnicalStatus.SUCCESS
+    assert result.business_status == BusinessStatus.BLOCKED
+    assert result.status.parse_status == "SCHEMA_INVALID"
+    assert load_execution_state(session).plan.status == PlanStatus.BLOCKED
+    assert load_execution_state(session).last_machine_response["reason_code"] == "child_output_schema_invalid"
     assert len(healthy.calls) == 1
     assert not code.calls
 
@@ -197,7 +227,7 @@ async def test_code_success_requires_account_and_department_evidence():
 
 
 @pytest.mark.anyio
-async def test_child_result_cannot_change_parent_supplied_correlation(valid_request):
+async def test_child_result_correlation_change_is_terminal_blocked(valid_request):
     healthy = RecordedCatalogAgent()
 
     async def forged_correlation(payload):
@@ -206,10 +236,17 @@ async def test_child_result_cannot_change_parent_supplied_correlation(valid_requ
         raw["correlation"]["test_case_id"] = "FORGED-CASE"
         return raw
 
-    with pytest.raises(ValueError, match="changed the supplied correlation"):
-        await ProcurementController(forged_correlation, RecordedCodeAgent()).execute(
-            valid_request, session=AgentSession(), test_case_id="CORRELATION-ORIGINAL",
-        )
+    session = AgentSession()
+    result = await ProcurementController(forged_correlation, RecordedCodeAgent()).execute(
+        valid_request, session=session, test_case_id="CORRELATION-ORIGINAL",
+    )
+    assert result.technical_status == TechnicalStatus.SUCCESS
+    assert result.business_status == BusinessStatus.BLOCKED
+    assert result.status.failure_layer == FailureLayer.VALIDATION
+    assert result.status.reason_code == "child_correlation_mismatch"
+    state = load_execution_state(session)
+    assert state.plan.status == PlanStatus.BLOCKED
+    assert state.last_machine_response["outer_business_status"] == "BLOCKED"
 
 
 @pytest.mark.parametrize("fixture", ["s4-missing-category.json", "s4-missing-correlation.json"])

@@ -1,9 +1,15 @@
 union isfuzzy=true traces, dependencies, requests, customEvents
 | extend caseId=tostring(customDimensions["test.case.id"]),
+         httpStatus=toint(customDimensions["http.status_code"]),
+         technicalStatus=tostring(customDimensions["technical.status"]),
+         outerTechnicalStatus=tostring(customDimensions["outer.technical.status"]),
          businessStatus=tostring(customDimensions["business.status"]),
          mcpStatus=tostring(customDimensions["mcp.status"]),
          searchStatus=tostring(customDimensions["search.status"]),
-         parseStatus=tostring(customDimensions["parse.status"])
+         parseStatus=tostring(customDimensions["parse.status"]),
+         failureLayer=tostring(customDimensions["failure.layer"])
 | where isnotempty(caseId)
-| project timestamp, operation_Id, operation_ParentId, name, caseId, resultCode, businessStatus, mcpStatus, searchStatus, parseStatus
+| project timestamp, operation_Id, operation_ParentId, name, caseId,
+          httpStatus, technicalStatus, outerTechnicalStatus, businessStatus,
+          mcpStatus, searchStatus, parseStatus, failureLayer
 | order by timestamp asc

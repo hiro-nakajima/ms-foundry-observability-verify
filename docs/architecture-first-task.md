@@ -33,3 +33,10 @@ in-memory providerを明示利用する。Stage BのFault Profileは
 `trace_pipeline.stage_b.StageBInjectionHarness`に限定し、実際の子呼出し、boundary
 reject、terminal後action、誤った受理を発火させる。Detector入力は注入値を直接設定せず、
 そのrunのcall/event/state artifactから`derive_trace_facts()`で導出する。
+
+child出力のschema不正またはcorrelation改変はHosted requestの未処理例外にせず、
+`S4/BLOCKED`、parse/validation failureとしてPlanとmachine statusをterminal保存する。
+各child attemptのcorrelationは`child_correlations`へ全件保持し、対応する業務span属性と
+envelopeの`correlation.child_invocations`へ出力する。最終HTTP/MCP/Search/parse/
+business/failure-layerは`response.generate` spanにも付与し、Hosted global exporter経由の
+KQLでSession stateを再読込せず検索できるようにする。

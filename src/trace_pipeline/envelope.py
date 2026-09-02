@@ -35,6 +35,7 @@ class CorrelationIdentity(EnvelopeModel):
     parent_span_id: str | None = None
     parent_invocation_id: str | None = None
     remote_task_id: str | None = None
+    child_invocations: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class AgentTrace(EnvelopeModel):

@@ -47,10 +47,12 @@ def build_envelope(
         for span in finished_spans for event in span.events
     ]
     root_span = next((span for span in finished_spans if span.name == "plan.create"), finished_spans[0] if finished_spans else None)
-    child_correlation = (
-        state.code_result.correlation if state.code_result else
-        state.catalog_result.correlation if state.catalog_result else None
-    )
+    child_correlations = list(state.child_correlations)
+    if not child_correlations:
+        for child_result in (state.catalog_result, state.code_result):
+            if child_result is not None and child_result.correlation not in child_correlations:
+                child_correlations.append(child_result.correlation)
+    child_correlation = child_correlations[-1] if child_correlations else None
     conversation = []
     for turn_index, message in enumerate(session.state.get("messages", []), start=1):
         if isinstance(message, dict):
@@ -79,6 +81,17 @@ def build_envelope(
             parent_span_id=f"{root_span.parent.span_id:016x}" if root_span and root_span.parent else None,
             parent_invocation_id=child_correlation.parent_invocation_id if child_correlation else None,
             remote_task_id=child_correlation.remote_task_id if child_correlation else None,
+            child_invocations=[{
+                "test_case_id": item.test_case_id,
+                "framework_session_id_hash": _hash(item.framework_session_id),
+                "turn_number": item.turn_number,
+                "plan_id": item.plan_id,
+                "plan_version": item.plan_version,
+                "step_id": item.step_id,
+                "attempt": item.attempt,
+                "parent_invocation_id": item.parent_invocation_id,
+                "remote_task_id": item.remote_task_id,
+            } for item in child_correlations],
         ),
         content_profile=telemetry.content_profile,
         user_input=user_input,

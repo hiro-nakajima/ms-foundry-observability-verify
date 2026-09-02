@@ -15,7 +15,7 @@ Data: version `2026-09-01.1` Synthetic only
 - Deployment asset: Bicep compile PASS、`azd show --no-prompt`で5 split-serviceをparse、Azure environment未作成
 - 独自Session/History、nested Session JSON、旧4構成selector: sourceから削除
 - Stage A: 14/14 positive `DETECTED`、14/14 negative `NOT_DETECTED`
-- Stage B: 実行済みcall/event/state artifactから導出した6/6が`DETECTED`、全注入runのouter technical status `SUCCESS`
+- Stage B: 失敗Tool出力、誤ったVALIDATED Draft、Evidence/Plan/call artifactの比較から導出した6/6が`DETECTED`、全注入runのouter technical status `SUCCESS`
 - S1/S5 healthy control: 28/28 detector判定が`NOT_DETECTED`
 - 特別状態: `INJECTION_MISSED`と`UNEVALUABLE_TRACE_INCOMPLETE`はSemantic集計外
 
