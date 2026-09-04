@@ -1,0 +1,13 @@
+description: Version 1 synthetic procurement code master toolbox.
+connections:
+  - name: procurement-search-connection
+tools:
+  - type: azure_ai_search
+    name: code_master_search
+    description: Search only procurement-code-master-v1 for account and department codes.
+    azure_ai_search:
+      indexes:
+        - project_connection_id: procurement-search-connection
+          index_name: procurement-code-master-v1
+          query_type: simple
+          top_k: 10

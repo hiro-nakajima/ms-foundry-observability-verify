@@ -1,0 +1,16 @@
+[
+  {"pattern_id":"SD-01","facts":{"schema_version":"1.0","case_id":"N-SD-01"}},
+  {"pattern_id":"SD-02","facts":{"schema_version":"1.0","case_id":"N-SD-02"}},
+  {"pattern_id":"SD-03","facts":{"schema_version":"1.0","case_id":"N-SD-03"}},
+  {"pattern_id":"SD-04","facts":{"schema_version":"1.0","case_id":"N-SD-04"}},
+  {"pattern_id":"SD-05","facts":{"schema_version":"1.0","case_id":"N-SD-05"}},
+  {"pattern_id":"MA-01","facts":{"schema_version":"1.0","case_id":"N-MA-01"}},
+  {"pattern_id":"MA-02","facts":{"schema_version":"1.0","case_id":"N-MA-02"}},
+  {"pattern_id":"MA-03","facts":{"schema_version":"1.0","case_id":"N-MA-03"}},
+  {"pattern_id":"MA-04","facts":{"schema_version":"1.0","case_id":"N-MA-04"}},
+  {"pattern_id":"MA-05","facts":{"schema_version":"1.0","case_id":"N-MA-05"}},
+  {"pattern_id":"MA-06","facts":{"schema_version":"1.0","case_id":"N-MA-06"}},
+  {"pattern_id":"TV-01","facts":{"schema_version":"1.0","case_id":"N-TV-01"}},
+  {"pattern_id":"TV-02","facts":{"schema_version":"1.0","case_id":"N-TV-02"}},
+  {"pattern_id":"TV-03","facts":{"schema_version":"1.0","case_id":"N-TV-03"}}
+]

@@ -1,0 +1,16 @@
+[
+  {"pattern_id":"SD-01","facts":{"schema_version":"1.0","case_id":"A-SD-01","constraints_satisfied":false}},
+  {"pattern_id":"SD-02","facts":{"schema_version":"1.0","case_id":"A-SD-02","role_tool_allowlist_valid":false}},
+  {"pattern_id":"SD-03","facts":{"schema_version":"1.0","case_id":"A-SD-03","duplicate_step":true}},
+  {"pattern_id":"SD-04","facts":{"schema_version":"1.0","case_id":"A-SD-04","session_continuity":false}},
+  {"pattern_id":"SD-05","facts":{"schema_version":"1.0","case_id":"A-SD-05","actions_after_terminal":1}},
+  {"pattern_id":"MA-01","facts":{"schema_version":"1.0","case_id":"A-MA-01","snapshot_present":false}},
+  {"pattern_id":"MA-02","facts":{"schema_version":"1.0","case_id":"A-MA-02","clarification_required":true,"clarification_asked":false}},
+  {"pattern_id":"MA-03","facts":{"schema_version":"1.0","case_id":"A-MA-03","delegation_relevant":false}},
+  {"pattern_id":"MA-04","facts":{"schema_version":"1.0","case_id":"A-MA-04","handoff_required_fields_missing":["product_category"]}},
+  {"pattern_id":"MA-05","facts":{"schema_version":"1.0","case_id":"A-MA-05","received_values_used":false}},
+  {"pattern_id":"MA-06","facts":{"schema_version":"1.0","case_id":"A-MA-06","claimed_actions_missing":["code_master_search"]}},
+  {"pattern_id":"TV-01","facts":{"schema_version":"1.0","case_id":"A-TV-01","required_steps_complete":false}},
+  {"pattern_id":"TV-02","facts":{"schema_version":"1.0","case_id":"A-TV-02","validation_coverage_complete":false}},
+  {"pattern_id":"TV-03","facts":{"schema_version":"1.0","case_id":"A-TV-03","evidence_consistent":false}}
+]

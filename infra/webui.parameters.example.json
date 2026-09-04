@@ -1,0 +1,16 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "webAppName": {"value": "REPLACE_GLOBALLY_UNIQUE_WEB_APP_NAME"},
+    "appServicePlanName": {"value": "asp-procurement-observe"},
+    "searchServiceName": {"value": "REPLACE_GLOBALLY_UNIQUE_SEARCH_NAME"},
+    "foundryProjectEndpoint": {"value": "https://observability-verify.services.ai.azure.com/api/projects/proj-default"},
+    "searchLocation": {"value": "westcentralus"},
+    "apimName": {"value": "REPLACE_GLOBALLY_UNIQUE_APIM_NAME"},
+    "apimPublisherEmail": {"value": "validation@example.invalid"},
+    "entraClientId": {"value": "00000000-0000-0000-0000-000000000000"},
+    "entraClientSecret": {"value": "WHAT_IF_ONLY_NEVER_DEPLOY"},
+    "sessionSigningKey": {"value": "WHAT_IF_ONLY_32_BYTES_NEVER_DEPLOY_123456"}
+  }
+}

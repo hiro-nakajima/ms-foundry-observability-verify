@@ -1,0 +1,10 @@
+schema_version: "1.0"
+kind: prompt
+name: catalog_search_agent
+deployment_name: catalog-search-agent
+version: "1"
+model: ${FOUNDRY_CHILD_MODEL_DEPLOYMENT}
+instructions_file: catalog-search-instructions.md
+toolboxes:
+  - catalog-search-toolbox
+response_schema: CatalogSearchResult

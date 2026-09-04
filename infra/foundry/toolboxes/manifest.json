@@ -1,0 +1,7 @@
+{
+  "schema_version": "1.0",
+  "toolboxes": [
+    {"name":"catalog-search-toolbox","definition_version":"1","file":"catalog-search-toolbox.yaml","consumer_endpoint_suffix":"/toolboxes/catalog-search-toolbox/mcp?api-version=v1"},
+    {"name":"code-master-toolbox","definition_version":"1","file":"code-master-toolbox.yaml","consumer_endpoint_suffix":"/toolboxes/code-master-toolbox/mcp?api-version=v1"}
+  ]
+}

@@ -9,16 +9,17 @@ description = "Synthetic Microsoft Foundry procurement observability and evaluat
 readme = "README.md"
 requires-python = ">=3.13,<3.15"
 dependencies = [
-  "agent-governance-toolkit[core]==4.1.0",
   "agent-framework-core==1.16.0",
   "agent-framework-devui==1.0.0b260821",
   "agent-framework-foundry-hosting==1.0.0b260827",
+  "agent-framework-foundry==1.11.0",
   "agent-framework-openai==1.14.1",
   "opentelemetry-api==1.43.0",
   "opentelemetry-sdk==1.43.0",
   "pydantic==2.13.4",
   "PyYAML==6.0.3",
   "azure-identity==1.26.0b2",
+  "azure-ai-projects==2.3.0",
 ]
 
 [project.scripts]
@@ -28,13 +29,11 @@ procurement-hosted = "procurement_agent.hosted_app:main"
 [tool.hatch.build.targets.wheel]
 packages = ["src/procurement_agent", "src/trace_pipeline"]
 
-[tool.hatch.build.targets.wheel.force-include]
-"data" = "procurement_agent/data"
-
 [tool.pytest.ini_options]
 addopts = "-ra"
 testpaths = ["tests"]
 markers = [
   "integration: local integration tests",
   "external: requires external credentials or a deployed Foundry resource",
+  "anyio: asynchronous test executed by the AnyIO pytest plugin",
 ]

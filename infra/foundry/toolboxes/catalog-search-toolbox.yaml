@@ -1,0 +1,13 @@
+description: Version 1 synthetic procurement catalog search toolbox.
+connections:
+  - name: procurement-search-connection
+tools:
+  - type: azure_ai_search
+    name: catalog_search
+    description: Search only procurement-catalog-v1 for synthetic product codes and prices.
+    azure_ai_search:
+      indexes:
+        - project_connection_id: procurement-search-connection
+          index_name: procurement-catalog-v1
+          query_type: simple
+          top_k: 10

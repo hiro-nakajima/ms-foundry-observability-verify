@@ -1,0 +1,10 @@
+{
+  "schema_version": "1.0",
+  "profiles": {
+    "synthetic-content-on": {"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT":"true","synthetic_only":true},
+    "production-like-content-off": {"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT":"false","synthetic_only":false}
+  },
+  "hosted_parent": {"instrumentation":"Microsoft Agent Framework OpenTelemetry","custom_spans":["plan.create","plan.step.execute","merge.validate","response.generate"]},
+  "prompt_children": {"instrumentation":"Foundry project Application Insights connection and server-side tracing","requires_azure_verification":true},
+  "chain_of_thought_recording": false
+}

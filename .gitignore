@@ -9,6 +9,9 @@ output/playwright/
 build/
 dist/
 *.egg-info/
+.artifacts/
+src/webapp-foundry-oauth/scripts/*.zip
+src/webapp-foundry-oauth/scripts/.deploy-stage/
 .env
 .env.*.local
 artifacts/traces/*
