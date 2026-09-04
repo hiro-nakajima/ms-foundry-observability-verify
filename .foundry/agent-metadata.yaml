@@ -9,7 +9,7 @@ environments:
     dependencyResolution: remote_build
     azureContainerRegistry: null # User requires ZIP deploy; ACR is not used.
     deploymentStatus: ACTIVE
-    agentVersion: '11'
+    agentVersion: '12'
     searchIngestion:
       mode: blob_indexer
       apiVersion: 2026-08-01-preview
@@ -18,7 +18,7 @@ environments:
       indexers:
         - procurement-catalog-blob-indexer
         - procurement-code-master-blob-indexer
-    zipSha256: b2d95668945a1df8f991bb053a8913b71560f28fe22e3ea615bcf6399b86c2c0
+    zipSha256: 75710ad68ed77b0f65fb61a3fb2f93228d3c0ea528d709695ceedeb20b3d9f5a
     childAgents:
       - catalog-search-agent
       - code-determination-agent
@@ -109,4 +109,10 @@ environments:
         conversationId: conv_00570230023f3b3000IiAkiv2dOGhw61QIeb7VJTUK1kP3VTEP
         naturalLanguageConversationId: conv_073065d36ccb997a00lXKurYAqqK4wsAH3Dcnvffuzn3UTSkzt
         frameworkSessionIdHash: 70c961822215cce586d0dd2afa520eb7e94cd2c19b592f8ea2e23f7e9526bffd
+        azureStatus: PASS
+      - id: CHAT-DIRECT-20260904051353
+        scope: hosted-v12-review-p1-routing-status-and-turn-regression
+        conversationId: conv_0d7656e0b5894a5700Qcot0aews57hx7dzDPQ1UDY3vvNLq1Yr
+        naturalLanguageConversationId: conv_06029f4287b78f1000BADl3xGnew2hIFhyddEQ2a4WlO3jBQms
+        frameworkSessionIdHash: d17ec28e3cb0e778c82cb791b864a2edd8c235c767932d0b2e1d1be9dd58d1d2
         azureStatus: PASS

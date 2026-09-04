@@ -151,7 +151,33 @@ async def test_general_and_identity_turns_do_not_enter_procurement_plan():
     assert identity.scenario_id == 'IDENTITY' and identity.interaction_type == 'identity'
     assert '架空 太郎' in identity.response_text and 'EasyAuth' in identity.response_text
     assert state.plan is None and state.turn_number == 2
+    assert state.last_machine_response['outer_business_status'] == 'SUCCESS'
+    assert state.last_machine_response['mcp_status'] == 'NOT_RUN'
+    response_spans = [span for span in args['telemetry'].finished_spans()
+                      if span.name == 'response.generate']
+    assert [span.attributes['app.turn.number'] for span in response_spans] == [1, 2]
+    assert all(span.attributes['mcp.status'] == 'NOT_RUN' for span in response_spans)
     assert calls == 0 and not catalog.calls and not codes.calls
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize('message', [
+    'ノートPCが欲しい', 'モニターを注文したい', 'ノートPCを2台',
+])
+async def test_ordinary_purchase_phrasing_enters_procurement(message):
+    planner = Agent(DeterministicChatClient(lambda *_: ProcurementIntake(
+        request={'query': 'ノートPC'}, plan={'steps': default_steps()},
+    )))
+    catalog = _Tool('catalog_search_agent', RecordedCatalogAgent())
+    result = await _execute_hosted_components(
+        planner=planner, catalog_tool=catalog,
+        code_tool=_Tool('code_determination_agent', RecordedCodeAgent()),
+        natural_request=message, session=AgentSession(),
+        test_case_id='CHAT-PURCHASE-INTENT', telemetry=TelemetryRecorder(),
+        applicant_name='架空 太郎',
+    )
+    assert result.interaction_type == 'procurement'
+    assert catalog.calls
 
 
 @pytest.mark.anyio

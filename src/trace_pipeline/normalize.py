@@ -38,10 +38,19 @@ async def build_envelope(
 ) -> TraceEvaluationEnvelope:
     state = load_execution_state(session, required=True)
     assert state is not None
-    finished_spans = [
+    case_spans = [
         span for span in telemetry.finished_spans()
         if (span.attributes or {}).get("test.case.id") == run.case_id
     ]
+    finished_spans = [
+        span for span in case_spans
+        if (span.attributes or {}).get("app.turn.number") == state.turn_number
+    ]
+    if not finished_spans and case_spans:
+        # Compatibility for older local spans that predate the turn attribute:
+        # the last plan.create begins the current sequential execution slice.
+        starts = [index for index, span in enumerate(case_spans) if span.name == "plan.create"]
+        finished_spans = case_spans[starts[-1]:] if starts else case_spans
     spans = [_span_to_dict(span) for span in finished_spans]
     events = [
         {"span": span.name, "name": event.name, "attributes": dict(event.attributes or {})}

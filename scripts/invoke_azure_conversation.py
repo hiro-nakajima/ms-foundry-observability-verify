@@ -29,7 +29,9 @@ def main():
             conv = client.conversations.create(metadata={'test.case.id': case, 'synthetic': 'true'})
             evidence['conversation_id'] = conv.id
             save(STATE / f'{case}.json', evidence)
-            message = 'ノートPCを購入したい'
+            # Intentionally avoid the narrow "購入" keyword to verify ordinary
+            # purchase phrasing is routed into Plan & Execute.
+            message = 'ノートPCが欲しい'
             selected_code = None
             for turn in (1, 2, 3, 4):
                 started, pending, milestones, final = time.monotonic(), '', [], None

@@ -89,6 +89,46 @@ async def test_v3_envelope_scopes_reused_recorder_to_current_case():
     assert envelope.correlation.trace_id == f"{current.context.trace_id:032x}"
 
 
+@pytest.mark.anyio
+async def test_v3_envelope_scopes_reused_case_to_current_turn():
+    session = AgentSession()
+    state = initialize_execution_state(session, test_case_id="TRACE-SAME-CASE")
+    state.turn_number = 2
+    state.plan = StructuredPlanBuilder().build(None)
+    save_execution_state(session, state)
+    telemetry = TelemetryRecorder()
+    with telemetry.span("plan.create", {
+        "test.case.id": "TRACE-SAME-CASE", "app.turn.number": 1,
+    }):
+        pass
+    with telemetry.span("response.generate", {
+        "test.case.id": "TRACE-SAME-CASE", "app.turn.number": 1,
+    }):
+        pass
+    with telemetry.span("plan.create", {
+        "test.case.id": "TRACE-SAME-CASE", "app.turn.number": 2,
+    }) as current:
+        pass
+    with telemetry.span("response.generate", {
+        "test.case.id": "TRACE-SAME-CASE", "app.turn.number": 2,
+    }):
+        pass
+
+    envelope = await build_envelope(
+        run=RunIdentity(run_id="run-same", case_id="TRACE-SAME-CASE", agent_role="coordinator",
+            agent_definition_name="procurement_parent_agent", agent_definition_version="1",
+            implementation_kind="hosted_framework"),
+        session=session,
+        history_provider=InMemoryHistoryProvider("procurement-history", load_messages=True),
+        telemetry=telemetry, user_input=[], response={}, retrieved_contexts=[],
+        system_prompt={}, tool_definitions=[], tool_calls=[], tool_output=[],
+    )
+
+    assert len(envelope.agent_trace.spans) == 2
+    assert {span["attributes"]["app.turn.number"] for span in envelope.agent_trace.spans} == {2}
+    assert envelope.correlation.trace_id == f"{current.context.trace_id:032x}"
+
+
 def test_content_on_requires_explicit_synthetic_environment():
     import pytest
     with pytest.raises(ValueError, match="explicitly synthetic"):

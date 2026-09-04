@@ -286,6 +286,7 @@ class ProcurementController:
         save_execution_state(session, state)
         attributes = {
             "test.case.id": test_case_id,
+            "app.turn.number": state.turn_number,
             "plan.id": state.plan.plan_id if state.plan else "none",
             **operation_status_attributes(
                 status,
@@ -650,7 +651,10 @@ class ProcurementController:
         step = executor.start("merge_validate", {"request": request.model_dump(mode="json"), "catalog": catalog.model_dump(mode="json"), "codes": codes.model_dump(mode="json")})
         publish("merge_validate", "started")
         state.current_step_id = step.step_id
-        with self.telemetry.span("merge.validate", {"test.case.id": test_case_id, "plan.id": state.plan.plan_id, "plan.step.id": step.step_id}) as merge_span:
+        with self.telemetry.span("merge.validate", {
+            "test.case.id": test_case_id, "app.turn.number": state.turn_number,
+            "plan.id": state.plan.plan_id, "plan.step.id": step.step_id,
+        }) as merge_span:
             self.telemetry.event(merge_span, "step.started", {"plan.step.id": step.step_id})
             subtotal = Decimal(selected.unit_price) * request.quantity
             draft = ApplicationDraft(

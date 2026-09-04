@@ -26,7 +26,7 @@ from .models import (
     BusinessStatus, ExecutionPlan, OperationStatus, ParseStatus, ProcurementIntake,
     ProcurementRequest, ScenarioResult, TechnicalStatus,
 )
-from .controller import ProcurementController
+from .controller import ProcurementController, operation_status_attributes, set_machine_status
 from .observability import TelemetryRecorder, current_request_attributes, request_correlation, sha256
 from .session_state import (
     EXECUTION_STATE_KEY, SessionStateSchemaError, initialize_execution_state,
@@ -297,7 +297,11 @@ def _intent(text: str, *, procurement_active: bool) -> str:
         return "identity"
     if procurement_active:
         return "procurement"
-    if any(term in normalized for term in ("購入", "買いたい", "買って", "調達", "申請")):
+    if any(term in normalized for term in (
+        "購入", "買いたい", "買って", "買う", "欲しい", "注文", "発注", "調達", "申請",
+    )):
+        return "procurement"
+    if re.search(r"\d+(?:台|個|本|セット|枚)", normalized):
         return "procurement"
     return "general"
 
@@ -305,10 +309,10 @@ def _intent(text: str, *, procurement_active: bool) -> str:
 def _conversation_result(
     *, session: AgentSession, state: Any, test_case_id: str,
     interaction_type: str, applicant_name: str | None,
+    telemetry: TelemetryRecorder,
 ) -> ScenarioResult:
     state.turn_number += 1
     state.test_case_id = test_case_id
-    save_execution_state(session, state)
     if interaction_type == "identity":
         if applicant_name:
             text = (
@@ -328,6 +332,24 @@ def _conversation_result(
         business_status=BusinessStatus.SUCCESS,
         parse_status=ParseStatus.SUCCESS,
     )
+    set_machine_status(
+        state, status,
+        outer_technical=TechnicalStatus.SUCCESS,
+        outer_business=BusinessStatus.SUCCESS,
+    )
+    save_execution_state(session, state)
+    attributes = {
+        "test.case.id": test_case_id,
+        "app.turn.number": state.turn_number,
+        "interaction.type": interaction_type,
+        **operation_status_attributes(
+            status,
+            outer_technical=TechnicalStatus.SUCCESS,
+            outer_business=BusinessStatus.SUCCESS,
+        ),
+    }
+    with telemetry.span("response.generate", attributes) as span:
+        telemetry.event(span, "response.status", attributes)
     return ScenarioResult(
         scenario_id=scenario_id,
         interaction_type=interaction_type,
@@ -401,6 +423,7 @@ async def _execute_hosted_components(
         return _conversation_result(
             session=session, state=state, test_case_id=test_case_id,
             interaction_type=interaction_type, applicant_name=applicant_name,
+            telemetry=telemetry,
         )
     controller = ProcurementController(
         lambda payload: _invoke_remote_tool(catalog_tool, payload, session),
