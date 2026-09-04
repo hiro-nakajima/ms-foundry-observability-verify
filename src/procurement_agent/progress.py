@@ -10,6 +10,7 @@ from uuid import uuid4
 from agent_framework import AgentMiddleware, AgentResponse, AgentResponseUpdate, Content, ResponseStream
 
 from .models import ScenarioResult
+from .observability import current_request_attributes
 
 _sink: ContextVar[asyncio.Queue | None] = ContextVar('procurement_progress', default=None)
 STEPS = {'intake', 'catalog', 'code', 'merge_validate'}
@@ -41,7 +42,11 @@ def publish(step: str, state: str) -> None:
 
 class ProgressMiddleware(AgentMiddleware):
     async def process(self, context, call_next):
-        if not context.stream:
+        # The Web App opts into the machine envelope used for safe status and
+        # progress projection. Playground and other callers receive the normal
+        # natural-language stream from the Hosted Agent.
+        if (not context.stream
+                or current_request_attributes().get('app.client.contract') != 'web-json-v1'):
             await call_next()
             return
 

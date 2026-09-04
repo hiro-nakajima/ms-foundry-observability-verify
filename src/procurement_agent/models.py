@@ -229,6 +229,11 @@ class Evidence(StrictModel):
     rank: int | None = Field(default=None, ge=1)
     score: float | None = None
     content_ref: str | None = None
+    catalog_product_name: str | None = None
+    catalog_category: str | None = None
+    catalog_unit_price: Decimal | None = Field(default=None, ge=0)
+    catalog_currency: Literal["JPY"] | None = None
+    catalog_specifications: dict[str, str] | None = None
 
 
 class CatalogCandidate(StrictModel):
@@ -265,13 +270,22 @@ class CatalogSearchResult(StrictModel):
             )
             if selected is None:
                 raise ValueError("selected_product_code must exist in candidates")
-            if not any(
+            evidence = next((item for item in self.evidence if (
                 item.evidence_id == selected.evidence_id
+                and item.index_name == "procurement-catalog-v1"
                 and item.record_type == "product"
                 and item.record_key == selected.product_code
-                for item in self.evidence
-            ):
+            )), None)
+            if evidence is None:
                 raise ValueError("selected catalog candidate must have matching product evidence")
+            if (
+                evidence.catalog_product_name != selected.product_name
+                or evidence.catalog_category != selected.category
+                or evidence.catalog_unit_price != selected.unit_price
+                or evidence.catalog_currency != selected.currency
+                or evidence.catalog_specifications != selected.specifications
+            ):
+                raise ValueError("selected catalog values must match the product evidence snapshot")
         return self
 
 
@@ -351,7 +365,8 @@ class GovernanceDecision(StrictModel):
 
 
 class ScenarioResult(StrictModel):
-    scenario_id: Literal["S1", "S2", "S3", "S4", "S5"]
+    scenario_id: Literal["S1", "S2", "S3", "S4", "S5", "CHAT", "IDENTITY"]
+    interaction_type: Literal["procurement", "general", "identity"] = "procurement"
     test_case_id: str
     technical_status: TechnicalStatus
     business_status: BusinessStatus

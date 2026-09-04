@@ -13,7 +13,7 @@ from procurement_agent.models import (
     CodeDeterminationInput, CodeDeterminationResult, Evidence, ExecutionPlan,
     OperationStatus, ProcurementIntake, ProcurementRequest, ScenarioResult,
 )
-from procurement_agent.observability import TelemetryRecorder
+from procurement_agent.observability import TelemetryRecorder, request_correlation
 from procurement_agent.plan import default_steps
 from procurement_agent.session_state import initialize_execution_state
 from procurement_agent.session_state import load_execution_state
@@ -104,7 +104,7 @@ async def test_hosted_turn_extracts_request_and_plan_in_one_model_call(valid_req
             status=OperationStatus(business_status=BusinessStatus.SUCCESS, mcp_status="SUCCESS", search_status="SUCCESS", parse_status="SUCCESS"),
             candidates=[CatalogCandidate(product_code="LAPTOP-DEV-14", product_name="開発用ノートPC 14インチ（架空商品）", category="laptop", unit_price="180000", specifications={"memory": "32GB"}, evidence_id="evidence:catalog:LAPTOP-DEV-14")],
             selected_product_code="LAPTOP-DEV-14",
-            evidence=[Evidence(evidence_id="evidence:catalog:LAPTOP-DEV-14", index_name="procurement-catalog-v1", document_id="catalog-LAPTOP-DEV-14", source_version="2026-09-01.1", record_type="product", record_key="LAPTOP-DEV-14")],
+            evidence=[Evidence(evidence_id="evidence:catalog:LAPTOP-DEV-14", index_name="procurement-catalog-v1", document_id="catalog-LAPTOP-DEV-14", source_version="2026-09-01.1", record_type="product", record_key="LAPTOP-DEV-14", catalog_product_name="開発用ノートPC 14インチ（架空商品）", catalog_category="laptop", catalog_unit_price="180000", catalog_currency="JPY", catalog_specifications={"memory": "32GB"})],
         )
         return FakeStream(result.model_dump_json())
 
@@ -142,12 +142,11 @@ async def test_hosted_turn_extracts_request_and_plan_in_one_model_call(valid_req
     try:
         for message in ("開発用ノートPCを申請", "商品コード LAPTOP-DEV-14 を選びます。", "詳細を入力"):
             response = await bundle.parent.run(message, session=exposed_session)
-            assert ScenarioResult.model_validate_json(response.text).business_status == BusinessStatus.WAITING_USER
+            assert response.text
         response = await bundle.parent.run("確定", session=exposed_session)
     finally:
         authenticated_applicant_name.reset(token)
-    exposed_result = ScenarioResult.model_validate_json(response.text)
-    assert exposed_result.business_status == BusinessStatus.SUCCESS
+    assert response.text.startswith("購買申請案を確定しました")
     exposed_state = load_execution_state(exposed_session)
     assert exposed_state.plan.status.name == "COMPLETED"
     assert [item.tool_name for item in exposed_state.governance_decisions] == [
@@ -185,7 +184,11 @@ async def test_invalid_planner_intake_returns_terminal_machine_result(
         parent_client=DeterministicChatClient(planner),
     )
     session = AgentSession()
-    response = await bundle.parent.run("不完全な依頼", session=session)
+    token = request_correlation.set({'app.client.contract': 'web-json-v1'})
+    try:
+        response = await bundle.parent.run("不完全な購入依頼", session=session)
+    finally:
+        request_correlation.reset(token)
     result = ScenarioResult.model_validate_json(response.text)
 
     assert result.scenario_id == "S4"

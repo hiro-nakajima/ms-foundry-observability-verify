@@ -166,6 +166,7 @@ def test_real_http_propagation_and_remote_conversation(web):
     assert root.attributes["gen_ai.response.id"] == result["responseId"]
     assert outgoing["body"]["conversation"] == result["conversationId"]
     assert outgoing["body"]["metadata"]["app.authenticated.display_name"] == "架空 利用者"
+    assert outgoing["body"]["metadata"]["app.client.contract"] == "web-json-v1"
     assert "previous_response_id" not in outgoing["body"]
     second = client.post("/api/chat", json={"message": "Continue"}).json()
     assert second["conversationId"] == result["conversationId"]

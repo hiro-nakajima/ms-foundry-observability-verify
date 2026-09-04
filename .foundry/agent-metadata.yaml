@@ -9,7 +9,7 @@ environments:
     dependencyResolution: remote_build
     azureContainerRegistry: null # User requires ZIP deploy; ACR is not used.
     deploymentStatus: ACTIVE
-    agentVersion: '9'
+    agentVersion: '11'
     searchIngestion:
       mode: blob_indexer
       apiVersion: 2026-08-01-preview
@@ -18,12 +18,12 @@ environments:
       indexers:
         - procurement-catalog-blob-indexer
         - procurement-code-master-blob-indexer
-    zipSha256: cd7f44d9510ab735adbf649702e18fa1fee7128875342eb2c255207e96ee8431
+    zipSha256: b2d95668945a1df8f991bb053a8913b71560f28fe22e3ea615bcf6399b86c2c0
     childAgents:
       - catalog-search-agent
       - code-determination-agent
     childAgentVersions:
-      catalog-search-agent: '3'
+      catalog-search-agent: '4'
       code-determination-agent: '2'
     observability:
       applicationInsightsResourceId: /subscriptions/d96eb8c2-2deb-4ed5-8cf2-f9fb178cb3ee/resourceGroups/rg-ms-foundry-observability-verify/providers/Microsoft.Insights/components/web-procurement-observe-nkjm-insights
@@ -35,8 +35,8 @@ environments:
       appGenAIContentRetentionDays: 90
     webApp:
       name: web-procurement-observe-nkjm
-      deploymentId: efebcca8-3807-410a-b04f-dd9ed6ea8f0d
-      packageSha256: 96a5b9f68f16e61ceb45f8a47f701af6e4242e465d54cb0a07383e5dc978b9d5
+      deploymentId: e857af08-219a-437c-8d59-572a6fd86fd2
+      packageSha256: b2fccfae7b5965ec61e1d5e8faeedc315ff7185cc25516ee171bc27ab2d037b6
       browserValidation: PASS_CORE_FLOW
     apiManagement:
       activeName: apim-procurement-stream-nkjm
@@ -98,3 +98,15 @@ environments:
         azureStatus: PASS
         userIdBaggageManagedBoundary: NOT_PROPAGATED
         traceEvidence: .foundry/evidence/WEB-bc7c676157a2cf4c.jsonl
+      - id: CHAT-DIRECT-20260904043500
+        scope: hosted-v10-catalog-evidence-snapshot-four-turn-regression
+        traceId: 42ab71559c70d3408e45dd7ccb5cd383
+        conversationId: conv_039d62886bebc16e00DWMWSV6TrWqNdtn12UA35Xw5RtRnOhjF
+        azureStatus: PASS
+        traceEvidence: .foundry/evidence/CHAT-DIRECT-20260904043500-turn4.jsonl
+      - id: CHAT-DIRECT-20260904045406
+        scope: hosted-v11-routing-natural-output-and-completed-state-reset
+        conversationId: conv_00570230023f3b3000IiAkiv2dOGhw61QIeb7VJTUK1kP3VTEP
+        naturalLanguageConversationId: conv_073065d36ccb997a00lXKurYAqqK4wsAH3Dcnvffuzn3UTSkzt
+        frameworkSessionIdHash: 70c961822215cce586d0dd2afa520eb7e94cd2c19b592f8ea2e23f7e9526bffd
+        azureStatus: PASS

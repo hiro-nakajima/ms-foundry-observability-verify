@@ -96,6 +96,14 @@ async def test_vague_request_lists_grounded_candidates_and_resumes_after_selecti
     assert len(codes.calls) == 1
     assert load_execution_state(restored).turn_number == 4
     assert ScenarioResult.model_validate_json(fourth.model_dump_json()) == fourth
+    fifth = await _execute_hosted_components(**args, natural_request='確定', session=restored)
+    reset = load_execution_state(restored)
+    assert fifth.scenario_id == 'CHAT'
+    assert fifth.interaction_type == 'general'
+    assert '購入したい商品' in fifth.response_text
+    assert reset.plan is None and reset.intake is None and reset.catalog_result is None
+    assert reset.turn_number == 5
+    assert len(catalog.calls) == 2 and len(codes.calls) == 1
 
 
 @pytest.mark.anyio
@@ -104,7 +112,7 @@ async def test_missing_query_is_normal_clarification_without_tool_call():
     catalog = _Tool('catalog_search_agent', RecordedCatalogAgent())
     codes = _Tool('code_determination_agent', RecordedCodeAgent())
     result = await _execute_hosted_components(planner=planner, catalog_tool=catalog, code_tool=codes,
-        natural_request='相談したい', session=AgentSession(), test_case_id='WEB-EMPTY',
+        natural_request='購入を相談したい', session=AgentSession(), test_case_id='WEB-EMPTY',
         telemetry=TelemetryRecorder(), applicant_name='架空 太郎')
     assert result.business_status == 'WAITING_USER' and 'query' in result.missing_fields
     assert result.status.mcp_status == 'NOT_RUN'
@@ -118,9 +126,32 @@ async def test_unseen_selection_is_rejected_without_tool_call():
     catalog = _Tool('catalog_search_agent', RecordedCatalogAgent())
     codes = _Tool('code_determination_agent', RecordedCodeAgent())
     result = await _execute_hosted_components(planner=planner, catalog_tool=catalog, code_tool=codes,
-        natural_request='商品を選ぶ', session=AgentSession(), test_case_id='WEB-UNKNOWN', telemetry=TelemetryRecorder())
+        natural_request='購入する商品を選ぶ', session=AgentSession(), test_case_id='WEB-UNKNOWN', telemetry=TelemetryRecorder())
     assert result.business_status == 'INVALID_INPUT'
     assert not catalog.calls and not codes.calls
+
+
+@pytest.mark.anyio
+async def test_general_and_identity_turns_do_not_enter_procurement_plan():
+    calls = 0
+    def planner(*_):
+        nonlocal calls
+        calls += 1
+        raise AssertionError('non-procurement intent must not call the planner')
+    catalog = _Tool('catalog_search_agent', RecordedCatalogAgent())
+    codes = _Tool('code_determination_agent', RecordedCodeAgent())
+    session = AgentSession()
+    args = dict(planner=Agent(DeterministicChatClient(planner)), catalog_tool=catalog,
+                code_tool=codes, session=session, telemetry=TelemetryRecorder(),
+                test_case_id='CHAT-ROUTING', applicant_name='架空 太郎')
+    greeting = await _execute_hosted_components(**args, natural_request='こんにちは')
+    identity = await _execute_hosted_components(**args, natural_request='私は誰？')
+    state = load_execution_state(session)
+    assert greeting.scenario_id == 'CHAT' and greeting.interaction_type == 'general'
+    assert identity.scenario_id == 'IDENTITY' and identity.interaction_type == 'identity'
+    assert '架空 太郎' in identity.response_text and 'EasyAuth' in identity.response_text
+    assert state.plan is None and state.turn_number == 2
+    assert calls == 0 and not catalog.calls and not codes.calls
 
 
 @pytest.mark.anyio

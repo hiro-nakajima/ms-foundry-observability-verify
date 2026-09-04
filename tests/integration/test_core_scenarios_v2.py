@@ -323,6 +323,38 @@ async def test_requested_specification_mismatch_is_rejected_before_catalog_compl
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("product_name", "改変商品名"),
+        ("category", "altered-category"),
+        ("unit_price", "1"),
+        ("currency", "USD"),
+        ("specifications", {"memory": "1GB"}),
+    ],
+)
+async def test_catalog_candidate_values_must_match_evidence_snapshot(valid_request, field, value):
+    catalog = RecordedCatalogAgent()
+
+    async def mutated(payload):
+        result = await catalog(payload)
+        raw = result.model_dump(mode="json")
+        raw["candidates"][0][field] = value
+        return raw
+
+    codes = RecordedCodeAgent()
+    result = await ProcurementController(mutated, codes).execute(
+        valid_request, session=AgentSession(), test_case_id=f"CATALOG-MUTATED-{field}",
+    )
+
+    assert result.scenario_id == "S4"
+    assert result.business_status == BusinessStatus.BLOCKED
+    assert result.status.parse_status == ParseStatus.SCHEMA_INVALID
+    assert result.draft is None
+    assert not codes.calls
+
+
+@pytest.mark.anyio
 async def test_budget_rejection_preserves_execution_events(valid_request):
     request = valid_request.model_copy(update={
         "constraints": valid_request.constraints.model_copy(update={

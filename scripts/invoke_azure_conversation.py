@@ -35,7 +35,8 @@ def main():
                 started, pending, milestones, final = time.monotonic(), '', [], None
                 with client.responses.create(conversation=conv.id, input=message, stream=True,
                     metadata={'test.case.id': case, 'app.turn.number': str(turn),
-                              'app.authenticated.display_name': '架空 太郎'}) as stream:
+                              'app.authenticated.display_name': '架空 太郎',
+                              'app.client.contract': 'web-json-v1'}) as stream:
                     for event in stream:
                         if event.type == 'response.output_text.delta':
                             pending += event.delta
@@ -87,6 +88,46 @@ def main():
             for entry in evidence['turns'][1:3]:
                 if any(item['step'] == 'catalog' and item['state'] == 'started' for item in entry['milestones']):
                     raise RuntimeError('Catalog was unexpectedly restarted during saved intake')
+            reset_response = client.responses.create(
+                conversation=conv.id, input='確定',
+                metadata={'test.case.id': case, 'app.turn.number': '5',
+                          'app.authenticated.display_name': '架空 太郎',
+                          'app.client.contract': 'web-json-v1'},
+            )
+            reset_result = ScenarioResult.model_validate_json(reset_response.output_text)
+            evidence['post_completion_reset'] = {
+                'response_id': reset_response.id,
+                'scenario': reset_result.scenario_id,
+                'interaction_type': reset_result.interaction_type,
+                'business': reset_result.business_status.value,
+                'status': reset_result.status.model_dump(mode='json') if reset_result.status else None,
+            }
+            if (reset_result.scenario_id != 'CHAT'
+                    or reset_result.status is None
+                    or reset_result.status.mcp_status != 'NOT_RUN'
+                    or reset_result.status.search_status != 'NOT_RUN'):
+                raise RuntimeError('Completed procurement state was not cleared before the next turn')
+
+            natural = client.conversations.create(metadata={'test.case.id': case + '-NATURAL', 'synthetic': 'true'})
+            greeting = client.responses.create(conversation=natural.id, input='こんにちは')
+            identity = client.responses.create(conversation=natural.id, input='私は誰？')
+            evidence['natural_language'] = {
+                'conversation_id': natural.id,
+                'greeting_response_id': greeting.id,
+                'identity_response_id': identity.id,
+                'greeting_is_json': greeting.output_text.lstrip().startswith('{'),
+                'identity_is_json': identity.output_text.lstrip().startswith('{'),
+            }
+            if (evidence['natural_language']['greeting_is_json']
+                    or evidence['natural_language']['identity_is_json']):
+                raise RuntimeError('Playground-compatible response was not natural language')
+            if 'こんにちは' not in greeting.output_text:
+                raise RuntimeError('Greeting was not handled as general conversation')
+            if 'OAuth Identity Passthrough' not in identity.output_text:
+                raise RuntimeError('Playground identity response did not explain the OBO boundary')
+            save(STATE / f'{case}.json', evidence)
+            print(json.dumps({'case': case, **evidence['post_completion_reset'],
+                              **evidence['natural_language']}, ensure_ascii=False), flush=True)
 
 
 if __name__ == '__main__':

@@ -23,8 +23,8 @@ from .framework import (
 )
 from .middleware import ContentGovernanceChatMiddleware, SessionGovernanceAgentMiddleware, ToolGovernanceFunctionMiddleware
 from .models import (
-    BusinessStatus, ExecutionPlan, ParseStatus, ProcurementIntake, ProcurementRequest,
-    ScenarioResult, TechnicalStatus,
+    BusinessStatus, ExecutionPlan, OperationStatus, ParseStatus, ProcurementIntake,
+    ProcurementRequest, ScenarioResult, TechnicalStatus,
 )
 from .controller import ProcurementController
 from .observability import TelemetryRecorder, current_request_attributes, request_correlation, sha256
@@ -54,6 +54,9 @@ For ExecutionPlan, plan catalog, code, and merge/validate in that order.
 Call only catalog_search_agent and code_determination_agent. Each task argument must
 be a validated Structured snapshot JSON. Never infer product codes, prices, account
 codes, or department codes. Do not output chain-of-thought.
+Treat the JSON payload supplied by the controller as the source of truth for the
+current procurement. When previous_intake is null, do not reuse fields from an
+older completed procurement found in conversation history.
 """
 
 
@@ -150,9 +153,13 @@ class ControllerContextProvider(ContextProvider):
         finally:
             request_correlation.reset(token)
         result.trace["correlation"] = {**attributes, "framework_session_id_hash": sha256(session.session_id)}
+        output = (
+            result.model_dump_json()
+            if attributes.get("app.client.contract") == "web-json-v1"
+            else result.response_text
+        )
         context.extend_instructions(
-            self.source_id,
-            f"{CONTROLLER_RESULT_START}{result.model_dump_json()}{CONTROLLER_RESULT_END}",
+            self.source_id, f"{CONTROLLER_RESULT_START}{output}{CONTROLLER_RESULT_END}",
         )
 
 
@@ -284,6 +291,54 @@ def _with_response_text(result: ScenarioResult) -> ScenarioResult:
     return result
 
 
+def _intent(text: str, *, procurement_active: bool) -> str:
+    normalized = re.sub(r"[\s、。！？!?]+", "", text).lower()
+    if normalized in {"私は誰", "私は誰ですか", "わたしは誰", "whoami"}:
+        return "identity"
+    if procurement_active:
+        return "procurement"
+    if any(term in normalized for term in ("購入", "買いたい", "買って", "調達", "申請")):
+        return "procurement"
+    return "general"
+
+
+def _conversation_result(
+    *, session: AgentSession, state: Any, test_case_id: str,
+    interaction_type: str, applicant_name: str | None,
+) -> ScenarioResult:
+    state.turn_number += 1
+    state.test_case_id = test_case_id
+    save_execution_state(session, state)
+    if interaction_type == "identity":
+        if applicant_name:
+            text = (
+                f"現在このWeb Appにサインインしている方の表示名は「{applicant_name}」です。"
+                "この名前はEasyAuthの検証済みclaimから取得しており、Graph OBOは使用していません。"
+            )
+        else:
+            text = (
+                "Playgroundのサインイン利用者名はHosted Agentへ直接渡されません。"
+                "本人確認にはOAuth Identity Passthrough対応MCPを介したGraph OBO接続が必要です。"
+            )
+        scenario_id = "IDENTITY"
+    else:
+        text = "こんにちは。何をお手伝いしましょうか。購入したい商品があれば、その内容を教えてください。"
+        scenario_id = "CHAT"
+    status = OperationStatus(
+        business_status=BusinessStatus.SUCCESS,
+        parse_status=ParseStatus.SUCCESS,
+    )
+    return ScenarioResult(
+        scenario_id=scenario_id,
+        interaction_type=interaction_type,
+        test_case_id=test_case_id,
+        technical_status=TechnicalStatus.SUCCESS,
+        business_status=BusinessStatus.SUCCESS,
+        status=status,
+        response_text=text,
+    )
+
+
 async def _invoke_remote_tool(tool: Any, payload: Any, session: AgentSession) -> dict[str, Any]:
     arguments = {"task": payload.model_dump_json()}
     context = FunctionInvocationContext(function=tool, arguments=arguments, session=session)
@@ -325,7 +380,28 @@ async def _execute_hosted_components(
         state.warnings.append("session_state_reset_after_schema_change")
         save_execution_state(session, state)
     if state is None:
-        initialize_execution_state(session, test_case_id=test_case_id)
+        state = initialize_execution_state(session, test_case_id=test_case_id)
+    # A completed procurement remains available as evidence for its response,
+    # then its Plan & Execute state is cleared at the start of the next turn.
+    if state.plan is not None and state.plan.status.name == "COMPLETED":
+        previous_turn = state.turn_number
+        previous_applicant = state.applicant_name
+        state = initialize_execution_state(session, test_case_id=test_case_id)
+        state.turn_number = previous_turn
+        state.applicant_name = previous_applicant
+        save_execution_state(session, state)
+    if applicant_name:
+        state.applicant_name = applicant_name
+        save_execution_state(session, state)
+    interaction_type = _intent(
+        natural_request,
+        procurement_active=bool(state.intake or state.request or state.catalog_result),
+    )
+    if interaction_type != "procurement":
+        return _conversation_result(
+            session=session, state=state, test_case_id=test_case_id,
+            interaction_type=interaction_type, applicant_name=applicant_name,
+        )
     controller = ProcurementController(
         lambda payload: _invoke_remote_tool(catalog_tool, payload, session),
         lambda payload: _invoke_remote_tool(code_tool, payload, session),
@@ -334,9 +410,6 @@ async def _execute_hosted_components(
     try:
         publish('intake', 'started')
         state = load_execution_state(session)
-        if applicant_name:
-            state.applicant_name = applicant_name
-            save_execution_state(session, state)
         previous = state.intake or state.request
         candidates = state.catalog_result.candidates if state.catalog_result else []
         selected_from_button = next((

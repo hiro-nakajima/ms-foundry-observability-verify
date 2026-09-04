@@ -8,7 +8,17 @@ import pytest
 
 from procurement_agent.framework import DeterministicChatClient
 from procurement_agent.models import BusinessStatus, ScenarioResult, TechnicalStatus
+from procurement_agent.observability import request_correlation
 from procurement_agent.progress import ProgressMiddleware, STATE_LABELS, STEP_LABELS, publish
+
+
+@pytest.fixture(autouse=True)
+def web_machine_contract():
+    token = request_correlation.set({'app.client.contract': 'web-json-v1'})
+    try:
+        yield
+    finally:
+        request_correlation.reset(token)
 
 
 def _result(case_id):

@@ -40,6 +40,15 @@ and call Microsoft Graph `/me`, following the reference environment. That path
 must have its own permissions and validation and must not become a dependency of
 the procurement applicant-name flow.
 
+Foundry Playground does not traverse the App Service EasyAuth boundary, so its
+signed-in display name is not available as `X-MS-CLIENT-PRINCIPAL` to the Hosted
+parent. Playground/default Responses therefore return natural language, but a
+real "who am I" lookup requires a separate Prompt/MCP identity path configured
+with Foundry OAuth Identity Passthrough and Graph OBO. The current Hosted parent
+reports that boundary instead of inventing an identity. The Web path continues
+to use the EasyAuth display name without Graph, while the optional OBO path is
+validated independently and does not authorize procurement or Search access.
+
 ## Verification boundary
 
 On 2026-09-03, the actual EasyAuth authorization request used

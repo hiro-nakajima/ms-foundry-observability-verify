@@ -284,7 +284,8 @@ def _stream_progress(line: str) -> str | None:
 
 
 def _response_metadata(case: str, number: int, applicant_name: str) -> dict[str, str]:
-    value = {'test.case.id': case, 'app.turn.number': str(number)}
+    value = {'test.case.id': case, 'app.turn.number': str(number),
+             'app.client.contract': 'web-json-v1'}
     if applicant_name:
         value['app.authenticated.display_name'] = applicant_name
     return value

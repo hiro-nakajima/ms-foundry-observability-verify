@@ -39,6 +39,9 @@ class _RequestCorrelationMiddleware(BaseHTTPMiddleware):
                 if (0 < len(normalized_name) <= 120
                         and not any(ord(char) < 32 or ord(char) == 127 for char in normalized_name)):
                     applicant_name = normalized_name
+                contract = metadata.get("app.client.contract")
+                if contract == "web-json-v1":
+                    attributes["app.client.contract"] = contract
             except (ValueError, AttributeError, TypeError):
                 pass  # Protocol handler owns rejection; never log the raw body.
         token = request_correlation.set(attributes)

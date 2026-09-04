@@ -31,7 +31,8 @@ def main():
         with project.get_openai_client(agent_name="procurement-parent-agent", max_retries=0, timeout=240) as agent:
             response = agent.responses.create(conversation=conversation.id,
                 input="架空の購買依頼です。申請ID REQ-SYNTH-001、申請者は架空 太郎、所属は開発部（架空部署）。開発用ノートPCを2台、用途は開発、予算上限40万円、必要メモリ32GBです。Catalogに存在する商品とコードだけを使って購買申請を作成してください。",
-                metadata={"test.case.id": case, "app.turn.number": "1"})
+                metadata={"test.case.id": case, "app.turn.number": "1",
+                          "app.client.contract": "web-json-v1"})
             result = ScenarioResult.model_validate_json(response.output_text)
             summary = {"case": case, "path": "direct-foundry-not-webapp", "conversation_id": conversation.id,
                 "response_id": response.id, "expected_agent_version": expected,

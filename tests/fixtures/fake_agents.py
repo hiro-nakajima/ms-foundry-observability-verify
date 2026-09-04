@@ -36,6 +36,9 @@ class RecordedCatalogAgent:
             document_id=item["document_id"], source_version=item["source_version"],
             record_type="product", record_key=item["product_code"],
             rank=item.get("rank"), score=item.get("score"),
+            catalog_product_name=item["product_name"], catalog_category=item["category"],
+            catalog_unit_price=item["unit_price"], catalog_currency=item["currency"],
+            catalog_specifications=item.get("specifications", {}),
         ) for item in documents]
         return CatalogSearchResult(
             correlation=value.correlation, status=status, candidates=candidates,

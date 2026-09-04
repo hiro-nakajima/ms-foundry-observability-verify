@@ -51,10 +51,11 @@ async def test_hosted_request_metadata_is_allowlisted_and_request_scoped():
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         response = await client.post("/responses", json={"conversation": {"id": "conv_synthetic"}, "metadata": {
             "test.case.id": "S1-synthetic", "app.turn.number": "2", "email": "must-not-record",
-            "app.authenticated.display_name": "架空 利用者"}})
+            "app.authenticated.display_name": "架空 利用者", "app.client.contract": "web-json-v1"}})
         result = response.json()
         assert result == {"attributes": {"gen_ai.conversation.id": "conv_synthetic",
-            "test.case.id": "S1-synthetic", "app.web.turn.number": 2}, "applicant": "架空 利用者"}
+            "test.case.id": "S1-synthetic", "app.web.turn.number": 2,
+            "app.client.contract": "web-json-v1"}, "applicant": "架空 利用者"}
         assert (await client.post("/responses", json={})).json() == {"attributes": {}, "applicant": None}
     assert request_correlation.get() == {}
     assert authenticated_applicant_name.get() is None
