@@ -80,6 +80,7 @@ async def build_envelope(
             resumed=resumed,
         ),
         correlation=CorrelationIdentity(
+            conversation_id=next((span.attributes.get("gen_ai.conversation.id") for span in finished_spans if span.attributes.get("gen_ai.conversation.id")), None),
             trace_id=f"{root_span.context.trace_id:032x}" if root_span else None,
             span_id=f"{root_span.context.span_id:016x}" if root_span else None,
             parent_span_id=f"{root_span.parent.span_id:016x}" if root_span and root_span.parent else None,

@@ -1,4 +1,5 @@
 from agent_framework import AgentSession, InMemoryHistoryProvider
+from decimal import Decimal
 import json
 from pathlib import Path
 import pytest
@@ -279,6 +280,64 @@ async def test_inconsistent_child_success_status_is_rejected(valid_request, fail
     failed_events = {event.name for event in failed_span.events}
     assert "result.rejected" in failed_events
     assert "step.completed" not in failed_events
+
+
+@pytest.mark.anyio
+async def test_requested_specification_mismatch_is_rejected_before_catalog_completion(valid_request):
+    request = valid_request.model_copy(update={
+        "constraints": valid_request.constraints.model_copy(update={
+            "specifications": {"memory": "64GB"},
+        }),
+    })
+    catalog = RecordedCatalogAgent()
+    codes = RecordedCodeAgent()
+    controller = ProcurementController(catalog, codes)
+    session = AgentSession()
+    result = await controller.execute(
+        request, session=session, test_case_id="SPECIFICATION-MISMATCH",
+    )
+
+    assert result.scenario_id == "S1"
+    assert result.technical_status == TechnicalStatus.SUCCESS
+    assert result.business_status == BusinessStatus.VALIDATION_FAILED
+    assert result.status.reason_code == "catalog_specification_mismatch"
+    assert result.draft is None
+    assert len(catalog.calls) == 1
+    assert not codes.calls
+    state = load_execution_state(session)
+    assert state.plan.status == PlanStatus.BLOCKED
+    assert not state.completed_step_keys
+    assert [event["name"] for event in result.trace["events"]] == [
+        "step.started", "plan.blocked",
+    ]
+    catalog_span = next(
+        span for span in controller.telemetry.finished_spans()
+        if span.name == "plan.step.execute"
+    )
+    rejected_event = next(
+        event for event in catalog_span.events if event.name == "result.rejected"
+    )
+    assert rejected_event.attributes["business.status"] == "VALIDATION_FAILED"
+    assert rejected_event.attributes["reason.code"] == "catalog_specification_mismatch"
+    assert "step.completed" not in {event.name for event in catalog_span.events}
+
+
+@pytest.mark.anyio
+async def test_budget_rejection_preserves_execution_events(valid_request):
+    request = valid_request.model_copy(update={
+        "constraints": valid_request.constraints.model_copy(update={
+            "budget_limit": Decimal("100000"),
+        }),
+    })
+    result = await ProcurementController(
+        RecordedCatalogAgent(), RecordedCodeAgent(),
+    ).execute(request, session=AgentSession(), test_case_id="BUDGET-REJECTED")
+
+    assert result.business_status == BusinessStatus.VALIDATION_FAILED
+    assert result.status.reason_code == "budget_limit_exceeded"
+    assert result.trace["events"]
+    assert result.trace["events"][-1]["name"] == "plan.blocked"
+    assert [event["name"] for event in result.trace["events"]].count("step.completed") == 2
 
 
 @pytest.mark.anyio

@@ -9,3 +9,5 @@ tools:
       indexes:
         - project_connection_id: procurement-search-connection
           index_name: procurement-catalog-v1
+          query_type: simple
+          top_k: 10

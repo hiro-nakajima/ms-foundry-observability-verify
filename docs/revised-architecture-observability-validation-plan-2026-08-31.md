@@ -1,10 +1,10 @@
 # Microsoft Foundry 購買申請 Agent 改訂構成・Observability 検証計画
 
 - 作成日: 2026-08-31
-- 更新日: 2026-09-01
-- 状態: Review 用設計案。Azure への作成・変更・デプロイは未実施
+- 更新日: 2026-09-03
+- 状態: 承認済み構成の実装・Azure実測を進行中。個別の完了/未検証結果は検証報告を参照
 - 対象 Repository: `ms-foundry-observability-verify`
-- 対象 Foundry project: `observability-verify/pro-default`
+- 対象 Foundry project: `observability-verify/proj-default`（2026-09-03 Azure inventoryで実名を確認）
 - 調査基準日: 2026-08-31
 
 ## 1. この資料の位置付け
@@ -132,9 +132,56 @@ catalog_tool = catalog_agent.as_tool(
 
 `InMemoryHistoryProvider`は明示的に1つだけ`load_messages=True`で登録する。診断用History Providerを追加する場合は`load_messages=False`とし、同じ履歴を複数Providerからmodel contextへ注入しない。
 
+Hosted Responses実装補足（2026-09-03、採用SDK実constructorで確認）: `ResponsesHostServer`は既存Providerの`load_messages=True`を拒否し、受信transcript用のFramework標準History Providerを自身で登録する。この入口に限り`procurement-history`を`load_messages=False`に切り替え、保存・`get_messages()`・Session serialize/restoreは維持する。Local agent.runは従来どおりTrue。独自History/Sessionを追加せず、Hostedでもloaderは1つだけとする。SDKのmessage content取得は既定がTrueのため`OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=false`を起動時に明示する。
+
 親Agentは各Turnで同じFramework `AgentSession`を`agent.run(..., session=session)`へ渡す。Function ToolまたはFunction Middlewareは`FunctionInvocationContext.session`から同じSessionを取得し、`session.state`内のnamespaced業務状態を読み書きする。`ctx.session is None`はprogramming/configuration errorとしてfail closedにし、新しいSessionをTool内で暗黙作成しない。
 
 `ProcurementExecutionState`には、Plan、現在Step、request、取得済み根拠、選択商品、application draft、governance decision、turn number、idempotency keyを保存する。保存値は`model_dump(mode="json")`によるJSON互換dictとし、読出し時に`model_validate()`する。Framework `AgentSession.session_id`、`service_session_id`、history provider stateは独自schemaへ複製しない。
+
+### 3.5 App Service / APIM入口（2026-09-03追加指示）
+
+Browser → App Service EasyAuth / WebUI backend → APIM → Hosted親 → FoundryAgent proxy → Prompt子 → 担当Toolbox MCP → Searchを1つの本線とする。
+WebUIの配置元は `src/webapp-foundry-oauth`。その中の `backend/procurement.py` を稼働入口とし、提供されたOAuth/Graphサンプルは参照用に保存するがdeploy packageへ含めない。
+
+- Browser認証はEasyAuth、Foundry認証はApp Service system MI。APIMは当該MIのtenant/audience/oidを検証してBearerを転送する。購買申請の申請者名取得にはOBO/Graphを使わない。Functions + Entra confidential clientでGraph `/me`を呼ぶOBO相互運用確認は別経路・別ADRとして後続構築できるが、購買Agentの依存関係にしない。
+- Foundry Conversationを会話の正本として作成し、後続Responses bodyへIDを渡す。Framework AgentSessionとの対応は別途実測する。
+- 会話cookieは署名・owner binding・Secure/HttpOnly/SameSite。クライアント指定の任意Conversation IDは受理しない。
+- 1 turnのApp Service server spanをrootとする。Browserの任意traceparent/tracestate/baggageは捨てる。HTTP client自動計装を使い、tracecontext,baggageを伝播する。
+- user.idはEasyAuth tid/oidのSHA-256。raw claims、token、氏名、email、CoTをUI/Traceへ出さない。
+- APIMのResponsesに加えてConversations create/get/updateを公開する。リアルタイム進捗のため、後続承認に従い対象RG内にDeveloper APIMを新設して切り替える。参照RGは変更しない。
+- Local HTTPの成功はAPIM/Managed Foundry境界の成功ではない。Azureでは親子関係、conversation/case/turn/user.idを実測し、非伝播はNOT_PROPAGATEDとする。
+- Searchはユーザー選択肢1に従い、West Central USのServerless Developerを使用する。Storageは後続指示の3.6に従う。T4追加なし。
+
+実装・what-if・未検証事項は `docs/webapp-apim-readiness-2026-09-03.md` に記録する。
+
+### 3.6 Blob Indexer取込（2026-09-03後続指示）
+
+ユーザーの明示指示により、Storageを作らない初期方針とPushを主経路にする方針を次の範囲で変更する。既存Serverless Developerを継続し、Free Search `rag-ais-02`への移行・既存Searchの削除は行わない。
+
+Repository JSON → 既存のdocument生成処理 → 専用Blob StorageのJSON配列 → 2 Data source → 2 Indexer → 既存2 Index → 担当Toolbox MCP → Prompt子を本線とする。商品10件・Code Master 9件、source_version、document_id、検索可能content projectionは維持する。Index追加・再作成、Agent/containerへのデータ埋込はしない。
+
+- Storage用途はSynthetic JSONのIndexer入力のみ。Foundry Conversation/Framework Sessionの保存先にはしない。
+- 対象RG内のStorageV2 / Standard LRS / Hot / West Central US、非公開コンテナー2つ。共有キーと匿名Blobアクセスを無効化し、HTTPS/TLS1.2を使用する。Private Endpoint等は作らない。
+- Search system MIに各コンテナーのStorage Blob Data Reader、投入担当に各コンテナーのStorage Blob Data Contributor。Foundry/ToolboxのSearch query権限は変更しない。
+- IndexerはjsonArray、document_idの明示mapping、失敗許容0、scheduleなしのオンデマンド実行。キー/SASではなくResourceIdによるMI接続を使う。
+- 削除済みBlob/コンテナーの保持7日。稼働JSONの自動削除なし。JSON配列の要素削除は既存Index文書削除へ自動反映されないため、削除同期は今回の範囲外。文書削除が必要なら別途承認・明示的処理を行う。
+- Serverless一覧取得は2026-08-01-previewのpageSize指定で実測する。旧APIのページングエラーをIndexer非対応と解釈しない。
+- AcceptanceはBlob read-back一致、Indexer実行成功/処理件数/エラー、全Index文書のRepository projection一致、Toolbox実検索。既存Push済み文書が読めただけでIndexer成功にしない。
+- 非破壊rollbackはIndexer停止と既存Pushスクリプトへの切戻し。StorageやIndex削除は自動実行しない。
+
+S1〜S5、Stage A全14、Stage B指定6件、S1/S5 Healthy controlとV1〜V21の検証範囲は変更しない。
+
+### 3.7 対話intakeと実行中progress（2026-09-03追加指示）
+
+「ノートPCを購入したい」のような情報不足はschema failureではなくWAITING_USERとする。親LLMは1回の構造化応答でnullableなintakeとExecutionPlanを返す。ユーザー入力は商品、台数、所属部署、メモの4項目とし、申請IDと用途は要求しない。申請IDは確定時にHosted親が内部生成する。申請者名はEasyAuthの検証済み`name` claimをApp ServiceからHosted親へ渡し、ユーザー入力やLLM推測では補わない。OBOやGraph `/me`は使わない。
+
+Framework Sessionの業務stateへintake、EasyAuth申請者名、Catalog候補、選択商品を保存し、商品候補はCatalog Prompt→Toolbox→Search経路で取得する。quantity=nullは探索用で、擬似注文数量ではない。候補は対応するproduct EvidenceがあるものだけUIへ出す。ユーザー選択は前turnの候補にあるcodeだけを受理する。選択後の台数・所属部署・メモ入力turnでは保存済み候補を再利用し、Catalogを再実行しない。4項目が揃ったらWAITING_USERで「確定」を要求し、完全一致の「確定」turnでのみCatalogを再検索して根拠を更新し、Code、merge/validate、申請draft生成へ進む。
+
+親Agent Middlewareから実行イベントのstep/stateと固定日本語messageのallowlistだけをResponses text deltaへ送る。最終出力はHosted親が生成した`response_text`とprogressフィールド付きの有効ScenarioResult JSONを維持する。Web backendはstreamを逐次受信し、Hosted親の安全な公開message、候補、statusだけをNDJSONで中継する。Web側で購買状態遷移や最終回答を再構築しない。CoT、raw Tool/LLM出力、secretを逐次表示しない。完了後の要約だけをリアルタイム進捗とは扱わない。
+
+Frameworkの内側stream finalizationでHistoryProvider/session保存を維持する。進捗Queueはrun-local。SDKでyield間の切断が即時cancelされない場合があるため実行上限180秒、切断時の即時取消は保証しない。Azureで最初の進捗と完了の受信時刻を照合する。
+
+APIM Consumptionは公式SSE長時間接続のサポート対象外。2026-09-03のユーザー承認により、対象RG/East USへDeveloper 1台の`apim-procurement-stream-nkjm`を新設した（月額目安$48.03、非production・SLAなし）。実MIの複数turn・逐次progress、配置済みWeb backendのcookie/CSRF/SSE経路、Web接続先を実測後、旧Consumption `apim-procurement-observe-nkjm`を2026-09-04にsoft-deleteした。2026-09-06までの復元期間を確認し、purgeは実施していない。再配備後の実ユーザーBrowser/EasyAuth操作は別途確認し、直接Hosted・MI診断・localhost成功だけでBrowser全経路をPASSにしない。
 
 ## 4. 質問への回答
 
@@ -501,7 +548,7 @@ tests/fixtures/mcp/toolbox-*.json
 
 ### Phase 4: Hosted親Agent
 
-1. LLMの`response_format`へPydantic `ExecutionPlan`を指定する。
+1. LLMの`response_format`へPydantic `ExecutionPlan`から生成したJSON schemaを指定し、応答も同じPydantic modelで検証する。2026-09-03実APIで`ProcurementRequest.constraints.specifications`の任意キーdictがstrict schemaに拒否されることを確認したため、plannerのwire formatは`strict=false`とする。Pydanticによるdomain検証やstatus contractは緩和しない。
 2. 空出力、parse失敗、欠落Stepのfallbackを実装する。
 3. Controllerがcatalog → code → merge/validateを順次呼ぶ。
 4. `FoundryAgent.as_tool(propagate_session=False)`を2つ登録し、task JSONとresponse JSONをPydanticで検証する。

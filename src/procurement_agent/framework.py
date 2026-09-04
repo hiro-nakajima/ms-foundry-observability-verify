@@ -37,7 +37,9 @@ class DeterministicChatClient(BaseChatClient):
         return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str), None
 
     def _inner_get_response(self, *, messages, stream, options, **kwargs):
-        self.calls.append({"message_count": len(messages), "response_format": getattr(options.get("response_format"), "__name__", None), "tool_count": len(options.get("tools") or []), "stream": stream})
+        response_format = options.get("response_format")
+        format_name = response_format.get("name") if isinstance(response_format, Mapping) else getattr(response_format, "__name__", None)
+        self.calls.append({"message_count": len(messages), "response_format": format_name, "tool_count": len(options.get("tools") or []), "stream": stream})
         response_id = f"local-response-{uuid4()}"
         if not stream:
             async def response() -> ChatResponse:

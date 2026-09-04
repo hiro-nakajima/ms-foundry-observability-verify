@@ -9,6 +9,7 @@
     {"name":"account_code","type":"Edm.String","retrievable":true,"searchable":true,"filterable":true,"sortable":true,"facetable":false},
     {"name":"department_code","type":"Edm.String","retrievable":true,"searchable":true,"filterable":true,"sortable":true,"facetable":false},
     {"name":"display_name","type":"Edm.String","retrievable":true,"searchable":true,"filterable":false,"sortable":false,"facetable":false,"analyzer":"ja.microsoft"},
+    {"name":"content","type":"Edm.String","retrievable":true,"searchable":true,"filterable":false,"sortable":false,"facetable":false,"analyzer":"ja.microsoft"},
     {"name":"active","type":"Edm.Boolean","retrievable":true,"searchable":false,"filterable":true,"sortable":false,"facetable":true}
   ]
 }

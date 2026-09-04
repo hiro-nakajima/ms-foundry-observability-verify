@@ -74,8 +74,15 @@ def build_documents() -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[
             "display_name": item["department_name"],
             "active": True,
         })
+    # Managed Toolbox returns searchable text, not every retrievable field.
+    # Carry the adopted values and evidence IDs in that text, from the same JSON.
+    for document in catalog_documents + code_documents:
+        document["content"] = json.dumps(
+            {key: value for key, value in document.items() if key not in {"content", "aliases", "active"}},
+            ensure_ascii=False, sort_keys=True,
+        )
     manifest = {
-        "schema_version": "1.0", "source_version": source_version, "synthetic": True,
+        "schema_version": "1.0", "document_projection_version": "2", "source_version": source_version, "synthetic": True,
         "catalog_index": "procurement-catalog-v1", "catalog_document_count": len(catalog_documents),
         "catalog_sha256": canonical_hash(catalog_documents),
         "code_index": "procurement-code-master-v1", "code_document_count": len(code_documents),

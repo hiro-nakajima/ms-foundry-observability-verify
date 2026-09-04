@@ -1,9 +1,0 @@
-{
-  "schema_version": "1.0",
-  "data_version": "2026-09-01.1",
-  "synthetic": true,
-  "records": [
-    {"rule_id": "DELIVERY-IN-STOCK", "condition": "quantity_lte_stock", "additional_days": 0},
-    {"rule_id": "DELIVERY-BACKORDER", "condition": "quantity_gt_stock", "additional_days": 21}
-  ]
-}

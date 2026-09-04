@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 import json
+import re
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any
 
@@ -13,34 +15,62 @@ from agent_framework import (
 )
 from agent_framework_foundry import FoundryAgent, FoundryChatClient
 from azure.identity import DefaultAzureCredential
+from pydantic import ValidationError
 
 from .framework import (
     CONTROLLER_RESULT_END, CONTROLLER_RESULT_START, DeterministicChatClient,
-    controller_result_handler, local_parent_handler,
+    controller_result_handler,
 )
 from .middleware import ContentGovernanceChatMiddleware, SessionGovernanceAgentMiddleware, ToolGovernanceFunctionMiddleware
-from .models import ExecutionPlan, ProcurementRequest, ScenarioResult
+from .models import (
+    BusinessStatus, ExecutionPlan, ParseStatus, ProcurementIntake, ProcurementRequest,
+    ScenarioResult, TechnicalStatus,
+)
 from .controller import ProcurementController
-from .observability import TelemetryRecorder
-from .session_state import initialize_execution_state, load_execution_state
+from .observability import TelemetryRecorder, current_request_attributes, request_correlation, sha256
+from .session_state import (
+    EXECUTION_STATE_KEY, SessionStateSchemaError, initialize_execution_state,
+    load_execution_state, save_execution_state,
+)
+from .progress import ProgressMiddleware, publish
 
 
 PARENT_INSTRUCTIONS = """You are the single Hosted procurement coordinator.
-Interpret the user request, produce an ExecutionPlan using the configured Pydantic
-response_format, then execute catalog, code, and merge/validate in that order.
+Return only the object named by the current Pydantic response_format.
+For ProcurementIntake, extract the user's request AND generate the ExecutionPlan in one response.
+Use the supplied previous intake to continue the same request. Only change fields
+the user supplies; unknown fields MUST remain null. Never invent a quantity,
+department, or memo to fill a required field. Applicant identity and request ID
+are supplied by trusted application state and are not user input.
+selected_product_code is only a product the user explicitly selected from the
+supplied candidates (a candidate number refers to that displayed ordering).
+Never auto-select a product on the user's behalf during clarification.
+Keep query, quantity, department_name, and memo in their named top-level fields;
+keep budget_limit in constraints. constraints.specifications
+contains only explicitly requested technical product properties, with string
+keys and string values. Never put quantity, memo, category, or request metadata
+in specifications; never add requirements the user did not state.
+For ExecutionPlan, plan catalog, code, and merge/validate in that order.
 Call only catalog_search_agent and code_determination_agent. Each task argument must
 be a validated Structured snapshot JSON. Never infer product codes, prices, account
 codes, or department codes. Do not output chain-of-thought.
 """
 
 
+# Request-scoped identity supplied by the authenticated App Service boundary.
+# It is deliberately not an OpenTelemetry attribute or baggage item.
+authenticated_applicant_name: ContextVar[str | None] = ContextVar(
+    "procurement_authenticated_applicant_name", default=None,
+)
+
+
 @dataclass(frozen=True)
 class FoundryRuntimeSettings:
     project_endpoint: str
     parent_model: str
-    catalog_agent_name: str = "catalog_search_agent"
+    catalog_agent_name: str = "catalog-search-agent"
     catalog_agent_version: str = "1"
-    code_agent_name: str = "code_determination_agent"
+    code_agent_name: str = "code-determination-agent"
     code_agent_version: str = "1"
     parent_name: str = "procurement_parent_agent"
 
@@ -53,9 +83,9 @@ class FoundryRuntimeSettings:
         return cls(
             project_endpoint=endpoint,
             parent_model=model,
-            catalog_agent_name=os.getenv("PROCUREMENT_CATALOG_AGENT_NAME", "catalog_search_agent"),
+            catalog_agent_name=os.getenv("PROCUREMENT_CATALOG_AGENT_NAME", "catalog-search-agent"),
             catalog_agent_version=os.getenv("PROCUREMENT_CATALOG_AGENT_VERSION", "1"),
-            code_agent_name=os.getenv("PROCUREMENT_CODE_AGENT_NAME", "code_determination_agent"),
+            code_agent_name=os.getenv("PROCUREMENT_CODE_AGENT_NAME", "code-determination-agent"),
             code_agent_version=os.getenv("PROCUREMENT_CODE_AGENT_VERSION", "1"),
         )
 
@@ -104,16 +134,22 @@ class ControllerContextProvider(ContextProvider):
     ) -> None:
         current = load_execution_state(session, required=False)
         next_turn = (current.turn_number if current else 0) + 1
-        test_case_id = f"HOSTED-{session.session_id}-T{next_turn}"
-        result = await _execute_hosted_components(
-            planner=self.planner,
-            catalog_tool=self.catalog_tool,
-            code_tool=self.code_tool,
-            natural_request=self._latest_user_text(context),
-            session=session,
-            test_case_id=test_case_id,
-            telemetry=self.telemetry,
-        )
+        attributes = current_request_attributes()
+        test_case_id = attributes.get("test.case.id") or f"HOSTED-{session.session_id}-T{next_turn}"
+        attributes.update({"test.case.id": test_case_id, "app.session.id.hash": sha256(session.session_id), "app.turn.number": next_turn})
+        from opentelemetry import trace
+        trace.get_current_span().set_attributes(attributes)
+        token = request_correlation.set(attributes)
+        try:
+            result = await _execute_hosted_components(
+                planner=self.planner, catalog_tool=self.catalog_tool, code_tool=self.code_tool,
+                natural_request=self._latest_user_text(context), session=session,
+                test_case_id=test_case_id, telemetry=self.telemetry,
+                applicant_name=authenticated_applicant_name.get(),
+            )
+        finally:
+            request_correlation.reset(token)
+        result.trace["correlation"] = {**attributes, "framework_session_id_hash": sha256(session.session_id)}
         context.extend_instructions(
             self.source_id,
             f"{CONTROLLER_RESULT_START}{result.model_dump_json()}{CONTROLLER_RESULT_END}",
@@ -180,6 +216,7 @@ def build_hosted_bundle(
         tools=[catalog_tool, code_tool],
         context_providers=[history, controller_provider],
         middleware=[
+            ProgressMiddleware(),
             SessionGovernanceAgentMiddleware(),
             ContentGovernanceChatMiddleware(),
             ToolGovernanceFunctionMiddleware(),
@@ -202,25 +239,49 @@ def build_hosted_bundle(
     )
 
 
-def build_local_parent_scaffold() -> Agent:
-    """No-network parent only; tests inject fixture tools outside the container package."""
-    history = InMemoryHistoryProvider("procurement-history", load_messages=True)
-    return Agent(
-        DeterministicChatClient(local_parent_handler),
-        id="procurement-parent-v2-local",
-        name="procurement_parent_agent",
-        instructions=PARENT_INSTRUCTIONS,
-        context_providers=[history],
-        additional_properties={"architecture_id": "procurement_application_v2"},
-    )
-
-
 def _response_model(response: Any, model_type: type[Any]) -> Any:
     value = getattr(response, "value", None)
     if isinstance(value, model_type):
         return value
     text = getattr(response, "text", "")
     return model_type.model_validate_json(text)
+
+
+def _planner_format(model_type: type[Any]) -> dict[str, Any]:
+    # OpenAI strict schemas reject the arbitrary specification keys. Keep the
+    # Pydantic schema on the wire and validate the result with the same model.
+    return {"type": "json_schema", "name": model_type.__name__,
+            "schema": model_type.model_json_schema(), "strict": False}
+
+
+def _with_response_text(result: ScenarioResult) -> ScenarioResult:
+    labels = {"query": "商品", "quantity": "台数", "department_name": "所属部署",
+              "memo": "メモ", "selected_product_code": "商品の選択"}
+    missing = result.missing_fields
+    if result.business_status == BusinessStatus.WAITING_USER:
+        if "authenticated_applicant_name" in missing:
+            text = "EasyAuthから申請者名を取得できませんでした。サインイン状態を確認してください。"
+        elif missing == ["confirmation"]:
+            text = "商品・台数・所属部署・メモを保存しました。内容を確認し、よければ「確定」と入力してください。"
+        else:
+            requested = "・".join(labels[name] for name in missing if name in labels)
+            prefix = "商品候補を確認しました。" if result.candidates else "入力内容をAgentSessionへ保存しました。"
+            text = f"{prefix} 次に{requested}を教えてください。"
+    elif result.business_status == BusinessStatus.SUCCESS and result.draft:
+        line = result.draft.lines[0]
+        text = ("購買申請案を確定しました。\n"
+                f"商品: {line.product_name}（{line.product_code}）\n台数: {line.quantity}\n"
+                f"所属部署: {result.draft.department_name}\n合計: {result.draft.total}円\n"
+                "このPoCでは提出・発注は行っていません。")
+    else:
+        text = {
+            BusinessStatus.NOT_FOUND: "条件に合う商品または部署コードを確認できませんでした。入力を確認してください。",
+            BusinessStatus.INVALID_INPUT: "入力内容を読み取れませんでした。商品・台数・所属部署・メモを確認してください。",
+            BusinessStatus.VALIDATION_FAILED: "申請内容が検証条件を満たさないため、申請案は確定していません。",
+            BusinessStatus.BLOCKED: "処理を継続できませんでした。実行情報のTrace IDから確認してください。",
+        }.get(result.business_status, "処理結果を確認できませんでした。")
+    result.response_text = text
+    return result
 
 
 async def _invoke_remote_tool(tool: Any, payload: Any, session: AgentSession) -> dict[str, Any]:
@@ -250,45 +311,112 @@ async def _invoke_remote_tool(tool: Any, payload: Any, session: AgentSession) ->
 async def _execute_hosted_components(
     *, planner: Agent, catalog_tool: Any, code_tool: Any, natural_request: str,
     session: AgentSession | None, test_case_id: str, telemetry: TelemetryRecorder,
+    applicant_name: str | None = None,
 ) -> ScenarioResult:
     if session is None:
         raise ValueError("Framework AgentSession is required; implicit sessions are forbidden")
-    if load_execution_state(session, required=False) is None:
-        initialize_execution_state(session, test_case_id=test_case_id)
-    request_response = await planner.run(
-        natural_request, session=session, tools=[],
-        options={"response_format": ProcurementRequest, "tool_choice": "none"},
-    )
-    request = _response_model(request_response, ProcurementRequest)
-    plan_response = await planner.run(
-        request.model_dump_json(), session=session, tools=[],
-        options={"response_format": ExecutionPlan, "tool_choice": "none"},
-    )
     try:
-        raw_plan: Any = _response_model(plan_response, ExecutionPlan)
-    except Exception:
-        raw_plan = getattr(plan_response, "text", None)
+        state = load_execution_state(session, required=False)
+    except SessionStateSchemaError:
+        raw = session.state.get(EXECUTION_STATE_KEY)
+        previous_turn = raw.get("turn_number", 0) if isinstance(raw, dict) else 0
+        state = initialize_execution_state(session, test_case_id=test_case_id)
+        state.turn_number = previous_turn if isinstance(previous_turn, int) and previous_turn >= 0 else 0
+        state.warnings.append("session_state_reset_after_schema_change")
+        save_execution_state(session, state)
+    if state is None:
+        initialize_execution_state(session, test_case_id=test_case_id)
     controller = ProcurementController(
         lambda payload: _invoke_remote_tool(catalog_tool, payload, session),
         lambda payload: _invoke_remote_tool(code_tool, payload, session),
         telemetry=telemetry,
     )
-    return await controller.execute(
-        request, session=session, test_case_id=test_case_id, raw_plan=raw_plan,
+    try:
+        publish('intake', 'started')
+        state = load_execution_state(session)
+        if applicant_name:
+            state.applicant_name = applicant_name
+            save_execution_state(session, state)
+        previous = state.intake or state.request
+        candidates = state.catalog_result.candidates if state.catalog_result else []
+        selected_from_button = next((
+            candidate.product_code for candidate in candidates
+            if re.fullmatch(
+                rf"\s*商品コード\s+{re.escape(candidate.product_code)}\s+を選びます。?\s*",
+                natural_request,
+            )
+        ), None)
+        confirming = natural_request.strip() == "確定"
+        if (selected_from_button or confirming) and state.intake is not None:
+            intake = ProcurementIntake(
+                request=state.intake,
+                plan=state.plan or ExecutionPlan(),
+                selected_product_code=selected_from_button or state.selected_product_code,
+            )
+        else:
+            request_response = await planner.run(
+                json.dumps({"user_message": natural_request,
+                            "previous_intake": previous.model_dump(mode="json") if previous else None,
+                            "candidates": [c.model_dump(mode="json") for c in candidates]}, ensure_ascii=False),
+                session=session, tools=[],
+                options={"response_format": _planner_format(ProcurementIntake), "tool_choice": "none"},
+            )
+            intake = _response_model(request_response, ProcurementIntake)
+        publish('intake', 'completed')
+        selected = intake.selected_product_code or state.selected_product_code
+        if selected and selected not in {c.product_code for c in candidates}:
+            raise ValueError("selection must come from the previous grounded candidates")
+        # A changed search invalidates the previous selection; explicit selection keeps it.
+        if previous and intake.request.query != previous.query and not intake.selected_product_code:
+            selected = None
+            state.catalog_result = None
+        state.intake = intake.request
+        state.selected_product_code = selected
+        save_execution_state(session, state)
+        request: ProcurementRequest | ProcurementIntakeRequest = intake.request
+        complete = all((
+            intake.request.query,
+            intake.request.quantity,
+            intake.request.department_name,
+            intake.request.memo,
+            state.applicant_name,
+            selected,
+        ))
+        if confirming and complete:
+            request = ProcurementRequest(
+                request_id=f"{test_case_id}-T{state.turn_number + 1}",
+                query=intake.request.query,
+                quantity=intake.request.quantity,
+                applicant_name=state.applicant_name,
+                department_name=intake.request.department_name,
+                memo=intake.request.memo,
+                constraints=intake.request.constraints,
+            )
+    except (ValidationError, json.JSONDecodeError, ValueError):
+        return _with_response_text(controller.invalid_intake_result(
+            session=session, test_case_id=test_case_id,
+            technical_status=TechnicalStatus.SUCCESS,
+            business_status=BusinessStatus.INVALID_INPUT,
+            parse_status=ParseStatus.SCHEMA_INVALID,
+            reason_code="procurement_request_schema_invalid",
+        ))
+    except Exception as error:
+        from opentelemetry import trace
+        span = trace.get_current_span()
+        span.set_attribute("error.type", type(error).__name__)
+        cause = error.__cause__ or error
+        status = getattr(cause, "status_code", None)
+        if isinstance(status, int):
+            span.set_attribute("error.http_status", status)
+        return _with_response_text(controller.invalid_intake_result(
+            session=session, test_case_id=test_case_id,
+            technical_status=TechnicalStatus.ERROR,
+            business_status=BusinessStatus.BLOCKED,
+            parse_status=ParseStatus.NOT_RUN,
+            reason_code="planner_intake_failed",
+        ))
+    result = await controller.execute(
+        request, session=session, test_case_id=test_case_id, raw_plan=intake.plan,
+        selected_product_code=selected,
     )
-
-
-async def execute_hosted_turn(
-    bundle: HostedAgentBundle, natural_request: str, *, session: AgentSession | None,
-    test_case_id: str,
-) -> ScenarioResult:
-    """Contract-test entry point for the same route exposed by Hosted/DevUI."""
-    return await _execute_hosted_components(
-        planner=bundle.planner,
-        catalog_tool=bundle.catalog_tool,
-        code_tool=bundle.code_tool,
-        natural_request=natural_request,
-        session=session,
-        test_case_id=test_case_id,
-        telemetry=bundle.telemetry,
-    )
+    return _with_response_text(result)

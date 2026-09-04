@@ -130,7 +130,6 @@ class GovernanceOutcome(StrEnum):
 
 
 class RequestConstraints(StrictModel):
-    requested_by: str | None = None
     budget_limit: Decimal | None = Field(default=None, ge=0)
     specifications: dict[str, str] = Field(default_factory=dict)
 
@@ -141,7 +140,7 @@ class ProcurementRequest(StrictModel):
     quantity: int = Field(gt=0)
     applicant_name: str = Field(min_length=1)
     department_name: str = Field(min_length=1)
-    purpose: str = Field(min_length=1)
+    memo: str = Field(min_length=1)
     constraints: RequestConstraints = Field(default_factory=RequestConstraints)
 
 
@@ -179,6 +178,21 @@ class ExecutionPlan(StrictModel):
         if len(ids) != len(set(ids)):
             raise ValueError("step_id must be unique")
         return steps
+
+
+class ProcurementIntakeRequest(StrictModel):
+    """User-supplied fields only; missing information is a normal conversation state."""
+    query: str | None = Field(default=None, min_length=1)
+    quantity: int | None = Field(default=None, gt=0)
+    department_name: str | None = Field(default=None, min_length=1)
+    memo: str | None = Field(default=None, min_length=1)
+    constraints: RequestConstraints = Field(default_factory=RequestConstraints)
+
+
+class ProcurementIntake(StrictModel):
+    request: ProcurementIntakeRequest
+    plan: ExecutionPlan
+    selected_product_code: str | None = None
 
 
 class OperationStatus(StrictModel):
@@ -229,7 +243,7 @@ class CatalogCandidate(StrictModel):
 
 class CatalogSearchInput(StrictModel):
     query: str = Field(min_length=1)
-    quantity: int = Field(gt=0)
+    quantity: int | None = Field(default=None, gt=0)  # None means discovery, never an assumed order quantity.
     constraints: RequestConstraints
     correlation: CorrelationContext
 
@@ -318,6 +332,7 @@ class ApplicationDraft(StrictModel):
     lines: list[ApplicationLine] = Field(min_length=1)
     department_code: str
     department_name: str
+    memo: str
     total: Decimal = Field(ge=0)
     evidence_refs: list[str] = Field(min_length=1)
     warnings: list[str] = Field(default_factory=list)
@@ -346,3 +361,7 @@ class ScenarioResult(StrictModel):
     injection_requested: str | None = None
     injection_activated: bool = False
     next_action: str | None = None
+    candidates: list[CatalogCandidate] = Field(default_factory=list)
+    missing_fields: list[str] = Field(default_factory=list)
+    progress: list[dict[str, str]] = Field(default_factory=list)
+    response_text: str = ""

@@ -1,0 +1,100 @@
+defaultEnvironment: poc-public
+environments:
+  poc-public:
+    projectEndpoint: https://observability-verify.services.ai.azure.com/api/projects/proj-default
+    resourceGroupId: /subscriptions/d96eb8c2-2deb-4ed5-8cf2-f9fb178cb3ee/resourceGroups/rg-ms-foundry-observability-verify
+    agentName: procurement-parent-agent
+    deploymentMode: source_zip
+    runtime: python_3_13
+    dependencyResolution: remote_build
+    azureContainerRegistry: null # User requires ZIP deploy; ACR is not used.
+    deploymentStatus: ACTIVE
+    agentVersion: '9'
+    searchIngestion:
+      mode: blob_indexer
+      apiVersion: 2026-08-01-preview
+      storageAccount: stprocurementobsnkjm
+      searchService: srch-procurement-observe-nkjm
+      indexers:
+        - procurement-catalog-blob-indexer
+        - procurement-code-master-blob-indexer
+    zipSha256: cd7f44d9510ab735adbf649702e18fa1fee7128875342eb2c255207e96ee8431
+    childAgents:
+      - catalog-search-agent
+      - code-determination-agent
+    childAgentVersions:
+      catalog-search-agent: '3'
+      code-determination-agent: '2'
+    observability:
+      applicationInsightsResourceId: /subscriptions/d96eb8c2-2deb-4ed5-8cf2-f9fb178cb3ee/resourceGroups/rg-ms-foundry-observability-verify/providers/Microsoft.Insights/components/web-procurement-observe-nkjm-insights
+      managedPromptContentRecording: NOT_SUPPORTED_CONTENT_OFF
+      sensitiveContentFeature: Registered
+      desiredAppGenAIContentProtectionLevel: Protected
+      appGenAIContentProtectionLevel: General
+      appGenAIContentProtectionApplyStatus: API_ACCEPTED_BUT_NOT_APPLIED
+      appGenAIContentRetentionDays: 90
+    webApp:
+      name: web-procurement-observe-nkjm
+      deploymentId: efebcca8-3807-410a-b04f-dd9ed6ea8f0d
+      packageSha256: 96a5b9f68f16e61ceb45f8a47f701af6e4242e465d54cb0a07383e5dc978b9d5
+      browserValidation: PASS_CORE_FLOW
+    apiManagement:
+      activeName: apim-procurement-stream-nkjm
+      sku: Developer
+      oldConsumptionStatus: SOFT_DELETED
+      oldConsumptionRecoverableUntilUtc: '2026-09-06T01:13:20Z'
+    testCases:
+      - id: S1-S5-Core
+        source: tests/integration/test_core_scenarios_v2.py
+        azureStatus: AZURE_PENDING
+      - id: Stage-A-14-contracts
+        source: tests/trace/test_failure_detectors_v2.py
+        scope: local-positive-negative
+      - id: Stage-B-6-injections
+        source: tests/integration/test_stage_b_e2e_v2.py
+        azureStatus: AZURE_PENDING
+      - id: CHAT-WEBMI-20260904004800
+        scope: app-container-mi-new-apim-three-turn
+        azureStatus: PARTIAL
+      - id: WEB-412fcb3a9ae73c14
+        scope: deployed-web-localhost-not-browser-auth
+        traceId: 0ea6b91c63359331457aa88fe6171281
+        azureStatus: PARTIAL
+      - id: WEB-e6b598f4be0f1140
+        scope: deployed-web-localhost-three-turn-not-browser-auth
+        traceId: 7496a2d6ca630e3a7085b11099926055
+        azureStatus: PARTIAL
+      - id: S1-DIRECT-20260904012844
+        scope: hosted-v7-healthy
+        traceId: 77180a2df691dd800b2cacaa306eac18
+        azureStatus: PARTIAL
+      - id: S5-DIRECT-20260904013919
+        scope: hosted-v7-synthetic-8192-content-off
+        traceId: 98622fa4bbc5a8b960f0d31a747d5a85
+        azureStatus: PARTIAL
+      - id: S2-V7-ISOLATED-20260903125123
+        scope: hosted-natural-code-department-not-found-control
+        traceId: 1fd954d15d54896ab909520d3c72db6b
+        azureStatus: PARTIAL
+        traceEvidence: .foundry/evidence/S2-V7-ISOLATED-20260903125123.jsonl
+      - id: S3-CONTROL-20260903123933
+        scope: hosted-natural-catalog-not-found-retry-replan-control
+        traceId: d5570525331a99c00e106dc38d5d8167
+        azureStatus: PARTIAL
+        traceEvidence: .foundry/evidence/S3-CONTROL-20260903123933.jsonl
+      - id: CHAT-DIRECT-20260904024741
+        scope: hosted-v8-four-turn-session-confirmation
+        conversationId: conv_025a60809016ca1a00QvKGAfKwxxRPcDghQEhiBxsWlaviQfXy
+        azureStatus: PARTIAL
+      - id: WEB-8169dbf928133fc0
+        scope: browser-old-session-schema-recovery
+        traceId: 03e8c3c370e16fd541f0793ac0de5964
+        conversationId: conv_05394ef9da8624d900gnsxUVo5EeENQri98d2yP5E8ximRVGRP
+        azureStatus: RESOLVED_BY_CONVERSATION_CONTRACT_RESET
+      - id: WEB-bc7c676157a2cf4c
+        scope: browser-easyauth-five-turn-core-success
+        traceId: c876a5a2b4997bb2f44aaffb76829f7b
+        conversationId: conv_064519df493981fc009tvqsQDh4n0hg1vtF0b4xRpaUr4DYo3c
+        azureStatus: PASS
+        userIdBaggageManagedBoundary: NOT_PROPAGATED
+        traceEvidence: .foundry/evidence/WEB-bc7c676157a2cf4c.jsonl

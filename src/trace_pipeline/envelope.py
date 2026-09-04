@@ -30,6 +30,7 @@ class SessionIdentity(EnvelopeModel):
 
 
 class CorrelationIdentity(EnvelopeModel):
+    conversation_id: str | None = None
     trace_id: str | None = None
     span_id: str | None = None
     parent_span_id: str | None = None

@@ -7,7 +7,7 @@ from typing import Any, Literal
 from agent_framework import AgentSession, FunctionInvocationContext
 from pydantic import Field, ValidationError
 
-from .models import ARCHITECTURE_ID, ApplicationDraft, CatalogSearchResult, CodeDeterminationResult, CorrelationContext, ExecutionPlan, GovernanceDecision, ProcurementRequest, StrictModel
+from .models import ARCHITECTURE_ID, ApplicationDraft, CatalogSearchResult, CodeDeterminationResult, CorrelationContext, ExecutionPlan, GovernanceDecision, ProcurementIntakeRequest, ProcurementRequest, StrictModel
 
 
 EXECUTION_STATE_KEY = "procurement.execution.v2"
@@ -35,6 +35,9 @@ class ProcurementExecutionState(StrictModel):
     turn_number: int = Field(default=0, ge=0)
     test_case_id: str = "unassigned"
     request: ProcurementRequest | None = None
+    intake: ProcurementIntakeRequest | None = None
+    applicant_name: str | None = None
+    selected_product_code: str | None = None
     plan: ExecutionPlan | None = None
     current_step_id: str | None = None
     catalog_result: CatalogSearchResult | None = None

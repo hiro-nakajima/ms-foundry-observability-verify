@@ -11,6 +11,7 @@ from uuid import uuid4
 from pydantic import ValidationError
 
 from .models import AgentRole, ExecutionPlan, PlanGenerationSource, PlanStatus, PlanStep, StepType
+from .progress import publish
 
 
 class PlanStateError(RuntimeError):
@@ -120,6 +121,7 @@ class PlanExecutor:
         self.plan.status = PlanStatus.RUNNING
         self.plan.updated_at = datetime.now(timezone.utc)
         self.events.append({"name": "step.started", "step_id": step_id, "attempt": step.attempt})
+        publish(step_id, 'started')
         return step
 
     def complete(self, step_id: str, *, output_refs: list[str], reason: str) -> PlanStep:
@@ -137,6 +139,7 @@ class PlanExecutor:
             self.plan.status = PlanStatus.COMPLETED
         self.plan.updated_at = datetime.now(timezone.utc)
         self.events.append({"name": "step.completed", "step_id": step_id})
+        publish(step_id, 'completed')
         return step
 
     def retry(self, step_id: str, reason: str) -> None:
@@ -150,6 +153,7 @@ class PlanExecutor:
         step.completion_reason = reason
         step.ended_at = datetime.now(timezone.utc)
         self.events.append({"name": "step.retry_scheduled", "step_id": step_id, "reason": reason})
+        publish(step_id, 'retry')
 
     def wait_for_user(self, step_id: str, reason: str) -> None:
         step = self.step(step_id)
@@ -158,6 +162,7 @@ class PlanExecutor:
         step.ended_at = datetime.now(timezone.utc)
         self.plan.status = PlanStatus.WAITING_USER
         self.events.append({"name": "plan.replanned", "step_id": step_id, "reason": reason})
+        publish(step_id, 'waiting_user')
 
     def block(self, step_id: str, reason: str) -> None:
         step = self.step(step_id)
@@ -166,3 +171,4 @@ class PlanExecutor:
         step.ended_at = datetime.now(timezone.utc)
         self.plan.status = PlanStatus.BLOCKED
         self.events.append({"name": "plan.blocked", "step_id": step_id, "reason": reason})
+        publish(step_id, 'blocked')

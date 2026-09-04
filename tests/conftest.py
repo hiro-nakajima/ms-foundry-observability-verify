@@ -21,6 +21,6 @@ def valid_request() -> ProcurementRequest:
         quantity=2,
         applicant_name="架空 太郎",
         department_name="開発部（架空部署）",
-        purpose="開発",
+        memo="開発用",
         constraints=RequestConstraints(budget_limit="400000", specifications={"memory": "32GB"}),
     )

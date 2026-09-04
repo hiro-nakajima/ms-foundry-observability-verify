@@ -4,17 +4,28 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+from contextvars import ContextVar
 from contextlib import contextmanager
 from enum import Enum
 from typing import Any, Iterator, Literal
 
-from opentelemetry import trace
+from opentelemetry import baggage, trace
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 CUSTOM_SPAN_BOUNDARIES = {"plan.create", "plan.step.execute", "merge.validate", "response.generate"}
+request_correlation: ContextVar[dict[str, Any]] = ContextVar("procurement_request_correlation", default={})
+
+
+def current_request_attributes() -> dict[str, Any]:
+    attributes = dict(request_correlation.get())
+    user = baggage.get_baggage("user.id")
+    if isinstance(user, str) and re.fullmatch(r"[a-f0-9]{64}", user):
+        attributes["user.id"] = user
+    return attributes
 FORBIDDEN_STANDARD_DUPLICATES = {"agent.invoke", "chat", "function", "tool.invoke", "agent_as_tool"}
 ALWAYS_SEARCHABLE = {
     "test.case.id", "app.session.id", "app.turn.number",
@@ -83,7 +94,7 @@ class TelemetryRecorder:
     def span(self, name: str, attributes: dict[str, Any] | None = None) -> Iterator[trace.Span]:
         if name not in CUSTOM_SPAN_BOUNDARIES:
             raise ValueError(f"custom span would duplicate Framework or is not approved: {name}")
-        with self.tracer.start_as_current_span(name, attributes=sanitize_attributes(attributes)) as span:
+        with self.tracer.start_as_current_span(name, attributes=sanitize_attributes({**current_request_attributes(), **(attributes or {})})) as span:
             yield span
 
     @staticmethod

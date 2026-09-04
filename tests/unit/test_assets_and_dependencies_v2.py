@@ -14,7 +14,7 @@ ROOT = Path(__file__).parents[2]
 
 
 def test_synthetic_data_versions_and_department_level_contract():
-    files = ["catalog.json", "account_codes.json", "departments.json", "applicants.json", "delivery_rules.json", "tax_rules.json"]
+    files = ["catalog.json", "account_codes.json", "departments.json"]
     values = [json.loads((ROOT / "data" / name).read_text(encoding="utf-8")) for name in files]
     assert {value["data_version"] for value in values} == {"2026-09-01.1"}
     assert all(value["synthetic"] for value in values)
@@ -36,6 +36,19 @@ def test_search_documents_are_deterministic_and_grounded():
     assert all(item["source_version"] == manifest["source_version"] for item in catalog + codes)
     assert all(re.fullmatch(r"[A-Za-z0-9_\-=]+", item["document_id"]) for item in catalog + codes)
     assert all(isinstance(item["unit_price"], (int, float)) for item in catalog)
+    for document in catalog + codes:
+        visible = json.loads(document["content"])
+        assert visible["document_id"] == document["document_id"]
+        assert visible["source_version"] == manifest["source_version"]
+    for document in catalog:
+        visible = json.loads(document["content"])
+        assert visible["unit_price"] == document["unit_price"]
+        assert json.loads(visible["specifications_json"]) == json.loads(document["specifications_json"])
+    for document in codes:
+        visible = json.loads(document["content"])
+        assert visible["record_type"] == document["record_type"]
+        assert visible["account_code"] == document["account_code"]
+        assert visible["department_code"] == document["department_code"]
 
 
 def test_search_upload_batches_have_data_plane_action(tmp_path):
@@ -75,6 +88,9 @@ def test_azure_yaml_uses_official_split_service_hosts_and_reserved_env_rules():
     assert definition["services"]["procurement-parent"]["kind"] == "hosted"
     env = definition["services"]["procurement-parent"]["env"]
     assert not any(name.startswith("FOUNDRY_") for name in env)
+    assert env["OTEL_PROPAGATORS"] == "tracecontext,baggage"
+    assert env["OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"] == "false"
+    assert "force-include" not in (ROOT / "pyproject.toml").read_text()
 
 
 def test_runtime_dependency_pins_are_consistent():

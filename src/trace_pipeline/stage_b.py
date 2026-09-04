@@ -152,6 +152,7 @@ class StageBInjectionHarness:
                     )],
                     department_code="UNVALIDATED-DEPARTMENT",
                     department_name=request.department_name,
+                    memo=request.memo,
                     total=subtotal,
                     evidence_refs=[item.evidence_id for item in state.catalog_result.evidence],
                     warnings=["Stage B semantic fault: failed code output was accepted"],

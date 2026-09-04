@@ -1,6 +1,7 @@
 schema_version: "1.0"
 kind: prompt
 name: code_determination_agent
+deployment_name: code-determination-agent
 version: "1"
 model: ${FOUNDRY_CHILD_MODEL_DEPLOYMENT}
 instructions_file: code-determination-instructions.md
