@@ -1,6 +1,6 @@
 {
   "schema_version": "2.0",
-  "data_version": "2026-09-01.1",
+  "data_version": "2026-09-04.1",
   "synthetic": true,
   "records": [
     {"product_code":"LAPTOP-DEV-14","name":"開発用ノートPC 14インチ（架空商品）","category":"laptop","keywords":["開発用","ノートPC","高性能"],"specifications":{"memory":"32GB","storage":"1TB SSD","os":"Windows 11 Pro"},"unit_price":"180000","currency":"JPY","stock":25,"lead_time_days":14,"valid_from":"2026-01-01","valid_to":"2026-12-31"},
@@ -12,6 +12,7 @@
     {"product_code":"MOUSE-WL-01","name":"業務用ワイヤレスマウス（架空商品）","category":"peripheral","keywords":["マウス","ワイヤレス","業務用"],"specifications":{"buttons":"6","connection":"Bluetooth"},"unit_price":"8000","currency":"JPY","stock":80,"lead_time_days":2,"valid_from":"2026-01-01","valid_to":"2026-12-31"},
     {"product_code":"TABLET-BIZ-11","name":"業務用タブレット 11インチ（架空商品）","category":"tablet","keywords":["タブレット","業務用","11インチ"],"specifications":{"storage":"256GB","network":"Wi-Fi"},"unit_price":"95000","currency":"JPY","stock":20,"lead_time_days":9,"valid_from":"2026-01-01","valid_to":"2026-12-31"},
     {"product_code":"DESK-ADJ-01","name":"電動昇降デスク（架空商品）","category":"furniture","keywords":["デスク","昇降","執務環境"],"specifications":{"width":"1400mm","color":"white"},"unit_price":"78000","currency":"JPY","stock":12,"lead_time_days":21,"valid_from":"2026-01-01","valid_to":"2026-12-31"},
-    {"product_code":"CHAIR-ERG-01","name":"エルゴノミクスチェア（架空商品）","category":"furniture","keywords":["チェア","椅子","エルゴノミクス"],"specifications":{"back":"mesh","armrest":"adjustable"},"unit_price":"65000","currency":"JPY","stock":15,"lead_time_days":18,"valid_from":"2026-01-01","valid_to":"2026-12-31"}
+    {"product_code":"CHAIR-ERG-01","name":"エルゴノミクスチェア（架空商品）","category":"furniture","keywords":["チェア","椅子","エルゴノミクス"],"specifications":{"back":"mesh","armrest":"adjustable"},"unit_price":"65000","currency":"JPY","stock":15,"lead_time_days":18,"valid_from":"2026-01-01","valid_to":"2026-12-31"},
+    {"product_code":"BUSINESS-CARD-01","name":"名刺","category":"printing","keywords":["名刺","ビジネスカード","印刷物"],"specifications":{"size":"91x55mm","print":"両面カラー"},"unit_price":"100","currency":"JPY","stock":10000,"lead_time_days":5,"valid_from":"2026-01-01","valid_to":"2026-12-31"}
   ]
 }

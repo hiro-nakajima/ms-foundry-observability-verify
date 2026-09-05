@@ -135,7 +135,7 @@ async def test_hosted_turn_extracts_request_and_plan_in_one_model_call(valid_req
     result = await _execute_hosted_components(**args, natural_request="確定")
     assert result.business_status == BusinessStatus.SUCCESS
     assert [call["response_format"] for call in client.calls] == ["ProcurementIntake", "ProcurementIntake"]
-    assert child_sessions == [None, None, None]
+    assert child_sessions == [None, None]
 
     exposed_session = AgentSession()
     token = authenticated_applicant_name.set("架空 太郎")
@@ -150,10 +150,10 @@ async def test_hosted_turn_extracts_request_and_plan_in_one_model_call(valid_req
     exposed_state = load_execution_state(exposed_session)
     assert exposed_state.plan.status.name == "COMPLETED"
     assert [item.tool_name for item in exposed_state.governance_decisions] == [
-        "catalog_search_agent", "catalog_search_agent", "code_determination_agent",
+        "catalog_search_agent", "code_determination_agent",
     ]
     assert [call["response_format"] for call in client.calls] == ["ProcurementIntake"] * 4
-    assert child_sessions == [None] * 6
+    assert child_sessions == [None] * 4
     assert load_execution_state(exposed_session).turn_number == 4
 
 

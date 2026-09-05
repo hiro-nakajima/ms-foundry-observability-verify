@@ -16,9 +16,11 @@ ROOT = Path(__file__).parents[2]
 def test_synthetic_data_versions_and_department_level_contract():
     files = ["catalog.json", "account_codes.json", "departments.json"]
     values = [json.loads((ROOT / "data" / name).read_text(encoding="utf-8")) for name in files]
-    assert {value["data_version"] for value in values} == {"2026-09-01.1"}
+    assert {value["data_version"] for value in values} == {"2026-09-04.1"}
     assert all(value["synthetic"] for value in values)
-    assert len(values[0]["records"]) == 10
+    assert len(values[0]["records"]) == 11
+    assert any(item["product_code"] == "BUSINESS-CARD-01" for item in values[0]["records"])
+    assert any("printing" in item["categories"] for item in values[1]["records"])
     for department in values[2]["records"]:
         assert set(department) >= {"department_code", "department_name"}
         assert not {"section_code", "team_code", "unit_code"} & set(department)
@@ -31,8 +33,8 @@ def test_search_documents_are_deterministic_and_grounded():
     catalog, codes, manifest = first
     source_codes = {item["product_code"] for item in json.loads((ROOT / "data/catalog.json").read_text(encoding="utf-8"))["records"]}
     assert {item["product_code"] for item in catalog} == source_codes
-    assert len(catalog) == 10
-    assert manifest["catalog_document_count"] == 10
+    assert len(catalog) == 11
+    assert manifest["catalog_document_count"] == 11
     assert all(item["source_version"] == manifest["source_version"] for item in catalog + codes)
     assert all(re.fullmatch(r"[A-Za-z0-9_\-=]+", item["document_id"]) for item in catalog + codes)
     assert all(isinstance(item["unit_price"], (int, float)) for item in catalog)

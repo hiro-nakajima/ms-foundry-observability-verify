@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Measure genuine progress and a four-turn synthetic intake through Hosted.
+"""Measure progress and pre-confirmation validation through Hosted.
 
 Direct Foundry only: this is not proof of App Service/EasyAuth/APIM streaming.
 """
@@ -33,7 +33,7 @@ def main():
             # purchase phrasing is routed into Plan & Execute.
             message = 'ノートPCが欲しい'
             selected_code = None
-            for turn in (1, 2, 3, 4):
+            for turn in (1, 2, 3, 4, 5):
                 started, pending, milestones, final = time.monotonic(), '', [], None
                 with client.responses.create(conversation=conv.id, input=message, stream=True,
                     metadata={'test.case.id': case, 'app.turn.number': str(turn),
@@ -70,29 +70,37 @@ def main():
                 if turn == 1:
                     if result.business_status != 'WAITING_USER' or not result.candidates:
                         raise RuntimeError('First turn did not provide candidates')
-                    selected_code = result.candidates[0].product_code
+                    selected_code = result.candidates[-1].product_code
                     message = f'商品コード {selected_code} を選びます'
                 elif turn == 2:
                     if result.business_status != 'WAITING_USER':
                         raise RuntimeError('Product selection did not continue intake')
-                    message = '数量は2台、所属部署は開発部（架空部署）、メモは開発用です'
+                    message = '数量は3台、所属部署は存在しない部（架空部署）、メモはなしです'
                 elif turn == 3:
+                    if (result.business_status != 'WAITING_USER'
+                            or result.missing_fields != ['department_name']
+                            or result.status.reason_code != 'DEPARTMENT_NOT_FOUND'
+                            or result.draft is not None):
+                        raise RuntimeError('Unknown department was not rejected before confirmation')
+                    message = '所属部署は開発部（架空部署）です'
+                elif turn == 4:
                     if result.business_status != 'WAITING_USER' or 'confirmation' not in result.missing_fields:
                         raise RuntimeError('Completed intake did not request confirmation')
                     message = '確定'
-                elif result.business_status != 'SUCCESS' or result.draft is None:
+                elif (result.business_status != 'SUCCESS' or result.draft is None
+                      or result.draft.memo != 'なし'):
                     raise RuntimeError('Confirmed request did not complete successfully')
                 if not milestones or milestones[0]['seconds'] >= entry['seconds']:
                     raise RuntimeError('Progress before completion was not measured')
             hashes = {(t.get('correlation') or {}).get('framework_session_id_hash') for t in evidence['turns']}
             if None in hashes or len(hashes) != 1:
                 raise RuntimeError('Framework session correlation was not preserved')
-            for entry in evidence['turns'][1:3]:
+            for entry in evidence['turns'][1:4]:
                 if any(item['step'] == 'catalog' and item['state'] == 'started' for item in entry['milestones']):
                     raise RuntimeError('Catalog was unexpectedly restarted during saved intake')
             reset_response = client.responses.create(
                 conversation=conv.id, input='確定',
-                metadata={'test.case.id': case, 'app.turn.number': '5',
+                metadata={'test.case.id': case, 'app.turn.number': '6',
                           'app.authenticated.display_name': '架空 太郎',
                           'app.client.contract': 'web-json-v1'},
             )

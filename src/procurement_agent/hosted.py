@@ -26,7 +26,10 @@ from .models import (
     BusinessStatus, ExecutionPlan, OperationStatus, ParseStatus, ProcurementIntake,
     ProcurementRequest, ScenarioResult, TechnicalStatus,
 )
-from .controller import ProcurementController, operation_status_attributes, set_machine_status
+from .controller import (
+    ProcurementController, catalog_result_is_grounded,
+    operation_status_attributes, set_machine_status,
+)
 from .observability import TelemetryRecorder, current_request_attributes, request_correlation, sha256
 from .session_state import (
     EXECUTION_STATE_KEY, SessionStateSchemaError, initialize_execution_state,
@@ -44,12 +47,16 @@ department, or memo to fill a required field. Applicant identity and request ID
 are supplied by trusted application state and are not user input.
 selected_product_code is only a product the user explicitly selected from the
 supplied candidates (a candidate number refers to that displayed ordering).
-Never auto-select a product on the user's behalf during clarification.
+Never infer it in the planner. The deterministic controller may select exactly
+one Catalog-grounded product whose code or product name exactly matches query.
 Keep query, quantity, department_name, and memo in their named top-level fields;
 keep budget_limit in constraints. constraints.specifications
 contains only explicitly requested technical product properties, with string
 keys and string values. Never put quantity, memo, category, or request metadata
 in specifications; never add requirements the user did not state.
+Memo requires an explicit user answer. If the user answers that there is no memo,
+for example "なし", "特になし", "no memo", or "none", set memo to exactly "なし".
+Do not infer "なし" merely because the user has not mentioned a memo.
 For ExecutionPlan, plan catalog, code, and merge/validate in that order.
 Call only catalog_search_agent and code_determination_agent. Each task argument must
 be a validated Structured snapshot JSON. Never infer product codes, prices, account
@@ -262,14 +269,41 @@ def _planner_format(model_type: type[Any]) -> dict[str, Any]:
 
 
 def _with_response_text(result: ScenarioResult) -> ScenarioResult:
-    labels = {"query": "商品", "quantity": "台数", "department_name": "所属部署",
-              "memo": "メモ", "selected_product_code": "商品の選択"}
+    labels = {"query": "商品", "quantity": "数量", "department_name": "所属部署",
+              "memo": "メモ（ない場合は「なし」）", "selected_product_code": "商品の選択"}
     missing = result.missing_fields
     if result.business_status == BusinessStatus.WAITING_USER:
         if "authenticated_applicant_name" in missing:
             text = "EasyAuthから申請者名を取得できませんでした。サインイン状態を確認してください。"
+        elif (missing == ["selected_product_code"]
+              and result.status.search_status == "NOT_FOUND"):
+            text = "商品をCatalogで確認できませんでした。別の商品名または型番を入力してください。"
+        elif (missing == ["quantity"]
+              and result.status.reason_code == "SINGLE_EXACT_CATALOG_MATCH"):
+            text = "商品をCatalogで一意に確認しました。次に数量を教えてください。"
+        elif missing == ["department_name"] and result.status.reason_code == "DEPARTMENT_NOT_FOUND":
+            text = "所属部署をSearchで確認できませんでした。登録済みの所属部署を入力してください。"
+        elif missing == ["confirmation"] and result.confirmation_preview:
+            preview = result.confirmation_preview
+            specifications = "、".join(
+                f"{key}: {value}" for key, value in sorted(preview.specifications.items())
+            ) or "なし"
+            text = (
+                "申請内容を確認してください。\n"
+                f"申請者: {preview.applicant_name}（EasyAuth認証済み）\n"
+                f"商品: {preview.product_name}（{preview.product_code}）\n"
+                f"商品分類: {preview.category}\n"
+                f"仕様: {specifications}\n"
+                f"単価: {preview.unit_price:,.0f}円\n"
+                f"数量: {preview.quantity}\n"
+                f"小計: {preview.subtotal:,.0f}円\n"
+                f"所属部署: {preview.department_name}（{preview.department_code}）\n"
+                f"勘定科目: {preview.account_name}（{preview.account_code}）\n"
+                f"メモ: {preview.memo}\n"
+                "内容に問題がなければ「確定」と入力してください。"
+            )
         elif missing == ["confirmation"]:
-            text = "商品・台数・所属部署・メモを保存しました。内容を確認し、よければ「確定」と入力してください。"
+            text = "確認情報を構成できませんでした。商品選択からやり直してください。"
         else:
             requested = "・".join(labels[name] for name in missing if name in labels)
             prefix = "商品候補を確認しました。" if result.candidates else "入力内容をAgentSessionへ保存しました。"
@@ -277,13 +311,13 @@ def _with_response_text(result: ScenarioResult) -> ScenarioResult:
     elif result.business_status == BusinessStatus.SUCCESS and result.draft:
         line = result.draft.lines[0]
         text = ("購買申請案を確定しました。\n"
-                f"商品: {line.product_name}（{line.product_code}）\n台数: {line.quantity}\n"
+                f"商品: {line.product_name}（{line.product_code}）\n数量: {line.quantity}\n"
                 f"所属部署: {result.draft.department_name}\n合計: {result.draft.total}円\n"
                 "このPoCでは提出・発注は行っていません。")
     else:
         text = {
             BusinessStatus.NOT_FOUND: "条件に合う商品または部署コードを確認できませんでした。入力を確認してください。",
-            BusinessStatus.INVALID_INPUT: "入力内容を読み取れませんでした。商品・台数・所属部署・メモを確認してください。",
+            BusinessStatus.INVALID_INPUT: "入力内容を読み取れませんでした。商品・数量・所属部署・メモを確認してください。",
             BusinessStatus.VALIDATION_FAILED: "申請内容が検証条件を満たさないため、申請案は確定していません。",
             BusinessStatus.BLOCKED: "処理を継続できませんでした。実行情報のTrace IDから確認してください。",
         }.get(result.business_status, "処理結果を確認できませんでした。")
@@ -297,13 +331,18 @@ def _intent(text: str, *, procurement_active: bool) -> str:
         return "identity"
     if procurement_active:
         return "procurement"
-    if any(term in normalized for term in (
-        "購入", "買いたい", "買って", "買う", "欲しい", "注文", "発注", "調達", "申請",
-    )):
+    if _is_explicit_purchase_request(normalized):
         return "procurement"
     if re.search(r"\d+(?:台|個|本|セット|枚)", normalized):
         return "procurement"
     return "general"
+
+
+def _is_explicit_purchase_request(text: str) -> bool:
+    normalized = re.sub(r"[\s、。！？!?]+", "", text).lower()
+    return any(term in normalized for term in (
+        "購入", "買いたい", "買って", "買う", "欲しい", "注文", "発注", "調達", "申請",
+    ))
 
 
 def _conversation_result(
@@ -459,6 +498,25 @@ async def _execute_hosted_components(
             )
             intake = _response_model(request_response, ProcurementIntake)
         publish('intake', 'completed')
+        retrying_failed_product = bool(
+            state.catalog_result is not None
+            and not catalog_result_is_grounded(state.catalog_result)
+            and previous is not None
+            and intake.request.query == previous.query
+            and _is_explicit_purchase_request(natural_request)
+        )
+        if retrying_failed_product:
+            reset_request = intake.request.model_copy(update={
+                'quantity': None, 'department_name': None, 'memo': None,
+            })
+            intake = intake.model_copy(update={
+                'request': reset_request, 'selected_product_code': None,
+            })
+            state.intake = reset_request
+            state.selected_product_code = None
+            state.catalog_result = None
+            state.code_result = None
+            save_execution_state(session, state)
         selected = intake.selected_product_code or state.selected_product_code
         if selected and selected not in {c.product_code for c in candidates}:
             raise ValueError("selection must come from the previous grounded candidates")
@@ -466,9 +524,6 @@ async def _execute_hosted_components(
         if previous and intake.request.query != previous.query and not intake.selected_product_code:
             selected = None
             state.catalog_result = None
-        state.intake = intake.request
-        state.selected_product_code = selected
-        save_execution_state(session, state)
         request: ProcurementRequest | ProcurementIntakeRequest = intake.request
         complete = all((
             intake.request.query,

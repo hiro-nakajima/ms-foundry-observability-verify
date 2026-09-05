@@ -1,6 +1,6 @@
 {
   "schema_version": "2.0",
-  "data_version": "2026-09-01.1",
+  "data_version": "2026-09-04.1",
   "synthetic": true,
   "records": [
     {"department_code":"DPT-DEV","department_name":"開発部（架空部署）","aliases":["開発部","開発"],"valid_from":"2026-01-01","valid_to":"2026-12-31"},

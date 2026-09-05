@@ -10,8 +10,8 @@ from prepare_search_documents import ROOT, build_documents
 
 def validate() -> dict[str, object]:
     catalog_docs, code_docs, manifest = build_documents()
-    if len(catalog_docs) != 10:
-        raise ValueError("procurement-catalog-v1 must contain exactly 10 products")
+    if len(catalog_docs) != 11:
+        raise ValueError("procurement-catalog-v1 must contain exactly 11 products")
     for documents in (catalog_docs, code_docs):
         ids = [item["document_id"] for item in documents]
         if len(ids) != len(set(ids)):
