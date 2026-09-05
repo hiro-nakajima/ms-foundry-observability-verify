@@ -352,6 +352,24 @@ class ApplicationDraft(StrictModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class ConfirmationPreview(StrictModel):
+    applicant_authenticated: Literal[True] = True
+    applicant_name: str = Field(min_length=1, max_length=120)
+    product_code: str
+    product_name: str
+    category: str
+    specifications: dict[str, str] = Field(default_factory=dict)
+    unit_price: Decimal = Field(ge=0)
+    currency: Literal["JPY"] = "JPY"
+    quantity: int = Field(gt=0)
+    subtotal: Decimal = Field(ge=0)
+    department_code: str
+    department_name: str
+    account_code: str
+    account_name: str
+    memo: str
+
+
 class GovernanceDecision(StrictModel):
     policy_version: str
     stage: Literal["pre_input", "pre_tool", "post_tool", "pre_output"]
@@ -371,6 +389,7 @@ class ScenarioResult(StrictModel):
     technical_status: TechnicalStatus
     business_status: BusinessStatus
     draft: ApplicationDraft | None = None
+    confirmation_preview: ConfirmationPreview | None = None
     status: OperationStatus | None = None
     trace: dict[str, Any] = Field(default_factory=dict)
     injection_requested: str | None = None

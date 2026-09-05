@@ -142,6 +142,27 @@ class PlanExecutor:
         publish(step_id, 'completed')
         return step
 
+    def reuse(self, step_id: str, *, inputs: Any, output_refs: list[str], reason: str) -> PlanStep:
+        """Complete a step from validated session state without reporting new I/O."""
+        if self.plan.status in {PlanStatus.COMPLETED, PlanStatus.BLOCKED, PlanStatus.WAITING_USER}:
+            raise PlanStateError(f"cannot reuse after terminal state {self.plan.status}")
+        step = self.step(step_id)
+        expected = self.next_step()
+        if expected is not step:
+            raise PlanStateError(f"step order violation: expected {expected.step_id if expected else None}")
+        step.input_hash = stable_input_hash(inputs)
+        step.status = PlanStatus.COMPLETED
+        step.output_refs = output_refs
+        step.completion_reason = reason
+        step.started_at = step.ended_at = datetime.now(timezone.utc)
+        key = completed_step_key(self.plan.version, step_id, step.input_hash)
+        if key not in self.completed_step_keys:
+            self.completed_step_keys.append(key)
+        self.plan.status = PlanStatus.RUNNING
+        self.plan.updated_at = step.ended_at
+        self.events.append({"name": "step.reused", "step_id": step_id})
+        return step
+
     def retry(self, step_id: str, reason: str) -> None:
         step = self.step(step_id)
         if step.status != PlanStatus.RUNNING:

@@ -43,9 +43,9 @@ def test_preflight_rejects_existing_schema_without_writes(deployment):
     assert requests == ['GET']
 
 
-@pytest.mark.parametrize('processed,ended,valid', [(10, '2026-09-03T10:01:00Z', True),
-                                                 (0, '2026-09-03T10:01:00Z', False),
-                                                 (10, '2026-09-03T09:00:00Z', False)])
+@pytest.mark.parametrize('processed,ended,valid', [(11, '2026-09-03T10:01:00Z', True),
+                                                 (10, '2026-09-03T10:01:00Z', False),
+                                                 (11, '2026-09-03T09:00:00Z', False)])
 def test_matching_search_data_is_not_proof_of_current_indexer_run(deployment, monkeypatch, tmp_path, processed, ended, valid):
     catalog, codes, manifest = deployment.build_documents()
     monkeypatch.setattr(deployment, 'STATE', tmp_path)

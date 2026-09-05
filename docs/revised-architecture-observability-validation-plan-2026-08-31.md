@@ -147,7 +147,7 @@ WebUIの配置元は `src/webapp-foundry-oauth`。その中の `backend/procurem
 - Foundry Conversationを会話の正本として作成し、後続Responses bodyへIDを渡す。Framework AgentSessionとの対応は別途実測する。
 - 会話cookieは署名・owner binding・Secure/HttpOnly/SameSite。クライアント指定の任意Conversation IDは受理しない。
 - 1 turnのApp Service server spanをrootとする。Browserの任意traceparent/tracestate/baggageは捨てる。HTTP client自動計装を使い、tracecontext,baggageを伝播する。
-- user.idはEasyAuth tid/oidのSHA-256。raw claims、token、氏名、email、CoTをUI/Traceへ出さない。
+- user.idはEasyAuth tid/oidのSHA-256。確認画面に限り、EasyAuthの検証済み`name` claimを申請者名として表示する。氏名はcustom Span属性へ保存せず、raw claims、token、email、oid、CoTをUI/Traceへ出さない。出力本文の自動Telemetry収集は無効のままとする。
 - APIMのResponsesに加えてConversations create/get/updateを公開する。リアルタイム進捗のため、後続承認に従い対象RG内にDeveloper APIMを新設して切り替える。参照RGは変更しない。
 - Local HTTPの成功はAPIM/Managed Foundry境界の成功ではない。Azureでは親子関係、conversation/case/turn/user.idを実測し、非伝播はNOT_PROPAGATEDとする。
 - Searchはユーザー選択肢1に従い、West Central USのServerless Developerを使用する。Storageは後続指示の3.6に従う。T4追加なし。
@@ -158,7 +158,7 @@ WebUIの配置元は `src/webapp-foundry-oauth`。その中の `backend/procurem
 
 ユーザーの明示指示により、Storageを作らない初期方針とPushを主経路にする方針を次の範囲で変更する。既存Serverless Developerを継続し、Free Search `rag-ais-02`への移行・既存Searchの削除は行わない。
 
-Repository JSON → 既存のdocument生成処理 → 専用Blob StorageのJSON配列 → 2 Data source → 2 Indexer → 既存2 Index → 担当Toolbox MCP → Prompt子を本線とする。商品10件・Code Master 9件、source_version、document_id、検索可能content projectionは維持する。Index追加・再作成、Agent/containerへのデータ埋込はしない。
+Repository JSON → 既存のdocument生成処理 → 専用Blob StorageのJSON配列 → 2 Data source → 2 Indexer → 既存2 Index → 担当Toolbox MCP → Prompt子を本線とする。2026-09-04にSynthetic名刺を追加した商品11件・Code Master 10件、source_version、document_id、検索可能content projectionを維持する。Index追加・再作成、Agent/containerへのデータ埋込はしない。
 
 - Storage用途はSynthetic JSONのIndexer入力のみ。Foundry Conversation/Framework Sessionの保存先にはしない。
 - 対象RG内のStorageV2 / Standard LRS / Hot / West Central US、非公開コンテナー2つ。共有キーと匿名Blobアクセスを無効化し、HTTPS/TLS1.2を使用する。Private Endpoint等は作らない。
@@ -173,11 +173,11 @@ S1〜S5、Stage A全14、Stage B指定6件、S1/S5 Healthy controlとV1〜V21の
 
 ### 3.7 対話intakeと実行中progress（2026-09-03追加指示）
 
-「ノートPCを購入したい」のような情報不足はschema failureではなくWAITING_USERとする。親LLMは1回の構造化応答でnullableなintakeとExecutionPlanを返す。ユーザー入力は商品、台数、所属部署、メモの4項目とし、申請IDと用途は要求しない。申請IDは確定時にHosted親が内部生成する。申請者名はEasyAuthの検証済み`name` claimをApp ServiceからHosted親へ渡し、ユーザー入力やLLM推測では補わない。OBOやGraph `/me`は使わない。
+「ノートPCを購入したい」のような情報不足はschema failureではなくWAITING_USERとする。親LLMは1回の構造化応答でnullableなintakeとExecutionPlanを返す。ユーザー入力は商品、数量、所属部署、メモの4項目とし、申請IDと用途は要求しない。メモがない場合も省略から推測せず、UI/Agent応答で「メモ（ない場合は『なし』）」と明示して回答を求める。ユーザーが「なし」「特になし」等を明示した場合は、業務stateの`memo`へ正規化値`なし`を保存する。申請IDは確定時にHosted親が内部生成する。申請者名はEasyAuthの検証済み`name` claimをApp ServiceからHosted親へ渡し、ユーザー入力やLLM推測では補わない。OBOやGraph `/me`は使わない。
 
 新規turnは購買意図を表す入力だけをPlan & Executeへ入れ、一般的な挨拶は通常会話としてToolを呼ばずに応答する。完了した購買Planは、その終端応答とSession証跡を保存した後、次turn開始時に業務stateを初期化する。したがって完了後の「確定」は直前Planを再実行しない。本人確認はWebではEasyAuthの検証済み表示名を本人にだけ返し、PlaygroundではEasyAuth claimを利用できないことを明示する。Playgroundで実際のGraph `/me`を確認する場合は、購買経路から分離したOAuth Identity Passthrough MCP＋OBOを使用し、詳細はADR-0001を正本とする。
 
-Framework Sessionの業務stateへintake、EasyAuth申請者名、Catalog候補、選択商品を保存し、商品候補はCatalog Prompt→Toolbox→Search経路で取得する。quantity=nullは探索用で、擬似注文数量ではない。候補は対応するproduct EvidenceがあるものだけUIへ出す。ユーザー選択は前turnの候補にあるcodeだけを受理する。選択後の台数・所属部署・メモ入力turnでは保存済み候補を再利用し、Catalogを再実行しない。4項目が揃ったらWAITING_USERで「確定」を要求し、完全一致の「確定」turnでのみCatalogを再検索して根拠を更新し、Code、merge/validate、申請draft生成へ進む。
+Framework Sessionの業務stateへintake、EasyAuth申請者名、Catalog候補、選択商品を保存し、商品候補はCatalog Prompt→Toolbox→Search経路で取得する。quantity=nullは探索用で、擬似注文数量ではない。候補は対応するproduct EvidenceがあるものだけUIへ出す。検索語と商品codeまたは商品名が完全一致し、該当するSearch根拠付き候補が1件だけなら、決定論的controllerがその商品を選択する。それ以外は前turnの候補にあるcodeをユーザーが明示選択した場合だけ受理する。商品未検出時は後続の数量・所属部署・メモを保存せず、新しい商品名または型番を求める。旧Versionで失敗後の先取り項目が残ったSessionに同じ購入依頼を明示し直した場合だけ、その失敗探索と先取り項目を消して商品stepを再実行する。商品決定後は数量→所属部署→メモ→確定の順に不足項目を1つずつ案内し、詳細入力turnでは保存済み候補を再利用してCatalogを再実行しない。4項目が揃った時点でCode Prompt→Toolbox→Searchにより所属部署と勘定科目を照合し、未登録ならその部署値を業務stateから消して再入力を求める。照合成功後は、EasyAuthで検証した申請者名、商品名/code/分類/仕様/単価/数量/小計、部署名/code、勘定科目名/code、メモを確認票として本人に表示する。確認票を表示した後だけWAITING_USERで「確定」を要求する。「確定」turnは保存済みCatalog/Code evidenceとintakeの同一性を決定論的に再検証し、Prompt Agent/Toolbox/Searchを再実行せずmerge/validateと申請draft生成だけを行う。保存stateが一致しなければfail closedとし、外部呼出しで補完しない。
 
 親Agent Middlewareから実行イベントのstep/stateと固定日本語messageのallowlistだけをResponses text deltaへ送る。Web backendは`app.client.contract=web-json-v1`をmetadataで明示し、この契約に限ってHosted親の`response_text`とprogressを含む有効ScenarioResult JSONを受信する。Web backendはstreamを逐次受信し、安全な公開message、候補、statusだけをNDJSONで中継する。Web側で購買状態遷移や最終回答を再構築しない。Playgroundおよび契約を指定しない通常ResponsesにはJSON envelopeではなくHosted親の自然言語`response_text`を返す。CoT、raw Tool/LLM出力、secretを逐次表示しない。完了後の要約だけをリアルタイム進捗とは扱わない。
 
@@ -511,7 +511,7 @@ T2を実施する場合のSampling反復はprofileごとに20回以上を機能�
 
 ### Phase 2: Synthetic Data / Azure AI Search / Toolbox MCP
 
-1. Repository内のVersion付きJSONをindex投入前の正本とし、catalogを10件へ拡張する。実商品、実価格、実組織情報は入れない。
+1. Repository内のVersion付きJSONをindex投入前の正本とし、catalog 11件（名刺を含む）とCode Master 10件のSynthetic projectionを維持する。実商品、実価格、実組織情報は入れない。
 2. `procurement-catalog-v1` indexを定義する。最低限、`document_id`、`chunk_id`、`source_version`、`product_code`、`product_name`、`aliases`、`category`、`unit_price`、`currency`、`content`、`specifications_json`、`active`を持たせ、型番と価格をretrievableにする。1商品を1つのSynthetic document/chunkとして扱う。
 3. `procurement-code-master-v1` indexを定義する。最低限、`document_id`、`source_version`、`record_type`、`lookup_key`、`aliases`、`account_code`、`department_code`、`display_name`、`active`を持たせる。`record_type=account`は商品分類から、`record_type=department`は確認済み部名から検索し、両者を混同しない。
 4. Index schema、Synthetic document upload、件数・key重複・必須fieldを検証するidempotent scriptとBicep/設定ファイルを作る。Local testではAzure SDKをmockせず、version付きJSONとrecorded MCP fixtureを使ってcontractを検証する。
@@ -590,7 +590,7 @@ Azure apply、Role付与、Azure AI Search service/index作成、Synthetic docum
 Localで先に次を完了する。
 
 - Plan schema/empty fallback/transition/replan/attempt上限
-- Catalog 10件とCode MasterのJSON/index schema変換、key一意性、必須field test
+- Catalog 11件とCode Master 10件のJSON/index schema変換、key一意性、必須field test
 - Toolbox YAMLの担当index、unique tool name、connection参照、Version固定のvalidation
 - Recorded MCP fixtureによる`initialize`/`tools/list`/`tools/call` contract test
 - Code Toolbox Failure profileのstatus分離test

@@ -9,7 +9,7 @@ environments:
     dependencyResolution: remote_build
     azureContainerRegistry: null # User requires ZIP deploy; ACR is not used.
     deploymentStatus: ACTIVE
-    agentVersion: '12'
+    agentVersion: '22'
     searchIngestion:
       mode: blob_indexer
       apiVersion: 2026-08-01-preview
@@ -18,7 +18,7 @@ environments:
       indexers:
         - procurement-catalog-blob-indexer
         - procurement-code-master-blob-indexer
-    zipSha256: 75710ad68ed77b0f65fb61a3fb2f93228d3c0ea528d709695ceedeb20b3d9f5a
+    zipSha256: 8bc17940787ef4193c616993657e5843d389010c2ba886dd7ceaf4fb56880562
     childAgents:
       - catalog-search-agent
       - code-determination-agent
@@ -115,4 +115,60 @@ environments:
         conversationId: conv_0d7656e0b5894a5700Qcot0aews57hx7dzDPQ1UDY3vvNLq1Yr
         naturalLanguageConversationId: conv_06029f4287b78f1000BADl3xGnew2hIFhyddEQ2a4WlO3jBQms
         frameworkSessionIdHash: d17ec28e3cb0e778c82cb791b864a2edd8c235c767932d0b2e1d1be9dd58d1d2
+        azureStatus: PASS
+      - id: CHAT-DIRECT-20260904053301
+        scope: hosted-v13-explicit-no-memo-four-turn-regression
+        conversationId: conv_0e1cbaf717d7cddc00sDBsmnKxIL06EaheoZt78CpyrHJfsVK9
+        frameworkSessionIdHash: 7db8aeca84342be571a355a63e441007efc6936436df8647ffb24c37d7b07259
+        azureStatus: PASS
+      - id: CHAT-DIRECT-20260904081433
+        scope: hosted-v14-department-prevalidation-correction-final-revalidation
+        conversationId: conv_0c61b16bc639137000WEAKy9kmjv1sWNxridZuoedXQvNCZQNR
+        frameworkSessionIdHash: f36b8f2f8144fc41535b0393679932a34005cd88febe90587daadf2a66632472
+        azureStatus: PASS
+      - id: CHAT-DIRECT-20260904082116
+        scope: hosted-v15-transactional-department-prevalidation
+        conversationId: conv_027e2cc863907aee00F7FXqNaMJXrQn2qlOFkQmwOwRSyrxza1
+        frameworkSessionIdHash: 85edbaa680ffd2d6b7ceb69dcd3bc7ba786bf104b63fba8bf9aa8531b3b9bd9d
+        azureStatus: PASS
+      - id: CHAT-DIRECT-20260904082913
+        scope: hosted-v16-department-prevalidation-and-original-query-preservation
+        conversationId: conv_07fa6df0d04f0a9100VFpVR6z0yvuzAKeTMTtojKhHtwcMGKiP
+        frameworkSessionIdHash: 2b5f824ea3fdec01b78e241daf45160016c80119805719a7e8329b9dfd9be0cf
+        azureStatus: PASS
+      - id: CHAT-NAMECARD-20260904121318
+        scope: hosted-v18-exact-business-card-sequential-intake-and-legacy-retry
+        conversationId: conv_055cd03aa26f5e1100J9VbxhmsK0mPWZCfUZdfpR8aJt9mvPTD
+        frameworkSessionIdHash: b8d24ab0c1eca8778f719c652394cff65fe7dcd131d74679a002c1cb410c182f
+        firstTurnTraceId: 61c88a288312a57308b16d0d078aae79
+        finalTurnTraceId: 20ea724676eb6731e2d99dfc168b88af
+        traceEvidence:
+          - .foundry/evidence/CHAT-NAMECARD-20260904121318-turn1.jsonl
+          - .foundry/evidence/CHAT-NAMECARD-20260904121318-turn5.jsonl
+        azureStatus: PASS
+      - id: CHAT-NAME-V20-20260905005503
+        scope: hosted-v20-easyauth-name-confirmation-preview-and-local-confirm
+        conversationId: conv_0f6e2b4be3f9a79c00yhlWq95tv9BrwVRubVWTjcF2ZOwuWBb0
+        frameworkSessionIdHash: 7fd9da6c8cdfcde13d7936df6f2c5765ad7d184c3ba3421a525f2d319ceea291
+        confirmationTraceId: 05c02b2242e7b99d7a54105a461bafaa
+        finalTraceId: fd1a8b563b46c58f2705251a74ede960
+        traceEvidence:
+          - .foundry/evidence/CHAT-NAME-V20-20260905005503-turn4.jsonl
+          - .foundry/evidence/CHAT-NAME-V20-20260905005503-turn5.jsonl
+        azureStatus: PASS_DIRECT_SYNTHETIC_IDENTITY
+      - id: CHAT-QUERY-CHANGE-V21-20260905011706
+        scope: hosted-v21-changed-product-query-session-invalidation
+        conversationId: conv_02bbc52b8458f5d100nlDn1tucSXG7mF549wmW8T0oRiNA93FI
+        frameworkSessionIdHash: 71c2dceea5861b3dd0d2d6f1957528bbf0779c69ca08ee15dcb45c336ac2d14e
+        firstTurnTraceId: 0490921e9c17142994ff71db583c1255
+        changedQueryTraceId: be1d24c8842053513c3cfbdeb3cfc374
+        traceEvidence: .foundry/evidence/CHAT-QUERY-CHANGE-V21-20260905011706-turn2.jsonl
+        azureStatus: PASS
+      - id: S4-SELECTED-SPEC-V22-20260905013922
+        scope: hosted-v22-selected-candidate-specification-validation
+        conversationId: conv_0eb44712a13b1d8000gwROFoVZVUCAzg0Xs5OokPD39hpzmYJu
+        frameworkSessionIdHash: 29b4a6dbb819a3c605524a32e774e7abb89506779afa084f36e0d4847ca51cd2
+        firstTurnTraceId: 0d96cca6d6bb74d7ac35864bb7d1cbcc
+        rejectedTurnTraceId: 2fa1e8c4b431ad9b02dfa180b2f5c1fa
+        traceEvidence: .foundry/evidence/S4-SELECTED-SPEC-V22-20260905013922-turn2.jsonl
         azureStatus: PASS
