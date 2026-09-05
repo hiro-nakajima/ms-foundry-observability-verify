@@ -301,6 +301,78 @@ async def test_exact_auto_selection_rejects_mismatched_evidence_snapshot():
 
 
 @pytest.mark.anyio
+async def test_user_selected_candidate_is_checked_against_its_own_specifications(valid_request):
+    planner_turn = 0
+
+    def intake(*_):
+        nonlocal planner_turn
+        planner_turn += 1
+        request = {
+            'query': 'ノートPC',
+            'constraints': {'specifications': {'memory': '32GB'}},
+        }
+        if planner_turn == 2:
+            request.update(
+                quantity=1,
+                department_name=valid_request.department_name,
+                memo='なし',
+            )
+        return ProcurementIntake(
+            request=request,
+            plan={'steps': default_steps()},
+            selected_product_code='LAPTOP-OFFICE-13' if planner_turn == 2 else None,
+        )
+
+    healthy = RecordedCatalogAgent()
+
+    async def catalog(payload):
+        result = await healthy(payload)
+        raw = result.model_dump(mode='json')
+        raw['candidates'].append({
+            'product_code': 'LAPTOP-OFFICE-13',
+            'product_name': '事務用ノートPC 13インチ（架空商品）',
+            'category': 'laptop', 'unit_price': '120000', 'currency': 'JPY',
+            'specifications': {'memory': '16GB'},
+            'evidence_id': 'evidence:catalog-LAPTOP-OFFICE-13',
+        })
+        raw['evidence'].append({
+            'evidence_id': 'evidence:catalog-LAPTOP-OFFICE-13',
+            'index_name': 'procurement-catalog-v1',
+            'document_id': 'catalog-LAPTOP-OFFICE-13',
+            'source_version': '2026-09-04.1', 'record_type': 'product',
+            'record_key': 'LAPTOP-OFFICE-13',
+            'catalog_product_name': '事務用ノートPC 13インチ（架空商品）',
+            'catalog_category': 'laptop', 'catalog_unit_price': '120000',
+            'catalog_currency': 'JPY',
+            'catalog_specifications': {'memory': '16GB'},
+        })
+        return raw
+
+    session = AgentSession()
+    codes = _Tool('code_determination_agent', RecordedCodeAgent())
+    args = dict(
+        planner=Agent(DeterministicChatClient(intake)),
+        catalog_tool=_Tool('catalog_search_agent', catalog),
+        code_tool=codes, session=session,
+        test_case_id='WEB-SELECTED-SPECIFICATION',
+        telemetry=TelemetryRecorder(), applicant_name='架空 太郎',
+    )
+    first = await _execute_hosted_components(
+        **args, natural_request='メモリ32GBのノートPCを購入したい',
+    )
+    assert first.missing_fields == ['selected_product_code']
+
+    rejected = await _execute_hosted_components(
+        **args,
+        natural_request='商品コード LAPTOP-OFFICE-13、数量1、開発部、メモなし',
+    )
+    assert rejected.business_status == BusinessStatus.VALIDATION_FAILED
+    assert rejected.status.reason_code == 'catalog_specification_mismatch'
+    assert rejected.confirmation_preview is None and rejected.draft is None
+    assert not codes.calls
+
+
+@pytest.mark.anyio
 async def test_catalog_not_found_does_not_save_later_intake_fields_or_requery():
     turn = 0
 

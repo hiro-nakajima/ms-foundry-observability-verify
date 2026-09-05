@@ -9,7 +9,7 @@ environments:
     dependencyResolution: remote_build
     azureContainerRegistry: null # User requires ZIP deploy; ACR is not used.
     deploymentStatus: ACTIVE
-    agentVersion: '21'
+    agentVersion: '22'
     searchIngestion:
       mode: blob_indexer
       apiVersion: 2026-08-01-preview
@@ -18,7 +18,7 @@ environments:
       indexers:
         - procurement-catalog-blob-indexer
         - procurement-code-master-blob-indexer
-    zipSha256: 33193f3b9611be74e6536746b5190f69b0b265a45fde4e2758339a0f558e8793
+    zipSha256: 8bc17940787ef4193c616993657e5843d389010c2ba886dd7ceaf4fb56880562
     childAgents:
       - catalog-search-agent
       - code-determination-agent
@@ -163,4 +163,12 @@ environments:
         firstTurnTraceId: 0490921e9c17142994ff71db583c1255
         changedQueryTraceId: be1d24c8842053513c3cfbdeb3cfc374
         traceEvidence: .foundry/evidence/CHAT-QUERY-CHANGE-V21-20260905011706-turn2.jsonl
+        azureStatus: PASS
+      - id: S4-SELECTED-SPEC-V22-20260905013922
+        scope: hosted-v22-selected-candidate-specification-validation
+        conversationId: conv_0eb44712a13b1d8000gwROFoVZVUCAzg0Xs5OokPD39hpzmYJu
+        frameworkSessionIdHash: 29b4a6dbb819a3c605524a32e774e7abb89506779afa084f36e0d4847ca51cd2
+        firstTurnTraceId: 0d96cca6d6bb74d7ac35864bb7d1cbcc
+        rejectedTurnTraceId: 2fa1e8c4b431ad9b02dfa180b2f5c1fa
+        traceEvidence: .foundry/evidence/S4-SELECTED-SPEC-V22-20260905013922-turn2.jsonl
         azureStatus: PASS

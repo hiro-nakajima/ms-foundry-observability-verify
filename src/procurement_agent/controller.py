@@ -150,12 +150,16 @@ def _exact_grounded_catalog_match(
 
 def catalog_candidate_matches_specifications(
     result: CatalogSearchResult, requested: dict[str, str],
+    product_code: str | None = None,
 ) -> bool:
-    if not catalog_result_is_grounded(result):
+    selected_product_code = product_code or result.selected_product_code
+    if not selected_product_code or not _catalog_candidate_is_grounded(
+        result, selected_product_code,
+    ):
         return False
     selected = next(
         item for item in result.candidates
-        if item.product_code == result.selected_product_code
+        if item.product_code == selected_product_code
     )
     return not specification_mismatch_keys(requested, selected.specifications)
 
@@ -336,6 +340,7 @@ def _saved_confirmation_context(
     ), None)
     if selected is None or not catalog_candidate_matches_specifications(
         state.catalog_result, request.constraints.specifications,
+        selected_product_code,
     ):
         return None
     return state.catalog_result, state.code_result, selected
@@ -871,6 +876,21 @@ class ProcurementController:
                 item for item in state.catalog_result.candidates
                 if item.product_code == selected_product_code
             )
+            if not catalog_candidate_matches_specifications(
+                state.catalog_result,
+                request.constraints.specifications,
+                selected_product_code,
+            ):
+                executor.block("catalog", "selected product does not match requested specifications")
+                status = state.catalog_result.status.model_copy(update={
+                    "business_status": BusinessStatus.VALIDATION_FAILED,
+                    "failure_layer": FailureLayer.VALIDATION,
+                    "reason_code": "catalog_specification_mismatch",
+                })
+                return finish(
+                    status, "S4", business=BusinessStatus.VALIDATION_FAILED,
+                    next_action="要求仕様に合う商品を選択する",
+                )
             executor.reuse(
                 "catalog", inputs={"saved_product_code": selected_product_code},
                 output_refs=[selected.evidence_id],
