@@ -523,7 +523,10 @@ async def _execute_hosted_components(
         # A changed search invalidates the previous selection; explicit selection keeps it.
         if previous and intake.request.query != previous.query and not intake.selected_product_code:
             selected = None
+            state.selected_product_code = None
             state.catalog_result = None
+            state.code_result = None
+            save_execution_state(session, state)
         request: ProcurementRequest | ProcurementIntakeRequest = intake.request
         complete = all((
             intake.request.query,

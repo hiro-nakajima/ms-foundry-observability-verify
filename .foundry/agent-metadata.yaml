@@ -9,7 +9,7 @@ environments:
     dependencyResolution: remote_build
     azureContainerRegistry: null # User requires ZIP deploy; ACR is not used.
     deploymentStatus: ACTIVE
-    agentVersion: '20'
+    agentVersion: '21'
     searchIngestion:
       mode: blob_indexer
       apiVersion: 2026-08-01-preview
@@ -18,7 +18,7 @@ environments:
       indexers:
         - procurement-catalog-blob-indexer
         - procurement-code-master-blob-indexer
-    zipSha256: 16821e53204f3f609645724b3a6a93ae521431597d3b6a42f6d9bda9ac191e8c
+    zipSha256: 33193f3b9611be74e6536746b5190f69b0b265a45fde4e2758339a0f558e8793
     childAgents:
       - catalog-search-agent
       - code-determination-agent
@@ -156,3 +156,11 @@ environments:
           - .foundry/evidence/CHAT-NAME-V20-20260905005503-turn4.jsonl
           - .foundry/evidence/CHAT-NAME-V20-20260905005503-turn5.jsonl
         azureStatus: PASS_DIRECT_SYNTHETIC_IDENTITY
+      - id: CHAT-QUERY-CHANGE-V21-20260905011706
+        scope: hosted-v21-changed-product-query-session-invalidation
+        conversationId: conv_02bbc52b8458f5d100nlDn1tucSXG7mF549wmW8T0oRiNA93FI
+        frameworkSessionIdHash: 71c2dceea5861b3dd0d2d6f1957528bbf0779c69ca08ee15dcb45c336ac2d14e
+        firstTurnTraceId: 0490921e9c17142994ff71db583c1255
+        changedQueryTraceId: be1d24c8842053513c3cfbdeb3cfc374
+        traceEvidence: .foundry/evidence/CHAT-QUERY-CHANGE-V21-20260905011706-turn2.jsonl
+        azureStatus: PASS

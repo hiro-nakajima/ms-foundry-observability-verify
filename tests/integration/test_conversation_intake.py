@@ -219,6 +219,88 @@ async def test_exact_business_card_match_advances_through_each_intake_step():
 
 
 @pytest.mark.anyio
+async def test_changed_product_query_invalidates_saved_catalog_before_controller_reload():
+    planner_turn = 0
+
+    def response(*_):
+        nonlocal planner_turn
+        planner_turn += 1
+        query = 'ノートPC' if planner_turn == 1 else '名刺'
+        return ProcurementIntake(
+            request={'query': query}, plan={'steps': default_steps()},
+        )
+
+    laptop = RecordedCatalogAgent()
+    business_card = RecordedCatalogAgent('catalog-business-card.json')
+
+    async def catalog(payload):
+        return await (business_card(payload) if payload.query == '名刺' else laptop(payload))
+
+    session = AgentSession()
+    args = dict(
+        planner=Agent(DeterministicChatClient(response)),
+        catalog_tool=_Tool('catalog_search_agent', catalog),
+        code_tool=_Tool('code_determination_agent', RecordedCodeAgent()),
+        session=session, test_case_id='WEB-QUERY-CHANGE',
+        telemetry=TelemetryRecorder(), applicant_name='架空 太郎',
+    )
+    first = await _execute_hosted_components(
+        **args, natural_request='ノートPCを購入したい',
+    )
+    assert first.missing_fields == ['selected_product_code']
+
+    changed = await _execute_hosted_components(
+        **args, natural_request='名刺を購入したい',
+    )
+    state = load_execution_state(session)
+    assert changed.missing_fields == ['quantity']
+    assert state.intake.query == '名刺'
+    assert state.selected_product_code == 'BUSINESS-CARD-01'
+    assert state.catalog_result.candidates[0].product_code == 'BUSINESS-CARD-01'
+    assert len(laptop.calls) == 1 and len(business_card.calls) == 1
+
+
+@pytest.mark.anyio
+async def test_exact_auto_selection_rejects_mismatched_evidence_snapshot():
+    healthy = RecordedCatalogAgent()
+
+    async def catalog(payload):
+        raw = (await healthy(payload)).model_dump(mode='json')
+        raw['candidates'].append({
+            'product_code': 'BUSINESS-CARD-01', 'product_name': '名刺',
+            'category': 'printing', 'unit_price': '100', 'currency': 'JPY',
+            'specifications': {'print': '両面カラー'},
+            'evidence_id': 'evidence:catalog-BUSINESS-CARD-01',
+        })
+        raw['evidence'].append({
+            'evidence_id': 'evidence:catalog-BUSINESS-CARD-01',
+            'index_name': 'procurement-catalog-v1',
+            'document_id': 'catalog-BUSINESS-CARD-01',
+            'source_version': '2026-09-04.1', 'record_type': 'product',
+            'record_key': 'BUSINESS-CARD-01',
+            'catalog_product_name': '改変された名刺',
+            'catalog_category': 'printing', 'catalog_unit_price': '100',
+            'catalog_currency': 'JPY',
+            'catalog_specifications': {'print': '両面カラー'},
+        })
+        return raw
+
+    result = await _execute_hosted_components(
+        planner=Agent(DeterministicChatClient(lambda *_: ProcurementIntake(
+            request={'query': '名刺'}, plan={'steps': default_steps()},
+        ))),
+        catalog_tool=_Tool('catalog_search_agent', catalog),
+        code_tool=_Tool('code_determination_agent', RecordedCodeAgent()),
+        natural_request='名刺を購入したい', session=AgentSession(),
+        test_case_id='WEB-AUTO-SELECT-EVIDENCE',
+        telemetry=TelemetryRecorder(), applicant_name='架空 太郎',
+    )
+
+    assert result.missing_fields == ['selected_product_code'], result.model_dump_json()
+    assert 'BUSINESS-CARD-01' not in {item.product_code for item in result.candidates}
+
+
+@pytest.mark.anyio
 async def test_catalog_not_found_does_not_save_later_intake_fields_or_requery():
     turn = 0
 

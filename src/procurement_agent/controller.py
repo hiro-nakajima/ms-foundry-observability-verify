@@ -110,12 +110,20 @@ def catalog_result_is_grounded(result: CatalogSearchResult) -> bool:
 
 def _catalog_candidate_is_grounded(result: CatalogSearchResult, product_code: str) -> bool:
     selected = next((item for item in result.candidates if item.product_code == product_code), None)
-    return child_operation_succeeded(result.status) and selected is not None and any(
+    if not child_operation_succeeded(result.status) or selected is None:
+        return False
+    evidence = next((evidence for evidence in result.evidence if (
         evidence.evidence_id == selected.evidence_id
         and evidence.index_name == "procurement-catalog-v1"
         and evidence.record_type == "product"
         and evidence.record_key == selected.product_code
-        for evidence in result.evidence
+    )), None)
+    return evidence is not None and (
+        evidence.catalog_product_name == selected.product_name
+        and evidence.catalog_category == selected.category
+        and evidence.catalog_unit_price == selected.unit_price
+        and evidence.catalog_currency == selected.currency
+        and evidence.catalog_specifications == selected.specifications
     )
 
 
@@ -402,10 +410,8 @@ class ProcurementController:
             next_action=next_action,
             confirmation_preview=confirmation_preview,
             candidates=[candidate for candidate in (state.catalog_result.candidates if state.catalog_result else [])
-                        if "selected_product_code" in missing_fields and any(
-                            e.evidence_id == candidate.evidence_id and e.record_key == candidate.product_code
-                            and e.record_type == "product" and e.index_name == "procurement-catalog-v1"
-                            for e in state.catalog_result.evidence)],
+                        if "selected_product_code" in missing_fields
+                        and _catalog_candidate_is_grounded(state.catalog_result, candidate.product_code)],
             missing_fields=missing_fields,
         )
         return result
