@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Foundry Agent OAuth UI</title>
+    <meta
+      name="description"
+      content="Azure AI Foundry Agent with MCP OAuth Identity Passthrough"
+    />
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <main class="chat-shell">
+        <header class="app-header">
+          <div>
+            <h1>Foundry Agent + MCP OAuth UI</h1>
+            <p>Azure AI Foundry · OAuth Identity Passthrough · Tool Logs</p>
+          </div>
+          <div class="header-actions">
+            <button id="clear-history-button" class="secondary-button" type="button">
+              Clear History
+            </button>
+            <button id="tool-toggle" class="secondary-button" type="button">
+              <span>Tool Logs</span>
+              <span id="tool-indicator" class="status-dot hidden"></span>
+            </button>
+          </div>
+        </header>
+
+        <section id="messages" class="messages" aria-live="polite">
+          <div id="empty-state" class="empty-state">
+            <div class="empty-icon">AI</div>
+            <p class="empty-title">Ask the Foundry agent anything</p>
+            <p>Try: "Who am I?"</p>
+            <p>Try: "What's my job title?"</p>
+            <p>Try: "List my recent emails"</p>
+            <p class="empty-note">
+              The first MCP tool call may ask for OAuth consent. That is
+              expected and usually happens only once per connection.
+            </p>
+          </div>
+        </section>
+
+        <section id="cards" class="cards"></section>
+
+        <form id="chat-form" class="input-bar">
+          <input
+            id="chat-input"
+            type="text"
+            autocomplete="off"
+            placeholder="Send a message..."
+          />
+          <button id="send-button" type="submit">Send</button>
+        </form>
+      </main>
+
+      <aside id="tool-panel" class="tool-panel tool-panel-closed">
+        <div class="tool-panel-header">
+          <h2>Tool Calls</h2>
+          <button id="tool-close" class="icon-button" type="button">×</button>
+        </div>
+        <div id="tool-logs" class="tool-logs">
+          <p class="tool-placeholder">No tool calls yet.</p>
+        </div>
+      </aside>
+    </div>
+
+    <script src="/static/app.js" defer></script>
+  </body>
+  </html>

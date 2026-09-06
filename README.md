@@ -50,4 +50,6 @@ Search投入documentはversion付きSynthetic JSONから生成します。生成
 - Raw contentは`synthetic-content-on`だけ。production-like profileはcontent-off
 - Framework標準Agent/Chat/Function Spanをcustom spanで二重生成しない
 
-Local結果とAzure未検証項目は[Core validation report](docs/core-observability-validation-report-2026-09-01.md)に記録します。T1〜T4は現在無効です。
+現行結果は[2026-09-06 validation report](docs/report/validation-results-2026-09-06.md)、遅延の内訳と改善候補は[latency analysis](docs/report/latency-analysis-2026-09-06.md)に記録します。既存Azure環境へのSearch/Toolbox/Prompt/Hosted再配置は[deployment guide](docs/deployment/README.md)を参照してください。
+
+購買E2EのApp Service sourceは`src/webapp-foundry-oauth/backend/procurement.py`です。`src/webapp-foundry-oauth/backend/server.py`と`src/functions-mcp-selfhosted/`は、別途OBO/Graph `/me`を確認するための参考経路であり、購買E2Eには配備しません。

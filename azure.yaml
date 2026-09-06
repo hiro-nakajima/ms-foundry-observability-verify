@@ -1,4 +1,6 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/azure-dev/main/schemas/v1.0/azure.yaml.json
+# azd project manifest: keep this at the repository root. Hosted source is
+# allowlist-packaged by scripts/package_hosted.py; this file is not ZIP content.
 requiredVersions:
   azd: ">=1.27.1"
   extensions:

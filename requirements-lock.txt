@@ -1,3 +1,5 @@
+# Repository/root remote-build constraints. Keep next to requirements.txt so
+# both local installation and the flat Hosted source ZIP resolve the same pins.
 # Fully resolved constraints validated on Python 3.13.13 and Python 3.14.4.
 # Snapshot date: 2026-08-30.
 # requirements.txt is the runtime install entry point.

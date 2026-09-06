@@ -1,0 +1,6 @@
+azure-functions
+msal>=1.31.0
+requests>=2.31.0
+httpx
+# mcp 2.x removed mcp.server.fastmcp, which mcp_server.py still uses.
+mcp>=1.28,<2

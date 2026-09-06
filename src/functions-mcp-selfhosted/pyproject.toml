@@ -1,0 +1,13 @@
+[project]
+name = "functions-mcp-selfhosted"
+version = "0.1.0"
+description = "Azure Functions self-hosted MCP server for OBO Graph validation"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "httpx>=0.28.1",
+    # mcp 2.x removed mcp.server.fastmcp, which mcp_server.py still uses.
+    "mcp>=1.28,<2",
+    "msal>=1.31.0",
+    "requests>=2.31.0"
+]

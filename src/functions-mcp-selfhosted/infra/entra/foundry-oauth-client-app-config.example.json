@@ -1,0 +1,15 @@
+{
+  "displayName": "Foundry-OAuth-MCP-Handson-Client",
+  "signInAudience": "AzureADMyOrg",
+  "serverAppId": "",
+  "serverScopeName": "access_as_user",
+  "serverOutputFile": "infra/entra/obo-app.outputs.json",
+  "redirectUris": [],
+  "grantAdminConsent": false,
+  "clientSecret": {
+    "create": true,
+    "displayName": "codex-foundry-oauth-client-secret",
+    "yearsValid": 1
+  },
+  "outputFile": "infra/entra/foundry-oauth-client-app.outputs.json"
+}

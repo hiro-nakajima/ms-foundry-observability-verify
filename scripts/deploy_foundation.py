@@ -18,11 +18,13 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-STATE = ROOT / ".local_state" / "deployment"
-SUB = "d96eb8c2-2deb-4ed5-8cf2-f9fb178cb3ee"
-RG = "rg-ms-foundry-observability-verify"
-WEB = "web-procurement-observe-nkjm"
-APP = "procurement-observability-web"
+STATE = Path(os.environ.get(
+    "PROCUREMENT_DEPLOYMENT_STATE_DIR", ROOT / ".local_state" / "deployment",
+)).expanduser().resolve()
+SUB = os.environ.get("AZURE_SUBSCRIPTION_ID", "d96eb8c2-2deb-4ed5-8cf2-f9fb178cb3ee")
+RG = os.environ.get("AZURE_RESOURCE_GROUP", "rg-ms-foundry-observability-verify")
+WEB = os.environ.get("PROCUREMENT_WEB_APP_NAME", "web-procurement-observe-nkjm")
+APP = os.environ.get("PROCUREMENT_EASYAUTH_APP_NAME", "procurement-observability-web")
 PARAMS = STATE / "foundation.parameters.json"
 
 
@@ -38,6 +40,7 @@ def az(*args: str):
 
 
 def save(path: Path, value):
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     with open(path, "w", encoding="utf-8", opener=lambda p, flags: os.open(p, flags, 0o600)) as file:
         json.dump(value, file, indent=2)
     path.chmod(0o600)

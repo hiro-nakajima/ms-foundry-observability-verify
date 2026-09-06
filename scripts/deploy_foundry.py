@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import sys
 
 import httpx
@@ -23,8 +24,22 @@ from deploy_foundation import ROOT, STATE, SUB, RG, WEB, az, save
 from deploy_search import assign
 from package_hosted import package
 
-PROJECT = f"/subscriptions/{SUB}/resourceGroups/{RG}/providers/Microsoft.CognitiveServices/accounts/observability-verify/projects/proj-default"
-ENDPOINT = "https://observability-verify.services.ai.azure.com/api/projects/proj-default"
+ACCOUNT = os.environ.get("FOUNDRY_ACCOUNT_NAME", "observability-verify")
+PROJECT_NAME = os.environ.get("FOUNDRY_PROJECT_NAME", "proj-default")
+ENDPOINT = os.environ.get(
+    "FOUNDRY_PROJECT_ENDPOINT",
+    f"https://{ACCOUNT}.services.ai.azure.com/api/projects/{PROJECT_NAME}",
+)
+PROJECT = f"/subscriptions/{SUB}/resourceGroups/{RG}/providers/Microsoft.CognitiveServices/accounts/{ACCOUNT}/projects/{PROJECT_NAME}"
+SEARCH_ENDPOINT = os.environ.get(
+    "PROCUREMENT_SEARCH_ENDPOINT", "https://srch-procurement-observe-nkjm.search.windows.net",
+)
+APP_INSIGHTS_ID = os.environ.get(
+    "PROCUREMENT_APP_INSIGHTS_RESOURCE_ID",
+    f"/subscriptions/{SUB}/resourceGroups/{RG}/providers/Microsoft.Insights/components/{WEB}-insights",
+)
+CHILD_MODEL = os.environ.get("PROCUREMENT_CHILD_MODEL_DEPLOYMENT", "gpt-5-mini")
+PARENT_MODEL = os.environ.get("PROCUREMENT_PARENT_MODEL_DEPLOYMENT", "gpt-5-mini")
 MANIFEST = STATE / "foundry-deployment.json"
 
 
@@ -48,10 +63,10 @@ def connection(credential, name, properties):
 
 def connections(credential):
     search = connection(credential, "procurement-search-connection", {
-        "category": "CognitiveSearch", "target": "https://srch-procurement-observe-nkjm.search.windows.net",
+        "category": "CognitiveSearch", "target": SEARCH_ENDPOINT,
         "authType": "ProjectManagedIdentity", "audience": "https://search.azure.com", "metadata": {"ApiType": "Azure"},
     })
-    insights = az("resource", "show", "--ids", f"/subscriptions/{SUB}/resourceGroups/{RG}/providers/Microsoft.Insights/components/{WEB}-insights",
+    insights = az("resource", "show", "--ids", APP_INSIGHTS_ID,
                   "--api-version", "2020-02-02")
     connection(credential, "procurement-app-insights", {
         "category": "AppInsights", "target": insights["id"], "authType": "ApiKey", "isSharedToAll": True,
@@ -94,7 +109,7 @@ def children(project, credential, manifest, *, new_version=False, agent_name=Non
                 project.agents.get_version(agent_name=name, agent_version=previous["version"])
             elif any(item.name == name for item in project.agents.list()):
                 raise RuntimeError(f"Existing agent {name} without manifest; inspect before creating another version")
-            definition = models.PromptAgentDefinition(model="gpt-5-mini",
+            definition = models.PromptAgentDefinition(model=CHILD_MODEL,
                 instructions=(source / spec["instructions_file"]).read_text(),
                 tools=[models.MCPTool(server_label=toolbox, server_url=toolbox_url,
                     project_connection_id=connection_id, require_approval="never")],
@@ -136,7 +151,7 @@ def hosted(project, manifest, *, new_version=False):
     definition = models.HostedAgentDefinition(cpu="0.5", memory="1Gi",
         code_configuration=models.CodeConfiguration(runtime="python_3_13", entry_point=["python", "main.py"], dependency_resolution="remote_build"),
         protocol_versions=[models.ProtocolVersionRecord(protocol="responses", version="2.0.0")],
-        environment_variables={"PROCUREMENT_PARENT_MODEL_DEPLOYMENT": "gpt-5-mini",
+        environment_variables={"PROCUREMENT_PARENT_MODEL_DEPLOYMENT": PARENT_MODEL,
             "PROCUREMENT_CATALOG_AGENT_NAME": "catalog-search-agent", "PROCUREMENT_CATALOG_AGENT_VERSION": str(manifest["catalog-search-agent"]["version"]),
             "PROCUREMENT_CODE_AGENT_NAME": "code-determination-agent", "PROCUREMENT_CODE_AGENT_VERSION": str(manifest["code-determination-agent"]["version"]),
             "OTEL_PROPAGATORS": "tracecontext,baggage", "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "false"})

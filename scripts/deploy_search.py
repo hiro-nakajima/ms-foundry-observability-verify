@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import sys
 
@@ -13,7 +14,11 @@ from azure.identity import AzureCliCredential
 from deploy_foundation import ROOT, STATE, SUB, RG, az, save
 from prepare_search_documents import build_documents
 
-NAME = "srch-procurement-observe-nkjm"
+NAME = os.environ.get("PROCUREMENT_SEARCH_SERVICE_NAME", "srch-procurement-observe-nkjm")
+EXPECTED_SKU = os.environ.get("PROCUREMENT_SEARCH_SKU", "serverless")
+EXPECTED_LOCATION = os.environ.get("PROCUREMENT_SEARCH_LOCATION", "westcentralus")
+FOUNDRY_ACCOUNT = os.environ.get("FOUNDRY_ACCOUNT_NAME", "observability-verify")
+FOUNDRY_PROJECT = os.environ.get("FOUNDRY_PROJECT_NAME", "proj-default")
 SCOPE = f"/subscriptions/{SUB}/resourceGroups/{RG}/providers/Microsoft.Search/searchServices/{NAME}"
 INDEXES = ("procurement-catalog-v1", "procurement-code-master-v1")
 API = "2025-09-01"
@@ -31,7 +36,7 @@ def permissions():
     # The deployment caller owns schema management and document loading, never runtime query.
     caller = az("ad", "signed-in-user", "show")["id"]
     project = az("resource", "show", "--ids",
-        f"/subscriptions/{SUB}/resourceGroups/{RG}/providers/Microsoft.CognitiveServices/accounts/observability-verify/projects/proj-default",
+        f"/subscriptions/{SUB}/resourceGroups/{RG}/providers/Microsoft.CognitiveServices/accounts/{FOUNDRY_ACCOUNT}/projects/{FOUNDRY_PROJECT}",
         "--api-version", "2025-06-01")
     runtime = project["identity"]["principalId"]
     assign(caller, "User", "7ca78c08-252a-4471-8644-bb5ff32d4ba0", SCOPE)
@@ -83,31 +88,47 @@ def add_content_field():
         print(json.dumps({"index": index, "added_field": "content", "existing_fields_preserved": True}))
 
 
+def _request(client, method, path, **kwargs):
+    response = client.request(method, path, params={"api-version": API}, **kwargs)
+    if response.status_code >= 400:
+        raise RuntimeError(f"Search {method} {path}: HTTP {response.status_code}; body withheld")
+    return response
+
+
+def _ensure_schemas(client):
+    observed = []
+    for index in INDEXES:
+        schema = json.loads((ROOT / "infra/search/indexes" / f"{index}.json").read_text())
+        existing = client.get(f"/indexes/{index}", params={"api-version": API})
+        if existing.status_code == 404:
+            _request(client, "PUT", f"/indexes/{index}", json=schema, headers={"If-None-Match": "*"})
+            observed.append({"index": index, "result": "created"})
+        elif existing.status_code != 200:
+            raise RuntimeError(f"Search schema read: HTTP {existing.status_code}; RBAC propagation may be pending")
+        else:
+            expected_fields = {field["name"]: field["type"] for field in schema["fields"]}
+            actual_fields = {field["name"]: field["type"] for field in existing.json()["fields"]}
+            if actual_fields != expected_fields:
+                raise RuntimeError(f"Existing {index} schema differs; no replacement allowed")
+            observed.append({"index": index, "result": "matched"})
+    return observed
+
+
+def schemas():
+    with AzureCliCredential() as credential, httpx.Client(base_url=f"https://{NAME}.search.windows.net", timeout=60) as client:
+        client.headers["Authorization"] = "Bearer " + credential.get_token("https://search.azure.com/.default").token
+        print(json.dumps({"schemas": _ensure_schemas(client)}))
+
+
 def push():
     catalog, codes, manifest = build_documents()
     observed = []
     with AzureCliCredential() as credential, httpx.Client(base_url=f"https://{NAME}.search.windows.net", timeout=60) as client:
         client.headers["Authorization"] = "Bearer " + credential.get_token("https://search.azure.com/.default").token
-        def request(method, path, **kwargs):
-            response = client.request(method, path, params={"api-version": API}, **kwargs)
-            if response.status_code >= 400:
-                raise RuntimeError(f"Search {method} {path}: HTTP {response.status_code}; body withheld")
-            return response
-        for index in INDEXES:
-            schema = json.loads((ROOT / "infra/search/indexes" / f"{index}.json").read_text())
-            existing = client.get(f"/indexes/{index}", params={"api-version": API})
-            if existing.status_code == 404:
-                request("PUT", f"/indexes/{index}", json=schema, headers={"If-None-Match": "*"})
-            elif existing.status_code != 200:
-                raise RuntimeError(f"Search schema read: HTTP {existing.status_code}; RBAC propagation may be pending")
-            else:
-                expected_fields = {field["name"]: field["type"] for field in schema["fields"]}
-                actual_fields = {field["name"]: field["type"] for field in existing.json()["fields"]}
-                if actual_fields != expected_fields:
-                    raise RuntimeError(f"Existing {index} schema differs; no replacement allowed")
+        _ensure_schemas(client)
         # Preflight both schemas before updating either document set.
         for index, documents in zip(INDEXES, (catalog, codes)):
-            result = request("POST", f"/indexes/{index}/docs/index",
+            result = _request(client, "POST", f"/indexes/{index}/docs/index",
                 json={"value": [{"@search.action": "upload", **document} for document in documents]}).json()
             if not all(item["status"] for item in result["value"]):
                 raise RuntimeError(f"Some {index} uploads failed; body withheld")
@@ -118,15 +139,17 @@ def push():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=["permissions", "add-content-field", "push"])
+    parser.add_argument("action", choices=["permissions", "schemas", "add-content-field", "push"])
     args = parser.parse_args()
     try:
         if az("account", "show")["id"] != SUB:
             raise RuntimeError("Wrong subscription")
         resource = az("resource", "show", "--ids", SCOPE, "--api-version", "2026-03-01-preview")
-        if resource["sku"]["name"] != "serverless" or resource["location"].lower().replace(" ", "") != "westcentralus":
-            raise RuntimeError("Search target differs from approved configuration")
-        {"permissions": permissions, "add-content-field": add_content_field, "push": push}[args.action]()
+        if (resource["sku"]["name"].lower() != EXPECTED_SKU.lower()
+                or resource["location"].lower().replace(" ", "") != EXPECTED_LOCATION.lower().replace(" ", "")):
+            raise RuntimeError("Search target differs from the explicitly configured SKU/location")
+        {"permissions": permissions, "schemas": schemas,
+         "add-content-field": add_content_field, "push": push}[args.action]()
     except Exception as error:
         print(str(error) if isinstance(error, RuntimeError) else type(error).__name__, file=sys.stderr)
         sys.exit(1)
