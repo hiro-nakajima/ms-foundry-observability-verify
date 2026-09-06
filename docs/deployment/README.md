@@ -4,7 +4,7 @@
 
 ## 手順の順序
 
-1. [Azure AI SearchのJSON/Blob/Indexer/Index](search-json-indexer.md)
+1. [Azure AI Searchの静的JSON定義・document再投入](search-json-indexer.md)
 2. [2つのToolboxとAzure AI Search MCP tool](toolboxes-and-search-mcp.md)
 3. [2つのPrompt Agent](prompt-agents.md)
 4. [Hosted親Agentのsource ZIP deployment](hosted-agent-source-zip.md)

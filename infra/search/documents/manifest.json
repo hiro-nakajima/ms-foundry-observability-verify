@@ -1,0 +1,12 @@
+{
+  "schema_version": "1.0",
+  "document_projection_version": "2",
+  "source_version": "2026-09-04.1",
+  "synthetic": true,
+  "catalog_index": "procurement-catalog-v1",
+  "catalog_document_count": 11,
+  "catalog_sha256": "fdef367b38d28f687bf575970cace8625e6ff5f39aa8b0fd961e7a40cea3cff1",
+  "code_index": "procurement-code-master-v1",
+  "code_document_count": 10,
+  "code_sha256": "f2da0c0e95db261ff2c5eeab9ee8803ec06275145d7e824c64a9654bbfc0ff57"
+}

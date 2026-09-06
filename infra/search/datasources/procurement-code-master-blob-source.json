@@ -1,0 +1,11 @@
+{
+  "name": "procurement-code-master-blob-source",
+  "type": "azureblob",
+  "description": "Repository synthetic JSON; managed identity; no account keys",
+  "credentials": {
+    "connectionString": "ResourceId=/subscriptions/d96eb8c2-2deb-4ed5-8cf2-f9fb178cb3ee/resourceGroups/rg-ms-foundry-observability-verify/providers/Microsoft.Storage/storageAccounts/stprocurementobsnkjm;"
+  },
+  "container": {
+    "name": "procurement-code-master"
+  }
+}

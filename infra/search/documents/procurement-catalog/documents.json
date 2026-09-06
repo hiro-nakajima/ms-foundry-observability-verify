@@ -1,0 +1,199 @@
+[
+  {
+    "document_id": "catalog-LAPTOP-DEV-14",
+    "chunk_id": "catalog-LAPTOP-DEV-14-0",
+    "source_version": "2026-09-04.1",
+    "product_code": "LAPTOP-DEV-14",
+    "product_name": "開発用ノートPC 14インチ（架空商品）",
+    "aliases": [
+      "開発用",
+      "ノートPC",
+      "高性能"
+    ],
+    "category": "laptop",
+    "unit_price": 180000.0,
+    "currency": "JPY",
+    "content": "{\"category\": \"laptop\", \"chunk_id\": \"catalog-LAPTOP-DEV-14-0\", \"currency\": \"JPY\", \"document_id\": \"catalog-LAPTOP-DEV-14\", \"product_code\": \"LAPTOP-DEV-14\", \"product_name\": \"開発用ノートPC 14インチ（架空商品）\", \"source_version\": \"2026-09-04.1\", \"specifications_json\": \"{\\\"memory\\\": \\\"32GB\\\", \\\"os\\\": \\\"Windows 11 Pro\\\", \\\"storage\\\": \\\"1TB SSD\\\"}\", \"unit_price\": 180000.0}",
+    "specifications_json": "{\"memory\": \"32GB\", \"os\": \"Windows 11 Pro\", \"storage\": \"1TB SSD\"}",
+    "active": true
+  },
+  {
+    "document_id": "catalog-LAPTOP-OFFICE-13",
+    "chunk_id": "catalog-LAPTOP-OFFICE-13-0",
+    "source_version": "2026-09-04.1",
+    "product_code": "LAPTOP-OFFICE-13",
+    "product_name": "一般業務用ノートPC 13インチ（架空商品）",
+    "aliases": [
+      "一般業務",
+      "ノートPC",
+      "軽量"
+    ],
+    "category": "laptop",
+    "unit_price": 120000.0,
+    "currency": "JPY",
+    "content": "{\"category\": \"laptop\", \"chunk_id\": \"catalog-LAPTOP-OFFICE-13-0\", \"currency\": \"JPY\", \"document_id\": \"catalog-LAPTOP-OFFICE-13\", \"product_code\": \"LAPTOP-OFFICE-13\", \"product_name\": \"一般業務用ノートPC 13インチ（架空商品）\", \"source_version\": \"2026-09-04.1\", \"specifications_json\": \"{\\\"memory\\\": \\\"16GB\\\", \\\"os\\\": \\\"Windows 11 Pro\\\", \\\"storage\\\": \\\"512GB SSD\\\"}\", \"unit_price\": 120000.0}",
+    "specifications_json": "{\"memory\": \"16GB\", \"os\": \"Windows 11 Pro\", \"storage\": \"512GB SSD\"}",
+    "active": true
+  },
+  {
+    "document_id": "catalog-MONITOR-DEV-27",
+    "chunk_id": "catalog-MONITOR-DEV-27-0",
+    "source_version": "2026-09-04.1",
+    "product_code": "MONITOR-DEV-27",
+    "product_name": "開発用モニター 27インチ（架空商品）",
+    "aliases": [
+      "開発用",
+      "モニター",
+      "4K"
+    ],
+    "category": "monitor",
+    "unit_price": 60000.0,
+    "currency": "JPY",
+    "content": "{\"category\": \"monitor\", \"chunk_id\": \"catalog-MONITOR-DEV-27-0\", \"currency\": \"JPY\", \"document_id\": \"catalog-MONITOR-DEV-27\", \"product_code\": \"MONITOR-DEV-27\", \"product_name\": \"開発用モニター 27インチ（架空商品）\", \"source_version\": \"2026-09-04.1\", \"specifications_json\": \"{\\\"panel\\\": \\\"IPS\\\", \\\"resolution\\\": \\\"3840x2160\\\"}\", \"unit_price\": 60000.0}",
+    "specifications_json": "{\"panel\": \"IPS\", \"resolution\": \"3840x2160\"}",
+    "active": true
+  },
+  {
+    "document_id": "catalog-DOCK-USB4-01",
+    "chunk_id": "catalog-DOCK-USB4-01-0",
+    "source_version": "2026-09-04.1",
+    "product_code": "DOCK-USB4-01",
+    "product_name": "USB4ドッキングステーション（架空商品）",
+    "aliases": [
+      "ドック",
+      "USB4",
+      "ノートPC周辺機器"
+    ],
+    "category": "peripheral",
+    "unit_price": 28000.0,
+    "currency": "JPY",
+    "content": "{\"category\": \"peripheral\", \"chunk_id\": \"catalog-DOCK-USB4-01-0\", \"currency\": \"JPY\", \"document_id\": \"catalog-DOCK-USB4-01\", \"product_code\": \"DOCK-USB4-01\", \"product_name\": \"USB4ドッキングステーション（架空商品）\", \"source_version\": \"2026-09-04.1\", \"specifications_json\": \"{\\\"ports\\\": \\\"12\\\", \\\"power_delivery\\\": \\\"100W\\\"}\", \"unit_price\": 28000.0}",
+    "specifications_json": "{\"ports\": \"12\", \"power_delivery\": \"100W\"}",
+    "active": true
+  },
+  {
+    "document_id": "catalog-HEADSET-USB-01",
+    "chunk_id": "catalog-HEADSET-USB-01-0",
+    "source_version": "2026-09-04.1",
+    "product_code": "HEADSET-USB-01",
+    "product_name": "会議用USBヘッドセット（架空商品）",
+    "aliases": [
+      "ヘッドセット",
+      "会議",
+      "USB"
+    ],
+    "category": "peripheral",
+    "unit_price": 16000.0,
+    "currency": "JPY",
+    "content": "{\"category\": \"peripheral\", \"chunk_id\": \"catalog-HEADSET-USB-01-0\", \"currency\": \"JPY\", \"document_id\": \"catalog-HEADSET-USB-01\", \"product_code\": \"HEADSET-USB-01\", \"product_name\": \"会議用USBヘッドセット（架空商品）\", \"source_version\": \"2026-09-04.1\", \"specifications_json\": \"{\\\"connection\\\": \\\"USB-C\\\", \\\"microphone\\\": \\\"noise-cancelling\\\"}\", \"unit_price\": 16000.0}",
+    "specifications_json": "{\"connection\": \"USB-C\", \"microphone\": \"noise-cancelling\"}",
+    "active": true
+  },
+  {
+    "document_id": "catalog-KEYBOARD-ERG-01",
+    "chunk_id": "catalog-KEYBOARD-ERG-01-0",
+    "source_version": "2026-09-04.1",
+    "product_code": "KEYBOARD-ERG-01",
+    "product_name": "エルゴノミクスキーボード（架空商品）",
+    "aliases": [
+      "キーボード",
+      "エルゴノミクス"
+    ],
+    "category": "peripheral",
+    "unit_price": 14000.0,
+    "currency": "JPY",
+    "content": "{\"category\": \"peripheral\", \"chunk_id\": \"catalog-KEYBOARD-ERG-01-0\", \"currency\": \"JPY\", \"document_id\": \"catalog-KEYBOARD-ERG-01\", \"product_code\": \"KEYBOARD-ERG-01\", \"product_name\": \"エルゴノミクスキーボード（架空商品）\", \"source_version\": \"2026-09-04.1\", \"specifications_json\": \"{\\\"connection\\\": \\\"wireless\\\", \\\"layout\\\": \\\"JIS\\\"}\", \"unit_price\": 14000.0}",
+    "specifications_json": "{\"connection\": \"wireless\", \"layout\": \"JIS\"}",
+    "active": true
+  },
+  {
+    "document_id": "catalog-MOUSE-WL-01",
+    "chunk_id": "catalog-MOUSE-WL-01-0",
+    "source_version": "2026-09-04.1",
+    "product_code": "MOUSE-WL-01",
+    "product_name": "業務用ワイヤレスマウス（架空商品）",
+    "aliases": [
+      "マウス",
+      "ワイヤレス",
+      "業務用"
+    ],
+    "category": "peripheral",
+    "unit_price": 8000.0,
+    "currency": "JPY",
+    "content": "{\"category\": \"peripheral\", \"chunk_id\": \"catalog-MOUSE-WL-01-0\", \"currency\": \"JPY\", \"document_id\": \"catalog-MOUSE-WL-01\", \"product_code\": \"MOUSE-WL-01\", \"product_name\": \"業務用ワイヤレスマウス（架空商品）\", \"source_version\": \"2026-09-04.1\", \"specifications_json\": \"{\\\"buttons\\\": \\\"6\\\", \\\"connection\\\": \\\"Bluetooth\\\"}\", \"unit_price\": 8000.0}",
+    "specifications_json": "{\"buttons\": \"6\", \"connection\": \"Bluetooth\"}",
+    "active": true
+  },
+  {
+    "document_id": "catalog-TABLET-BIZ-11",
+    "chunk_id": "catalog-TABLET-BIZ-11-0",
+    "source_version": "2026-09-04.1",
+    "product_code": "TABLET-BIZ-11",
+    "product_name": "業務用タブレット 11インチ（架空商品）",
+    "aliases": [
+      "タブレット",
+      "業務用",
+      "11インチ"
+    ],
+    "category": "tablet",
+    "unit_price": 95000.0,
+    "currency": "JPY",
+    "content": "{\"category\": \"tablet\", \"chunk_id\": \"catalog-TABLET-BIZ-11-0\", \"currency\": \"JPY\", \"document_id\": \"catalog-TABLET-BIZ-11\", \"product_code\": \"TABLET-BIZ-11\", \"product_name\": \"業務用タブレット 11インチ（架空商品）\", \"source_version\": \"2026-09-04.1\", \"specifications_json\": \"{\\\"network\\\": \\\"Wi-Fi\\\", \\\"storage\\\": \\\"256GB\\\"}\", \"unit_price\": 95000.0}",
+    "specifications_json": "{\"network\": \"Wi-Fi\", \"storage\": \"256GB\"}",
+    "active": true
+  },
+  {
+    "document_id": "catalog-DESK-ADJ-01",
+    "chunk_id": "catalog-DESK-ADJ-01-0",
+    "source_version": "2026-09-04.1",
+    "product_code": "DESK-ADJ-01",
+    "product_name": "電動昇降デスク（架空商品）",
+    "aliases": [
+      "デスク",
+      "昇降",
+      "執務環境"
+    ],
+    "category": "furniture",
+    "unit_price": 78000.0,
+    "currency": "JPY",
+    "content": "{\"category\": \"furniture\", \"chunk_id\": \"catalog-DESK-ADJ-01-0\", \"currency\": \"JPY\", \"document_id\": \"catalog-DESK-ADJ-01\", \"product_code\": \"DESK-ADJ-01\", \"product_name\": \"電動昇降デスク（架空商品）\", \"source_version\": \"2026-09-04.1\", \"specifications_json\": \"{\\\"color\\\": \\\"white\\\", \\\"width\\\": \\\"1400mm\\\"}\", \"unit_price\": 78000.0}",
+    "specifications_json": "{\"color\": \"white\", \"width\": \"1400mm\"}",
+    "active": true
+  },
+  {
+    "document_id": "catalog-CHAIR-ERG-01",
+    "chunk_id": "catalog-CHAIR-ERG-01-0",
+    "source_version": "2026-09-04.1",
+    "product_code": "CHAIR-ERG-01",
+    "product_name": "エルゴノミクスチェア（架空商品）",
+    "aliases": [
+      "チェア",
+      "椅子",
+      "エルゴノミクス"
+    ],
+    "category": "furniture",
+    "unit_price": 65000.0,
+    "currency": "JPY",
+    "content": "{\"category\": \"furniture\", \"chunk_id\": \"catalog-CHAIR-ERG-01-0\", \"currency\": \"JPY\", \"document_id\": \"catalog-CHAIR-ERG-01\", \"product_code\": \"CHAIR-ERG-01\", \"product_name\": \"エルゴノミクスチェア（架空商品）\", \"source_version\": \"2026-09-04.1\", \"specifications_json\": \"{\\\"armrest\\\": \\\"adjustable\\\", \\\"back\\\": \\\"mesh\\\"}\", \"unit_price\": 65000.0}",
+    "specifications_json": "{\"armrest\": \"adjustable\", \"back\": \"mesh\"}",
+    "active": true
+  },
+  {
+    "document_id": "catalog-BUSINESS-CARD-01",
+    "chunk_id": "catalog-BUSINESS-CARD-01-0",
+    "source_version": "2026-09-04.1",
+    "product_code": "BUSINESS-CARD-01",
+    "product_name": "名刺",
+    "aliases": [
+      "名刺",
+      "ビジネスカード",
+      "印刷物"
+    ],
+    "category": "printing",
+    "unit_price": 100.0,
+    "currency": "JPY",
+    "content": "{\"category\": \"printing\", \"chunk_id\": \"catalog-BUSINESS-CARD-01-0\", \"currency\": \"JPY\", \"document_id\": \"catalog-BUSINESS-CARD-01\", \"product_code\": \"BUSINESS-CARD-01\", \"product_name\": \"名刺\", \"source_version\": \"2026-09-04.1\", \"specifications_json\": \"{\\\"print\\\": \\\"両面カラー\\\", \\\"size\\\": \\\"91x55mm\\\"}\", \"unit_price\": 100.0}",
+    "specifications_json": "{\"print\": \"両面カラー\", \"size\": \"91x55mm\"}",
+    "active": true
+  }
+]
