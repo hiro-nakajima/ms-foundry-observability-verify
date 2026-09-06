@@ -1,0 +1,23 @@
+{
+  "displayName": "Foundry-OAuth-MCP-Handson-Func",
+  "signInAudience": "AzureADMyOrg",
+  "identifierUri": "",
+  "redirectUris": [],
+  "scope": {
+    "name": "access_as_user",
+    "adminConsentDisplayName": "Access MCP server as user",
+    "adminConsentDescription": "Allow the application to access the MCP server on behalf of the signed-in user.",
+    "userConsentDisplayName": "Access MCP server",
+    "userConsentDescription": "Allow Azure AI Foundry to access the MCP server on your behalf."
+  },
+  "graphDelegatedPermissions": [
+    "User.Read"
+  ],
+  "grantAdminConsent": false,
+  "clientSecret": {
+    "create": true,
+    "displayName": "codex-obo-secret",
+    "yearsValid": 1
+  },
+  "outputFile": "infra/entra/obo-app.outputs.json"
+}

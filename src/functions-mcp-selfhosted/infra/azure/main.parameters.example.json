@@ -1,0 +1,39 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "functionAppName": {
+      "value": "func-mcp-server-flex-000001"
+    },
+    "storageAccountName": {
+      "value": "stmcpserverflex000001"
+    },
+    "hostingPlanName": {
+      "value": "plan-mcp-server-flex-000001"
+    },
+    "appInsightsName": {
+      "value": "appi-mcp-server-flex-000001"
+    },
+    "deploymentContainerName": {
+      "value": "deployments"
+    },
+    "functionRuntimeVersion": {
+      "value": "3.13"
+    },
+    "instanceMemoryMB": {
+      "value": 2048
+    },
+    "maximumInstanceCount": {
+      "value": 100
+    },
+    "httpPerInstanceConcurrency": {
+      "value": 100
+    },
+    "tags": {
+      "value": {
+        "project": "ms-foundry-mcp-web",
+        "component": "functions-mcp-selfhosted"
+      }
+    }
+  }
+}

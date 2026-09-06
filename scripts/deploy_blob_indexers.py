@@ -9,6 +9,7 @@ import argparse
 from datetime import datetime, timezone
 import hashlib
 import json
+import os
 import sys
 
 import httpx
@@ -20,7 +21,8 @@ from deploy_search import NAME, SCOPE, INDEXES
 from prepare_search_documents import build_documents
 
 API = '2026-08-01-preview'
-STORAGE = 'stprocurementobsnkjm'
+STORAGE = os.environ.get('PROCUREMENT_STORAGE_ACCOUNT_NAME', 'stprocurementobsnkjm')
+STORAGE_LOCATION = os.environ.get('PROCUREMENT_STORAGE_LOCATION', 'westcentralus')
 STORAGE_ID = f'/subscriptions/{SUB}/resourceGroups/{RG}/providers/Microsoft.Storage/storageAccounts/{STORAGE}'
 CONTAINERS = ('procurement-catalog', 'procurement-code-master')
 PARAMS = STATE / 'search-blob.parameters.json'
@@ -51,6 +53,7 @@ def infrastructure(apply=False):
         raise RuntimeError('Search system MI must exist before Storage deployment')
     caller = az('ad', 'signed-in-user', 'show')['id']
     save(PARAMS, {'parameters': {k: {'value': v} for k, v in {
+        'storageAccountName': STORAGE, 'location': STORAGE_LOCATION,
         'searchPrincipalId': principal, 'ingestorPrincipalId': caller,
     }.items()}})
     args = ['--resource-group', RG, '--name', 'procurement-search-blob',
