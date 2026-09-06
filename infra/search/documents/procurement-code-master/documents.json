@@ -1,0 +1,164 @@
+[
+  {
+    "document_id": "account-7210-EQUIPMENT-laptop",
+    "source_version": "2026-09-04.1",
+    "record_type": "account_code",
+    "lookup_key": "laptop",
+    "aliases": [
+      "開発",
+      "検証",
+      "一般業務",
+      "営業"
+    ],
+    "account_code": "7210-EQUIPMENT",
+    "department_code": null,
+    "display_name": "情報機器備品（架空科目）",
+    "active": true,
+    "content": "{\"account_code\": \"7210-EQUIPMENT\", \"department_code\": null, \"display_name\": \"情報機器備品（架空科目）\", \"document_id\": \"account-7210-EQUIPMENT-laptop\", \"lookup_key\": \"laptop\", \"record_type\": \"account_code\", \"source_version\": \"2026-09-04.1\"}"
+  },
+  {
+    "document_id": "account-7210-EQUIPMENT-monitor",
+    "source_version": "2026-09-04.1",
+    "record_type": "account_code",
+    "lookup_key": "monitor",
+    "aliases": [
+      "開発",
+      "検証",
+      "一般業務",
+      "営業"
+    ],
+    "account_code": "7210-EQUIPMENT",
+    "department_code": null,
+    "display_name": "情報機器備品（架空科目）",
+    "active": true,
+    "content": "{\"account_code\": \"7210-EQUIPMENT\", \"department_code\": null, \"display_name\": \"情報機器備品（架空科目）\", \"document_id\": \"account-7210-EQUIPMENT-monitor\", \"lookup_key\": \"monitor\", \"record_type\": \"account_code\", \"source_version\": \"2026-09-04.1\"}"
+  },
+  {
+    "document_id": "account-7210-EQUIPMENT-tablet",
+    "source_version": "2026-09-04.1",
+    "record_type": "account_code",
+    "lookup_key": "tablet",
+    "aliases": [
+      "開発",
+      "検証",
+      "一般業務",
+      "営業"
+    ],
+    "account_code": "7210-EQUIPMENT",
+    "department_code": null,
+    "display_name": "情報機器備品（架空科目）",
+    "active": true,
+    "content": "{\"account_code\": \"7210-EQUIPMENT\", \"department_code\": null, \"display_name\": \"情報機器備品（架空科目）\", \"document_id\": \"account-7210-EQUIPMENT-tablet\", \"lookup_key\": \"tablet\", \"record_type\": \"account_code\", \"source_version\": \"2026-09-04.1\"}"
+  },
+  {
+    "document_id": "account-7310-SUPPLIES-peripheral",
+    "source_version": "2026-09-04.1",
+    "record_type": "account_code",
+    "lookup_key": "peripheral",
+    "aliases": [
+      "開発",
+      "検証",
+      "一般業務",
+      "営業"
+    ],
+    "account_code": "7310-SUPPLIES",
+    "department_code": null,
+    "display_name": "周辺機器消耗品（架空科目）",
+    "active": true,
+    "content": "{\"account_code\": \"7310-SUPPLIES\", \"department_code\": null, \"display_name\": \"周辺機器消耗品（架空科目）\", \"document_id\": \"account-7310-SUPPLIES-peripheral\", \"lookup_key\": \"peripheral\", \"record_type\": \"account_code\", \"source_version\": \"2026-09-04.1\"}"
+  },
+  {
+    "document_id": "account-7310-SUPPLIES-printing",
+    "source_version": "2026-09-04.1",
+    "record_type": "account_code",
+    "lookup_key": "printing",
+    "aliases": [
+      "開発",
+      "検証",
+      "一般業務",
+      "営業"
+    ],
+    "account_code": "7310-SUPPLIES",
+    "department_code": null,
+    "display_name": "周辺機器消耗品（架空科目）",
+    "active": true,
+    "content": "{\"account_code\": \"7310-SUPPLIES\", \"department_code\": null, \"display_name\": \"周辺機器消耗品（架空科目）\", \"document_id\": \"account-7310-SUPPLIES-printing\", \"lookup_key\": \"printing\", \"record_type\": \"account_code\", \"source_version\": \"2026-09-04.1\"}"
+  },
+  {
+    "document_id": "account-7220-FURNITURE-furniture",
+    "source_version": "2026-09-04.1",
+    "record_type": "account_code",
+    "lookup_key": "furniture",
+    "aliases": [
+      "執務環境",
+      "一般業務",
+      "安全衛生"
+    ],
+    "account_code": "7220-FURNITURE",
+    "department_code": null,
+    "display_name": "什器備品（架空科目）",
+    "active": true,
+    "content": "{\"account_code\": \"7220-FURNITURE\", \"department_code\": null, \"display_name\": \"什器備品（架空科目）\", \"document_id\": \"account-7220-FURNITURE-furniture\", \"lookup_key\": \"furniture\", \"record_type\": \"account_code\", \"source_version\": \"2026-09-04.1\"}"
+  },
+  {
+    "document_id": "department-DPT-DEV",
+    "source_version": "2026-09-04.1",
+    "record_type": "department",
+    "lookup_key": "開発部（架空部署）",
+    "aliases": [
+      "開発部",
+      "開発"
+    ],
+    "account_code": null,
+    "department_code": "DPT-DEV",
+    "display_name": "開発部（架空部署）",
+    "active": true,
+    "content": "{\"account_code\": null, \"department_code\": \"DPT-DEV\", \"display_name\": \"開発部（架空部署）\", \"document_id\": \"department-DPT-DEV\", \"lookup_key\": \"開発部（架空部署）\", \"record_type\": \"department\", \"source_version\": \"2026-09-04.1\"}"
+  },
+  {
+    "document_id": "department-DPT-OPS",
+    "source_version": "2026-09-04.1",
+    "record_type": "department",
+    "lookup_key": "運用部（架空部署）",
+    "aliases": [
+      "運用部",
+      "運用"
+    ],
+    "account_code": null,
+    "department_code": "DPT-OPS",
+    "display_name": "運用部（架空部署）",
+    "active": true,
+    "content": "{\"account_code\": null, \"department_code\": \"DPT-OPS\", \"display_name\": \"運用部（架空部署）\", \"document_id\": \"department-DPT-OPS\", \"lookup_key\": \"運用部（架空部署）\", \"record_type\": \"department\", \"source_version\": \"2026-09-04.1\"}"
+  },
+  {
+    "document_id": "department-DPT-IS",
+    "source_version": "2026-09-04.1",
+    "record_type": "department",
+    "lookup_key": "情報システム部（架空部署）",
+    "aliases": [
+      "情報システム部",
+      "情報システム",
+      "情シス"
+    ],
+    "account_code": null,
+    "department_code": "DPT-IS",
+    "display_name": "情報システム部（架空部署）",
+    "active": true,
+    "content": "{\"account_code\": null, \"department_code\": \"DPT-IS\", \"display_name\": \"情報システム部（架空部署）\", \"document_id\": \"department-DPT-IS\", \"lookup_key\": \"情報システム部（架空部署）\", \"record_type\": \"department\", \"source_version\": \"2026-09-04.1\"}"
+  },
+  {
+    "document_id": "department-DPT-SALES",
+    "source_version": "2026-09-04.1",
+    "record_type": "department",
+    "lookup_key": "営業部（架空部署）",
+    "aliases": [
+      "営業部",
+      "営業"
+    ],
+    "account_code": null,
+    "department_code": "DPT-SALES",
+    "display_name": "営業部（架空部署）",
+    "active": true,
+    "content": "{\"account_code\": null, \"department_code\": \"DPT-SALES\", \"display_name\": \"営業部（架空部署）\", \"document_id\": \"department-DPT-SALES\", \"lookup_key\": \"営業部（架空部署）\", \"record_type\": \"department\", \"source_version\": \"2026-09-04.1\"}"
+  }
+]

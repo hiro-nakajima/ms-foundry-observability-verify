@@ -1,0 +1,18 @@
+{
+  "name": "procurement-code-master-blob-indexer",
+  "dataSourceName": "procurement-code-master-blob-source",
+  "targetIndexName": "procurement-code-master-v1",
+  "parameters": {
+    "maxFailedItems": 0,
+    "maxFailedItemsPerBatch": 0,
+    "configuration": {
+      "parsingMode": "jsonArray"
+    }
+  },
+  "fieldMappings": [
+    {
+      "sourceFieldName": "document_id",
+      "targetFieldName": "document_id"
+    }
+  ]
+}

@@ -8,6 +8,7 @@ import yaml
 
 from scripts.prepare_search_documents import build_documents, write_outputs
 from scripts.validate_deployment_assets import validate as validate_deployment_assets
+from scripts.validate_search_assets import validate as validate_search_assets
 
 
 ROOT = Path(__file__).parents[2]
@@ -59,6 +60,13 @@ def test_search_upload_batches_have_data_plane_action(tmp_path):
         batch = json.loads((tmp_path / name).read_text(encoding="utf-8"))
         assert batch["value"]
         assert {item["@search.action"] for item in batch["value"]} == {"upload"}
+
+
+def test_static_search_json_matches_current_repository_projection():
+    manifest = validate_search_assets()
+
+    assert manifest["catalog_document_count"] == 11
+    assert manifest["code_document_count"] == 10
 
 
 def test_prompt_agents_connect_only_their_owned_toolbox():

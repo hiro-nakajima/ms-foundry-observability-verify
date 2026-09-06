@@ -1,104 +1,125 @@
-# Azure AI Search: JSON Data source / Indexer / Index
+# Azure AI Search: 現行JSON定義の再投入
 
-対象は既存Azure AI Searchへ、Repositoryのversion付きSynthetic JSONをBlob Indexer経由で投入する手順である。商品・価格・勘定科目・部署コードをAgent Instructionsやcontainer imageへデータとして埋め込まない。
+この手順ではPython deployment scriptを必須にしない。現在のPoCで実際に使用しているData source、Index、Indexer、およびBlobへ格納するSearch documentを静的JSONとしてRepositoryに保存し、別環境へ投入する。
 
 公式資料: [JSON Blobのindexing](https://learn.microsoft.com/en-us/azure/search/search-how-to-index-azure-blob-json)
 
-## 完成形
+## JSON資産
 
-| Source | Blob container | Indexer | Target index |
-| --- | --- | --- | --- |
-| `data/catalog.json` | `procurement-catalog` | `procurement-catalog-blob-indexer` | `procurement-catalog-v1` |
-| `data/account_codes.json` + `data/departments.json` | `procurement-code-master` | `procurement-code-master-blob-indexer` | `procurement-code-master-v1` |
+| 種別 | Catalog | Code master |
+| --- | --- | --- |
+| Blob document | `infra/search/documents/procurement-catalog/documents.json` | `infra/search/documents/procurement-code-master/documents.json` |
+| Data source | `infra/search/datasources/procurement-catalog-blob-source.json` | `infra/search/datasources/procurement-code-master-blob-source.json` |
+| Index | `infra/search/indexes/procurement-catalog-v1.json` | `infra/search/indexes/procurement-code-master-v1.json` |
+| Indexer | `infra/search/indexers/procurement-catalog-blob-indexer.json` | `infra/search/indexers/procurement-code-master-blob-indexer.json` |
 
-各containerには`documents.json`を1つ置く。形式はJSON arrayで、Indexerの`parsingMode=jsonArray`により配列要素を1 Search documentとして取り込む。
+`infra/search/documents/manifest.json`には、現行データversion、件数、document hashを記録している。現行値はCatalog 11件、Code master 10件、source version `2026-09-04.1`である。
 
-## RBAC
+各`documents.json`はJSON arrayであり、Indexerの`parsingMode=jsonArray`によって配列要素を1 Search documentとして取り込む。Pythonを実行してdocumentを生成する必要はない。
+
+## 環境固有値
+
+Data source JSONの`credentials.connectionString`はsecretではなく、現在のStorage Account resource IDを次の形式で保持している。
+
+```text
+ResourceId=/subscriptions/.../resourceGroups/.../providers/Microsoft.Storage/storageAccounts/...;
+```
+
+別環境へ投入する前に、このresource IDだけを別環境のStorage Accountへ置換する。Search key、Storage key、SAS、接続文字列のsecretをJSONへ追加しない。
+
+AzureのGET responseに含まれる`@odata.etag`、Indexer実行履歴、status、`null`の既定値はcreate/update用payloadではないため、RepositoryのJSONには含めていない。
+
+## 前提RBAC
 
 | Identity | Scope | Role |
 | --- | --- | --- |
-| schema管理者 | Search service | Search Service Contributor |
-| document投入者 | 2 index | Search Index Data Contributor |
-| Search service system MI | 各Blob container | Storage Blob Data Reader |
-| JSON upload caller | 各Blob container | Storage Blob Data Contributor |
-| Foundry project MI | 各index | Search Index Data Reader +必要最小read-only metadata role |
+| JSONを投入する操作者 | Search service | Search Service Contributor |
+| Search service system MI | 2つのBlob container | Storage Blob Data Reader |
+| Blob upload操作者 | 2つのBlob container | Storage Blob Data Contributor |
+| Foundry/Toolbox runtime identity | 対象index | Search Index Data Readerと必要最小のread-only metadata role |
 
-共有key、Search admin key、Storage account keyを使わない。query identityへdocument更新権限を付けない。
+query identityへdocument更新権限を付けない。
 
-## 1. JSON documentを生成
+## 再投入の順序
 
-```bash
-PYTHONPATH=src:scripts .venv/bin/python scripts/prepare_search_documents.py \
-  --output-dir .artifacts/search
-```
+### 1. Blob containerとdocument
 
-生成物の`manifest.json`で次を確認する。
+既存Storage Accountに次のprivate containerを作成する。
 
-- source versionが3つのRepository JSONで一致
-- Catalog 11件、Code Master 10件（現行data version）
-- document hash
-- `synthetic=true`
+- `procurement-catalog`
+- `procurement-code-master`
 
-## 2. StorageとSearch identity
-
-Storageがまだない場合だけwhat-if後に作成する。`infra/search-blob.bicep`はStorageV2/Standard_LRS/Hot、public blob/shared key無効、TLS 1.2、soft delete 7日、2 private container、container-scope RBACを定義する。
+それぞれへ対応する静的JSONを`documents.json`というBlob名でuploadする。Azure CLIを使用する場合の例:
 
 ```bash
-PYTHONPATH=src:scripts .venv/bin/python scripts/deploy_blob_indexers.py plan
-# what-ifがCreate/NoChange/Ignoreだけであることを人が確認
-PYTHONPATH=src:scripts .venv/bin/python scripts/deploy_blob_indexers.py apply
+az storage blob upload \
+  --auth-mode login \
+  --account-name '<storage-account>' \
+  --container-name 'procurement-catalog' \
+  --name 'documents.json' \
+  --file 'infra/search/documents/procurement-catalog/documents.json' \
+  --overwrite
+
+az storage blob upload \
+  --auth-mode login \
+  --account-name '<storage-account>' \
+  --container-name 'procurement-code-master' \
+  --name 'documents.json' \
+  --file 'infra/search/documents/procurement-code-master/documents.json' \
+  --overwrite
 ```
 
-既存Storageを使う場合は`plan/apply`を実行せず、同じ2 containerとRBACを準備して次へ進む。
+### 2. Index
 
-## 3. Index schemaだけを作成
-
-schema正本:
-
-- `infra/search/indexes/procurement-catalog-v1.json`
-- `infra/search/indexes/procurement-code-master-v1.json`
+Azure PortalのSearch serviceで各Index JSONを指定して作成するか、REST APIのrequest bodyとしてそのまま使用する。
 
 ```bash
-PYTHONPATH=src:scripts .venv/bin/python scripts/deploy_search.py permissions
-PYTHONPATH=src:scripts .venv/bin/python scripts/deploy_search.py schemas
+az rest --method put --resource https://search.azure.com \
+  --url 'https://<search-service>.search.windows.net/indexes/procurement-catalog-v1?api-version=2026-08-01-preview' \
+  --body @infra/search/indexes/procurement-catalog-v1.json
+
+az rest --method put --resource https://search.azure.com \
+  --url 'https://<search-service>.search.windows.net/indexes/procurement-code-master-v1?api-version=2026-08-01-preview' \
+  --body @infra/search/indexes/procurement-code-master-v1.json
 ```
 
-`schemas`はindexがなければ`If-None-Match: *`で作り、存在時はfield名/typeをread-backする。異なるschemaを置換しない。Blob経路を使う場合、`deploy_search.py push`は実行しない。
+既存の同名Indexとfield/typeが異なる場合は上書きしない。新しいversion名のIndexを作成する。
 
-## 4. Blob/Data source/Indexerを作成して投入
+### 3. Data source
+
+Data source JSON内のStorage resource IDを別環境の値へ置換してから投入する。
 
 ```bash
-PYTHONPATH=src:scripts .venv/bin/python scripts/deploy_blob_indexers.py ingest
+az rest --method put --resource https://search.azure.com \
+  --url 'https://<search-service>.search.windows.net/datasources/procurement-catalog-blob-source?api-version=2026-08-01-preview' \
+  --body @infra/search/datasources/procurement-catalog-blob-source.json
+
+az rest --method put --resource https://search.azure.com \
+  --url 'https://<search-service>.search.windows.net/datasources/procurement-code-master-blob-source?api-version=2026-08-01-preview' \
+  --body @infra/search/datasources/procurement-code-master-blob-source.json
 ```
 
-scriptは次を行う。
+### 4. Indexer
 
-1. Repository JSONからdocumentを再生成
-2. Blobへuploadしてread-back byte一致を確認
-3. Data sourceを`ResourceId=<storage-resource-id>;`のManaged Identity接続で作成
-4. `jsonArray`、失敗許容0、scheduleなしのIndexerを作成
-5. 既存定義はETag/allowlist内容を照合し、差異があれば上書きせず停止
-6. 新規Indexerは自動実行、既存Indexerは明示run
-
-## 5. Verify
+最後にIndexer JSONを投入する。新規Indexerは通常作成時に実行される。必要ならPortalのRun、または`POST /indexers/<name>/run`を1回実行する。
 
 ```bash
-PYTHONPATH=src:scripts .venv/bin/python scripts/deploy_blob_indexers.py verify
+az rest --method put --resource https://search.azure.com \
+  --url 'https://<search-service>.search.windows.net/indexers/procurement-catalog-blob-indexer?api-version=2026-08-01-preview' \
+  --body @infra/search/indexers/procurement-catalog-blob-indexer.json
+
+az rest --method put --resource https://search.azure.com \
+  --url 'https://<search-service>.search.windows.net/indexers/procurement-code-master-blob-indexer?api-version=2026-08-01-preview' \
+  --body @infra/search/indexers/procurement-code-master-blob-indexer.json
 ```
 
-PASS条件:
+## 完了確認
 
-- 両Indexerのstatusが`success`
-- items failed/error/warningが0
-- full ingestion時刻が今回の投入以後
-- document countがRepository manifestと一致
-- 全document projectionがRepository生成値と一致
+- Catalog Indexer: `success`、processed 11、failed 0、warning 0
+- Code master Indexer: `success`、processed 10、failed 0、warning 0
+- Index document countがmanifestと一致
+- Catalog検索結果に商品コード、価格、仕様、source versionが含まれる
+- Code master検索結果に勘定科目コード、部署コード、source versionが含まれる
+- Toolboxの`tools/call`が対応するIndexだけを参照する
 
-その後、両ToolboxのMCP `tools/call`でCatalog仕様/価格/source versionと、Code Masterのaccount/department code/source versionを確認する。
-
-## 更新と削除の注意
-
-- JSONの要素削除は既存Search documentを自動削除しない。削除同期を要件にする場合は明示的なdelete actionまたはindex rebuild設計が必要。
-- field削除/型変更はin-placeで行わず、新version indexへ移行する。
-- Indexer/Data source/Index/Storageの削除はこの手順に含めない。
-- Serverless Developerはpreview/SLAなしでscale-to-zeroする。Indexer自体は対応するが、private networking for indexers等のpreview制約がある。最新の[Search tier資料](https://learn.microsoft.com/en-us/azure/search/search-sku-tier)を配備直前に確認する。
+JSONの要素削除は既存Search documentを自動削除しない。削除同期が必要な場合は明示的なdelete actionまたは新version Indexへのrebuildを行う。この手順は既存資産の削除を含まない。
