@@ -1,24 +1,24 @@
 # ソース索引と調査時点のファイル照合
 
-2026-09-06の作業ツリーから生成。移植先サンプルの索引ではない。
+2026-09-07の作業ツリーから生成。移植先サンプルの索引ではない。
 
 本体: [docs/observability-integration/README.md](/home/hnakajima/work/foundry-procurement-agent/docs/observability-integration/README.md:1) / コード例: [docs/observability-integration/integration-examples.md](/home/hnakajima/work/foundry-procurement-agent/docs/observability-integration/integration-examples.md:1)
 
-**行番号はこのsnapshot時点。ファイルを編集した後は関数名で再検索する。** 未追跡ファイルはHEADのGitHubリンクでは参照できないため、本資料はローカル絶対パスを使用する。
+**行番号はこのsnapshot時点。ファイルを編集した後は関数名で再検索する。** リポジトリのソースは最新mainと照合し、インストール済みSDKは別scopeで記録する。本資料はローカル絶対パスを使用する。
 
 ## 1. 移植に使う関数・クラス
 
 | コンポーネント／役割 | ファイル・開始行 | 関数／クラス | 対象行 |
 | --- | --- | --- | --- |
-| Hosted | [src/procurement_agent/observability.py](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/observability.py:23) | `current_request_attributes` | 23–28 |
-| Hosted | [src/procurement_agent/observability.py](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/observability.py:53) | `sanitize_attributes` | 53–60 |
-| Hosted | [src/procurement_agent/observability.py](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/observability.py:63) | `TelemetryRecorder` | 63–114 |
-| Hosted | [src/procurement_agent/hosted_app.py](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted_app.py:18) | `_RequestCorrelationMiddleware` | 18–53 |
-| Hosted | [src/procurement_agent/hosted_app.py](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted_app.py:64) | `main` | 64–85 |
-| Hosted | [src/procurement_agent/hosted.py](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted.py:115) | `ControllerContextProvider` | 115–170 |
-| Hosted | [src/procurement_agent/hosted.py](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted.py:173) | `build_hosted_bundle` | 173–253 |
-| Hosted | [src/procurement_agent/hosted.py](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted.py:403) | `_invoke_remote_tool` | 403–424 |
-| Hosted | [src/procurement_agent/hosted.py](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted.py:427) | `_execute_hosted_components` | 427–576 |
+| Hosted | [src/procurement_agent/observability.py](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/observability.py:26) | `current_request_attributes` | 26–31 |
+| Hosted | [src/procurement_agent/observability.py](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/observability.py:56) | `sanitize_attributes` | 56–63 |
+| Hosted | [src/procurement_agent/observability.py](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/observability.py:66) | `TelemetryRecorder` | 66–117 |
+| Hosted | [src/procurement_agent/hosted_app.py](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted_app.py:25) | `_RequestCorrelationMiddleware` | 25–73 |
+| Hosted | [src/procurement_agent/hosted_app.py](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted_app.py:84) | `main` | 84–105 |
+| Hosted | [src/procurement_agent/hosted.py](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted.py:116) | `ControllerContextProvider` | 116–191 |
+| Hosted | [src/procurement_agent/hosted.py](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted.py:194) | `build_hosted_bundle` | 194–274 |
+| Hosted | [src/procurement_agent/hosted.py](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted.py:437) | `_invoke_remote_tool` | 437–458 |
+| Hosted | [src/procurement_agent/hosted.py](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted.py:461) | `_execute_hosted_components` | 461–610 |
 | Hosted | [src/procurement_agent/controller.py](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/controller.py:191) | `operation_status_attributes` | 191–207 |
 | Hosted | [src/procurement_agent/controller.py](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/controller.py:210) | `correlation_attributes` | 210–221 |
 | Hosted | [src/procurement_agent/controller.py](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/controller.py:224) | `apply_operation_status` | 224–233 |
@@ -42,19 +42,32 @@
 | Functions参考ログ／入口 | [src/functions-mcp-selfhosted/mcp_server.py](/home/hnakajima/work/foundry-procurement-agent/src/functions-mcp-selfhosted/mcp_server.py:357) | `build_whoami_response` | 357–456 |
 | Functions参考ログ／入口 | [src/functions-mcp-selfhosted/mcp_server.py](/home/hnakajima/work/foundry-procurement-agent/src/functions-mcp-selfhosted/mcp_server.py:459) | `create_mcp_server` | 459–487 |
 | Functions参考ログ／入口 | [src/functions-mcp-selfhosted/mcp_server.py](/home/hnakajima/work/foundry-procurement-agent/src/functions-mcp-selfhosted/mcp_server.py:490) | `app` | 490–494 |
+| Hosted / 呼出し制御 | [src/procurement_agent/hosted.py](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted.py:79) | `FoundryRuntimeSettings` | 79–101 |
+| Hosted / 呼出し制御 | [src/procurement_agent/hosted.py](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted.py:292) | `_with_response_text` | 292–359 |
+| Hosted / 呼出し制御 | [src/procurement_agent/controller.py](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/controller.py:313) | `_saved_confirmation_context` | 313–346 |
+| Hosted / 呼出し制御 | [src/procurement_agent/controller.py](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/controller.py:349) | `invoke_validated` | 349–374 |
+| Hosted / 呼出し制御 | [src/procurement_agent/plan.py](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/plan.py:45) | `StructuredPlanBuilder` | 45–81 |
+| Hosted / 呼出し制御 | [src/procurement_agent/plan.py](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/plan.py:84) | `PlanExecutor` | 84–195 |
+| Hosted / 呼出し制御 | [src/procurement_agent/middleware.py](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/middleware.py:34) | `ToolGovernanceFunctionMiddleware` | 34–50 |
+| Hosted / Synthetic検証 | [src/procurement_agent/azure_validation.py](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/azure_validation.py:42) | `validation_request` | 42–67 |
+| Hosted / Synthetic検証 | [src/procurement_agent/azure_validation.py](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/azure_validation.py:70) | `run_azure_validation` | 70–219 |
+| App Service | [src/webapp-foundry-oauth/backend/procurement.py](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement.py:78) | `_sign` | 78–80 |
+| App Service | [src/webapp-foundry-oauth/backend/procurement.py](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement.py:258) | `_validate_post` | 258–262 |
+| App Service | [src/webapp-foundry-oauth/backend/procurement.py](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement.py:266) | `new_conversation` | 266–271 |
+| App Service | [src/webapp-foundry-oauth/backend/procurement.py](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement.py:274) | `_stream_progress` | 274–283 |
 
 ## 2. Hostedの明示的なSpan／event／属性記録
 
-ASTから抽出した直接呼出し。標準SDK内の自動計装は含めない。通常loggerの文字列はOTelのSpan名ではない。
+ASTで確認した直接呼出し。標準SDK内の自動計装は含めない。`azure_validation.py`はSynthetic gateを満たした場合のみ実行される。
 
-| 場所 | 所属関数 | 呼出し | Span名／イベント名／属性／ログテンプレート |
+| 場所 | 所属関数 | 呼出し | Span名／イベント名／属性 |
 | --- | --- | --- | --- |
-| [hosted.py:151](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted.py:151) | `ControllerContextProvider.before_run` | `trace.get_current_span().set_attributes` |  |
-| [hosted.py:390](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted.py:390) | `_conversation_result` | `telemetry.span` | response.generate |
-| [hosted.py:391](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted.py:391) | `_conversation_result` | `telemetry.event` | response.status |
-| [hosted.py:560](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted.py:560) | `_execute_hosted_components` | `span.set_attribute` | error.type |
-| [hosted.py:564](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted.py:564) | `_execute_hosted_components` | `span.set_attribute` | error.http_status |
-| [controller.py:233](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/controller.py:233) | `apply_operation_status` | `span.set_attribute` |  |
+| [hosted.py:152](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted.py:152) | `ControllerContextProvider.before_run` | `trace.get_current_span().set_attributes` | 動的: attributes |
+| [hosted.py:424](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted.py:424) | `_conversation_result` | `telemetry.span` | response.generate |
+| [hosted.py:425](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted.py:425) | `_conversation_result` | `telemetry.event` | response.status |
+| [hosted.py:594](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted.py:594) | `_execute_hosted_components` | `span.set_attribute` | error.type |
+| [hosted.py:598](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted.py:598) | `_execute_hosted_components` | `span.set_attribute` | error.http_status |
+| [controller.py:233](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/controller.py:233) | `apply_operation_status` | `span.set_attribute` | 動的: key |
 | [controller.py:405](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/controller.py:405) | `ProcurementController._finish` | `self.telemetry.span` | response.generate |
 | [controller.py:406](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/controller.py:406) | `ProcurementController._finish` | `self.telemetry.event` | response.status |
 | [controller.py:523](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/controller.py:523) | `ProcurementController._run_catalog_step` | `self.telemetry.span` | plan.step.execute |
@@ -78,6 +91,10 @@ ASTから抽出した直接呼出し。標準SDK内の自動計装は含めな�
 | [controller.py:702](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/controller.py:702) | `ProcurementController._merge_validated` | `self.telemetry.event` | step.completed |
 | [controller.py:780](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/controller.py:780) | `ProcurementController.execute` | `self.telemetry.span` | plan.create |
 | [controller.py:783](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/controller.py:783) | `ProcurementController.execute` | `self.telemetry.event` | plan.created |
+| [azure_validation.py:187](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/azure_validation.py:187) | `run_azure_validation` | `telemetry.span` | semantic.evaluate |
+| [azure_validation.py:188](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/azure_validation.py:188) | `run_azure_validation` | `telemetry.event` | evaluation.completed |
+| [azure_validation.py:196](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/azure_validation.py:196) | `run_azure_validation` | `telemetry.event` | content.boundary.property |
+| [azure_validation.py:201](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/azure_validation.py:201) | `run_azure_validation` | `telemetry.event` | 動的: request.memo |
 
 ## 3. 購買WebのSpan属性／status記録
 
@@ -175,24 +192,44 @@ ASTから抽出した直接呼出し。標準SDK内の自動計装は含めな�
 | [.venv/lib/python3.13/site-packages/azure/ai/agentserver/core/_tracing.py](/home/hnakajima/work/foundry-procurement-agent/.venv/lib/python3.13/site-packages/azure/ai/agentserver/core/_tracing.py:181) | _configure_tracing／_setup_distro_export、Microsoft distroへの接続 |
 | [.venv/lib/python3.13/site-packages/agent_framework/observability.py](/home/hnakajima/work/foundry-procurement-agent/.venv/lib/python3.13/site-packages/agent_framework/observability.py:1064) | このバージョンの計装既定値 |
 | [.venv/lib/python3.13/site-packages/azure/monitor/opentelemetry/exporter/export/trace/_exporter.py](/home/hnakajima/work/foundry-procurement-agent/.venv/lib/python3.13/site-packages/azure/monitor/opentelemetry/exporter/export/trace/_exporter.py:535) | 通常Span eventはMessageData、exception eventはExceptionDataへ変換 |
+| [.venv/lib/python3.13/site-packages/agent_framework/_agents.py](/home/hnakajima/work/foundry-procurement-agent/.venv/lib/python3.13/site-packages/agent_framework/_agents.py:608) | `as_tool()`のtask引数とpropagate_session=Falseの実装 |
 
 SDKファイルは調査環境の`.venv`の証拠であり、移植先へコピーする対象ではない。別バージョンでは配置・動作が変わり得る。
 
-## 7. Snapshotの同一性
+## 7. 子Agentの実呼出しと購買UIの対応
 
-機械可読の全ハッシュ: [docs/observability-integration/source-snapshot.json](/home/hnakajima/work/foundry-procurement-agent/docs/observability-integration/source-snapshot.json:1)
+呼出し順序は[HostedAgent補足](/home/hnakajima/work/foundry-procurement-agent/docs/observability-integration/hosted-agent-as-tool.md)、Web変更全体は[App Service補足](/home/hnakajima/work/foundry-procurement-agent/docs/observability-integration/appservice-procurement-changes.md)を参照。
 
-| ファイル | 行数 | 管理状態 | SHA-256 |
-| --- | --- | --- | --- |
-| [README.md](/home/hnakajima/work/foundry-procurement-agent/README.md:1) | 55 | tracked (作業ツリー) | `b2d425f59aaef840d25a695f42267012974088c30e3ccbeecf29a45a5876ec51` |
+| ソース | 所属／入口 | 処理 |
+| --- | --- | --- |
+| [src/procurement_agent/hosted.py](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted.py:217) | `build_hosted_bundle` | catalog_proxy.as_tool |
+| [src/procurement_agent/hosted.py](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted.py:222) | `build_hosted_bundle` | code_proxy.as_tool |
+| [src/procurement_agent/hosted.py](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted.py:443) | `_invoke_remote_tool.invoke` | tool.invoke |
+| [src/procurement_agent/hosted.py](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted.py:447) | `_invoke_remote_tool` | ToolGovernanceFunctionMiddleware.process |
+| [src/procurement_agent/hosted.py](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted.py:501) | `_execute_hosted_components` | ProcurementControllerへのinvoker接続 |
+| [src/procurement_agent/controller.py](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/controller.py:353) | `invoke_validated` | await invoker(validated_input) |
+| [src/procurement_agent/controller.py](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/controller.py:537) | `_run_catalog_step` | invoke_validated(catalog_invoker) |
+| [src/procurement_agent/controller.py](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/controller.py:617) | `_run_code_step` | invoke_validated(code_invoker) |
+| [src/webapp-foundry-oauth/backend/static/procurement.js](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/static/procurement.js:26) | `show` | 公開応答・候補・statusの表示 |
+| [src/webapp-foundry-oauth/backend/static/procurement.js](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/static/procurement.js:67) | `streamChat` | NDJSON streamの受信 |
+| [src/webapp-foundry-oauth/backend/static/procurement.js](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/static/procurement.js:95) | `form submit handler` | message送信・入力制御 |
+| [src/webapp-foundry-oauth/backend/static/procurement.html](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/static/procurement.html:28) | `購買画面` | チャット・最新turnの詳細・入力欄 |
+
+## 8. Snapshotの同一性
+
+基準HEAD: `6cbdec83b2daefebb11350a1cc97781a6c55a260` / branch: `main`。全78ファイルのSHA-256・行数・scopeは [source-snapshot.json](/home/hnakajima/work/foundry-procurement-agent/docs/observability-integration/source-snapshot.json) にも収録する。ガイド自身はハッシュの循環を避けるため対象外。
+
+| ファイル | 行数 | 状態 | SHA-256 |
+| --- | ---: | --- | --- |
+| [README.md](/home/hnakajima/work/foundry-procurement-agent/README.md:1) | 57 | tracked (作業ツリー) | `1dc4a883229edecb73ea34c0078e5d035cadb8b441febb32edeb8b1ee6935b01` |
 | [requirements.txt](/home/hnakajima/work/foundry-procurement-agent/requirements.txt:1) | 14 | tracked (作業ツリー) | `af9f5bb73e98ef6e87ac73bc4d40439b711ad4208278c874801212ca97f6558d` |
 | [requirements-lock.txt](/home/hnakajima/work/foundry-procurement-agent/requirements-lock.txt:1) | 130 | tracked (作業ツリー) | `959820d4364604e4798e2479fdf94e41744fd7e45a04a8fbbfb9e46a72d10065` |
 | [pyproject.toml](/home/hnakajima/work/foundry-procurement-agent/pyproject.toml:1) | 39 | tracked (作業ツリー) | `7fe06cfdebf43afa77898cfc2b7138f1b226b7e4c1adc34dbbd428ee1d90494b` |
 | [main.py](/home/hnakajima/work/foundry-procurement-agent/main.py:1) | 7 | tracked (作業ツリー) | `a6248ab8ab406846e4b955307b542d60c15a3e738b52f0c72c381cf11d5d612c` |
 | [azure.yaml](/home/hnakajima/work/foundry-procurement-agent/azure.yaml:1) | 72 | tracked (作業ツリー) | `8f37e30e1768676396996e182f16c58422933203be57547999637f8ff9386e85` |
-| [src/procurement_agent/observability.py](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/observability.py:1) | 125 | tracked (作業ツリー) | `e88583c2fcef749791ea003d567acc33057e919cb25c599e1a59206ee1d4a101` |
-| [src/procurement_agent/hosted_app.py](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted_app.py:1) | 89 | tracked (作業ツリー) | `7a7c594b933e3c69a6f40b19a3384d0a4eae614f673159065a2e8cf9c257e838` |
-| [src/procurement_agent/hosted.py](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted.py:1) | 576 | tracked (作業ツリー) | `4e3f741c294143f8fe97a42a142f2ac3bd0c93b290009b03b9396266389b0e89` |
+| [src/procurement_agent/observability.py](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/observability.py:1) | 128 | tracked (作業ツリー) | `075ff90a7c5bba95dcb7a07958698a6ac77de5ae1b2ffeb49d479c27059cce68` |
+| [src/procurement_agent/hosted_app.py](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted_app.py:1) | 109 | tracked (作業ツリー) | `75ec4fea1d54047816f8e4ac2df8eaf5dca4aacf4fd45bfd963fdfba8a678872` |
+| [src/procurement_agent/hosted.py](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted.py:1) | 610 | tracked (作業ツリー) | `d7150fefd3cca8c49114cfaf99013468808a20dbc78f684bea27a44796780c73` |
 | [src/procurement_agent/controller.py](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/controller.py:1) | 1042 | tracked (作業ツリー) | `0079be5e85cabc0754c930b66c9bdb2e78ad2bc127274609c5ef9a2bcdc6c3ed` |
 | [src/procurement_agent/models.py](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/models.py:1) | 401 | tracked (作業ツリー) | `1336b60b5f36844ec01e709a473af7e4677ab7d0f4a1a1952f2a60e0d9056f2a` |
 | [src/procurement_agent/plan.py](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/plan.py:1) | 195 | tracked (作業ツリー) | `fc8b2227deb01e1f7c565cc4c62a95e7522ddfb9d3a83f6a8952adcb012647cb` |
@@ -224,16 +261,16 @@ SDKファイルは調査環境の`.venv`の証拠であり、移植先へコピ�
 | [infra/observability/instrumentation-manifest.json](/home/hnakajima/work/foundry-procurement-agent/infra/observability/instrumentation-manifest.json:1) | 10 | tracked (作業ツリー) | `ffa01bfe27c7c361135f0c7be9a91592b21441743e536175351553435510a413` |
 | [infra/observability/kql/core-status-correlation.kql](/home/hnakajima/work/foundry-procurement-agent/infra/observability/kql/core-status-correlation.kql:1) | 15 | tracked (作業ツリー) | `0c52b4191cd89dfe2cd15d3278f45f111f4bb2c6935723201d6a5855252cfa2b` |
 | [infra/observability/kql/export-exact-operation.kql](/home/hnakajima/work/foundry-procurement-agent/infra/observability/kql/export-exact-operation.kql:1) | 6 | tracked (作業ツリー) | `bb45b2cc73bd07a2c5cf396f362b5d19833901e78160688366bfc3d116a2669c` |
-| [scripts/package_hosted.py](/home/hnakajima/work/foundry-procurement-agent/scripts/package_hosted.py:1) | 31 | tracked (作業ツリー) | `03f6cbc94edad06dde093a79cec42921de6d78103ee1fe36b7a397162139412a` |
-| [scripts/deploy_foundry.py](/home/hnakajima/work/foundry-procurement-agent/scripts/deploy_foundry.py:1) | 191 | tracked (作業ツリー) | `63fcd155443635fb8700e3a71702a6213cad3eab9d593ad70192cb4b3354de02` |
-| [scripts/export_trace_evidence.py](/home/hnakajima/work/foundry-procurement-agent/scripts/export_trace_evidence.py:1) | 93 | tracked (作業ツリー) | `9b5a6407ea25c1d29c9897a3828b69886d4d4090a16df7f48b51c32c2ecc7474` |
+| [scripts/package_hosted.py](/home/hnakajima/work/foundry-procurement-agent/scripts/package_hosted.py:1) | 38 | tracked (作業ツリー) | `1e1c5f388dce0da6505033d4de234167d4b3615fa924fc0be86026064eef7cb8` |
+| [scripts/deploy_foundry.py](/home/hnakajima/work/foundry-procurement-agent/scripts/deploy_foundry.py:1) | 192 | tracked (作業ツリー) | `69cde838a4d562060c4607ba62cd0ef521a0c906fd291f4ec6e4fcfe4b3de752` |
+| [scripts/export_trace_evidence.py](/home/hnakajima/work/foundry-procurement-agent/scripts/export_trace_evidence.py:1) | 127 | tracked (作業ツリー) | `910cdc339558ff433fe29887acf2d7292f292c37e1014c2198b285a0041b16d9` |
 | [src/trace_pipeline/envelope.py](/home/hnakajima/work/foundry-procurement-agent/src/trace_pipeline/envelope.py:1) | 67 | tracked (作業ツリー) | `c2483ae167526292881558d273f0a3d2f3dea5b2d4084a4ac11fba133fd1ba94` |
 | [src/trace_pipeline/normalize.py](/home/hnakajima/work/foundry-procurement-agent/src/trace_pipeline/normalize.py:1) | 125 | tracked (作業ツリー) | `55f88f3d882665b691e007c4a6cc5a91d3ba30a9f548b4238b27ee0aa43645d4` |
-| [docs/report/validation-results-2026-09-06.md](/home/hnakajima/work/foundry-procurement-agent/docs/report/validation-results-2026-09-06.md:1) | 120 | tracked (作業ツリー) | `236215f013be7a9b899a4dce4930ce1521793ba0f99f6e266561f91078877fba` |
+| [docs/report/validation-results-2026-09-06.md](/home/hnakajima/work/foundry-procurement-agent/docs/report/validation-results-2026-09-06.md:1) | 160 | tracked (作業ツリー) | `77d8cc792420c0e34b2a7ef9e3cee6de3dfe273b1f64564c66147e05364bd33c` |
 | [docs/azure-observability-validation-2026-09-03.md](/home/hnakajima/work/foundry-procurement-agent/docs/azure-observability-validation-2026-09-03.md:1) | 219 | tracked (作業ツリー) | `c4153dabcf54ea357cf3664b5f0efd3424660bd52242c0a07ec83ae41ec770ed` |
 | [tests/unit/test_webui.py](/home/hnakajima/work/foundry-procurement-agent/tests/unit/test_webui.py:1) | 305 | tracked (作業ツリー) | `2b6ed22e6cb3c46f44ec8877285b11f7b1ba325f847c2e2bcacfc40c7899c582` |
-| [tests/unit/test_hosted_protocol_v2.py](/home/hnakajima/work/foundry-procurement-agent/tests/unit/test_hosted_protocol_v2.py:1) | 89 | tracked (作業ツリー) | `ee048b624a130096ce0c2db4ff9cd88ea0e71e9be205d38bd9b6a046463f9fb8` |
-| [tests/unit/test_hosted_factory_v2.py](/home/hnakajima/work/foundry-procurement-agent/tests/unit/test_hosted_factory_v2.py:1) | 207 | tracked (作業ツリー) | `7540ffee93de32b0a204eb654c9f97a8582fb52aa520fc8f8fe2a6510308ea6a` |
+| [tests/unit/test_hosted_protocol_v2.py](/home/hnakajima/work/foundry-procurement-agent/tests/unit/test_hosted_protocol_v2.py:1) | 129 | tracked (作業ツリー) | `91089d8f9db9cfe2854f086470e6f1fd99c3fcc6db3a3806bedf865f7ccb66c9` |
+| [tests/unit/test_hosted_factory_v2.py](/home/hnakajima/work/foundry-procurement-agent/tests/unit/test_hosted_factory_v2.py:1) | 242 | tracked (作業ツリー) | `a381bd79c0dc67620fead426daebfff0594613251a0bcd20e409b4f623315b8e` |
 | [tests/trace/test_envelope_v3.py](/home/hnakajima/work/foundry-procurement-agent/tests/trace/test_envelope_v3.py:1) | 154 | tracked (作業ツリー) | `9b06f4591a9a805aa4e6d779a79fe82be2cd6208732e11f63a959442516c2acc` |
 | [.venv/lib/python3.13/site-packages/agent_framework_foundry_hosting/_responses.py](/home/hnakajima/work/foundry-procurement-agent/.venv/lib/python3.13/site-packages/agent_framework_foundry_hosting/_responses.py:1) | 2076 | local SDK | `e944316a94eafd7c31fe90c60667d8d01b24615e2825b04dbe7f4f5e9b0b43f7` |
 | [.venv/lib/python3.13/site-packages/azure/ai/agentserver/core/_base.py](/home/hnakajima/work/foundry-procurement-agent/.venv/lib/python3.13/site-packages/azure/ai/agentserver/core/_base.py:1) | 665 | local SDK | `8a1686fc867385a93ababdafa8b111e1bb7945e529f8cfd83b4de399807e31b5` |
@@ -246,3 +283,19 @@ SDKファイルは調査環境の`.venv`の証拠であり、移植先へコピ�
 | [.venv/lib/python3.13/site-packages/mcp/shared/context.py](/home/hnakajima/work/foundry-procurement-agent/.venv/lib/python3.13/site-packages/mcp/shared/context.py:1) | 32 | local SDK | `40c447c1708826cbdfe14def720a9201769a50430a85f8fff5794223e9149271` |
 | [.venv/lib/python3.13/site-packages/mcp/types.py](/home/hnakajima/work/foundry-procurement-agent/.venv/lib/python3.13/site-packages/mcp/types.py:1) | 1999 | local SDK | `6824109cd1eabaf43c5dab829a83015b1b88ec9ae149765e6814afaf23f9bde5` |
 | [.venv/lib/python3.13/site-packages/mcp/server/fastmcp/server.py](/home/hnakajima/work/foundry-procurement-agent/.venv/lib/python3.13/site-packages/mcp/server/fastmcp/server.py:1) | 1366 | local SDK | `f4360eec1cca411afa55762a223d103236e856cc8b52944ef64ff337c8e970c2` |
+| [src/procurement_agent/azure_validation.py](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/azure_validation.py:1) | 219 | tracked (作業ツリー) | `1c362f6af164e12c1aff3896e5f316147c5c0cffc09529443616531db5b67a87` |
+| [src/webapp-foundry-oauth/backend/static/procurement.js](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/static/procurement.js:1) | 118 | tracked (作業ツリー) | `5ef2b55192db870f405042dc245103b5d5905be01af311d89bdc7db948234b4e` |
+| [.venv/lib/python3.13/site-packages/agent_framework/_agents.py](/home/hnakajima/work/foundry-procurement-agent/.venv/lib/python3.13/site-packages/agent_framework/_agents.py:1) | 1948 | local SDK | `362f9cc98fda41cefc7a900fa7e5900b61f21783f69349a482f8ef26f6a69bec` |
+| [src/trace_pipeline/stage_b.py](/home/hnakajima/work/foundry-procurement-agent/src/trace_pipeline/stage_b.py:1) | 375 | tracked (作業ツリー) | `a4c57a5a2d303d0a7f253e77073fab48f8e759cc0e37dfd8b166c8e34bd2f132` |
+| [tests/unit/test_plan_v2.py](/home/hnakajima/work/foundry-procurement-agent/tests/unit/test_plan_v2.py:1) | 93 | tracked (作業ツリー) | `10232f8de0687980f503e2482f8f3741a52f1a36c67141e91f587d118c9e015d` |
+| [tests/integration/test_conversation_intake.py](/home/hnakajima/work/foundry-procurement-agent/tests/integration/test_conversation_intake.py:1) | 598 | tracked (作業ツリー) | `1f7d7618d69182940805de82109a547a7213281bbabbae9f212a416f14f73c5a` |
+| [tests/integration/test_azure_validation_v2.py](/home/hnakajima/work/foundry-procurement-agent/tests/integration/test_azure_validation_v2.py:1) | 144 | tracked (作業ツリー) | `b675affd46b4a101ee7bf0530a87b52c0a6bfa00b256c743b5b3f0562591cacf` |
+| [src/webapp-foundry-oauth/backend/static/index.html](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/static/index.html:1) | 72 | tracked (作業ツリー) | `17081929fede020940fa07c45b74fa25923510df29e10cdd3800cba359405bcb` |
+| [src/webapp-foundry-oauth/backend/static/app.js](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/static/app.js:1) | 862 | tracked (作業ツリー) | `71704b506cf5482ea6c6a93286d4562e8598dd2c8511963d5899d6a6ce095491` |
+| [src/webapp-foundry-oauth/backend/static/procurement.html](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/static/procurement.html:1) | 55 | tracked (作業ツリー) | `cde6e29f34db809340556fa23694e2016702299b25850f8cae8562f90cd4048e` |
+| [src/trace_pipeline/__init__.py](/home/hnakajima/work/foundry-procurement-agent/src/trace_pipeline/__init__.py:1) | 6 | tracked (作業ツリー) | `39e3d650bd2900c6a8acfae99f34accbbb34d92a17f14b692401e5cc9d49ac50` |
+| [scripts/run_s5_boundary_validation.py](/home/hnakajima/work/foundry-procurement-agent/scripts/run_s5_boundary_validation.py:1) | 196 | tracked (作業ツリー) | `a44e37e91fe855796e3bd836dfd340b43b946909da3688cd7c140a95fc3b5d64` |
+| [scripts/deploy_foundation.py](/home/hnakajima/work/foundry-procurement-agent/scripts/deploy_foundation.py:1) | 153 | tracked (作業ツリー) | `64a6226972c854e28d85a20aea2f6f7dbb3e7260f78a7d49f107dda1e646b3a8` |
+| [src/trace_pipeline/detectors.py](/home/hnakajima/work/foundry-procurement-agent/src/trace_pipeline/detectors.py:1) | 137 | tracked (作業ツリー) | `6cb4ba196b914bb96377450250a6e76384c70855038e8756227457fe0a3b6747` |
+| [src/webapp-foundry-oauth/backend/static/styles.css](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/static/styles.css:1) | 482 | tracked (作業ツリー) | `a87d33fb7b1c9cb7c99f4f08646a15da0db48d37e127387d889023ab9a5cdb5c` |
+| [tests/unit/test_hosted_package_v2.py](/home/hnakajima/work/foundry-procurement-agent/tests/unit/test_hosted_package_v2.py:1) | 24 | tracked (作業ツリー) | `397fbfd30ec9e2ee85e71e3097ef00a0da40d9f018b4c8bd6fa71fdc2cdf6732` |

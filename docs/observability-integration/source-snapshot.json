@@ -1,13 +1,13 @@
 {
-  "snapshot_date": "2026-09-06",
-  "basis": "working tree including uncommitted and untracked files; SDK is local .venv only",
-  "head": "483d79c80a37c1dd6762c5fd97cbaf6b50963240",
+  "snapshot_date": "2026-09-07",
+  "basis": "repository source verified against current main; SDK evidence from local .venv only",
+  "head": "6cbdec83b2daefebb11350a1cc97781a6c55a260",
   "branch": "main",
   "files": [
     {
       "path": "README.md",
-      "sha256": "b2d425f59aaef840d25a695f42267012974088c30e3ccbeecf29a45a5876ec51",
-      "lines": 55,
+      "sha256": "1dc4a883229edecb73ea34c0078e5d035cadb8b441febb32edeb8b1ee6935b01",
+      "lines": 57,
       "tracked": true,
       "scope": "repository_working_tree"
     },
@@ -48,22 +48,22 @@
     },
     {
       "path": "src/procurement_agent/observability.py",
-      "sha256": "e88583c2fcef749791ea003d567acc33057e919cb25c599e1a59206ee1d4a101",
-      "lines": 125,
+      "sha256": "075ff90a7c5bba95dcb7a07958698a6ac77de5ae1b2ffeb49d479c27059cce68",
+      "lines": 128,
       "tracked": true,
       "scope": "repository_working_tree"
     },
     {
       "path": "src/procurement_agent/hosted_app.py",
-      "sha256": "7a7c594b933e3c69a6f40b19a3384d0a4eae614f673159065a2e8cf9c257e838",
-      "lines": 89,
+      "sha256": "75ec4fea1d54047816f8e4ac2df8eaf5dca4aacf4fd45bfd963fdfba8a678872",
+      "lines": 109,
       "tracked": true,
       "scope": "repository_working_tree"
     },
     {
       "path": "src/procurement_agent/hosted.py",
-      "sha256": "4e3f741c294143f8fe97a42a142f2ac3bd0c93b290009b03b9396266389b0e89",
-      "lines": 576,
+      "sha256": "d7150fefd3cca8c49114cfaf99013468808a20dbc78f684bea27a44796780c73",
+      "lines": 610,
       "tracked": true,
       "scope": "repository_working_tree"
     },
@@ -286,22 +286,22 @@
     },
     {
       "path": "scripts/package_hosted.py",
-      "sha256": "03f6cbc94edad06dde093a79cec42921de6d78103ee1fe36b7a397162139412a",
-      "lines": 31,
+      "sha256": "1e1c5f388dce0da6505033d4de234167d4b3615fa924fc0be86026064eef7cb8",
+      "lines": 38,
       "tracked": true,
       "scope": "repository_working_tree"
     },
     {
       "path": "scripts/deploy_foundry.py",
-      "sha256": "63fcd155443635fb8700e3a71702a6213cad3eab9d593ad70192cb4b3354de02",
-      "lines": 191,
+      "sha256": "69cde838a4d562060c4607ba62cd0ef521a0c906fd291f4ec6e4fcfe4b3de752",
+      "lines": 192,
       "tracked": true,
       "scope": "repository_working_tree"
     },
     {
       "path": "scripts/export_trace_evidence.py",
-      "sha256": "9b5a6407ea25c1d29c9897a3828b69886d4d4090a16df7f48b51c32c2ecc7474",
-      "lines": 93,
+      "sha256": "910cdc339558ff433fe29887acf2d7292f292c37e1014c2198b285a0041b16d9",
+      "lines": 127,
       "tracked": true,
       "scope": "repository_working_tree"
     },
@@ -321,8 +321,8 @@
     },
     {
       "path": "docs/report/validation-results-2026-09-06.md",
-      "sha256": "236215f013be7a9b899a4dce4930ce1521793ba0f99f6e266561f91078877fba",
-      "lines": 120,
+      "sha256": "77d8cc792420c0e34b2a7ef9e3cee6de3dfe273b1f64564c66147e05364bd33c",
+      "lines": 160,
       "tracked": true,
       "scope": "repository_working_tree"
     },
@@ -342,15 +342,15 @@
     },
     {
       "path": "tests/unit/test_hosted_protocol_v2.py",
-      "sha256": "ee048b624a130096ce0c2db4ff9cd88ea0e71e9be205d38bd9b6a046463f9fb8",
-      "lines": 89,
+      "sha256": "91089d8f9db9cfe2854f086470e6f1fd99c3fcc6db3a3806bedf865f7ccb66c9",
+      "lines": 129,
       "tracked": true,
       "scope": "repository_working_tree"
     },
     {
       "path": "tests/unit/test_hosted_factory_v2.py",
-      "sha256": "7540ffee93de32b0a204eb654c9f97a8582fb52aa520fc8f8fe2a6510308ea6a",
-      "lines": 207,
+      "sha256": "a381bd79c0dc67620fead426daebfff0594613251a0bcd20e409b4f623315b8e",
+      "lines": 242,
       "tracked": true,
       "scope": "repository_working_tree"
     },
@@ -437,6 +437,118 @@
       "lines": 1366,
       "tracked": false,
       "scope": "installed_sdk"
+    },
+    {
+      "path": "src/procurement_agent/azure_validation.py",
+      "sha256": "1c362f6af164e12c1aff3896e5f316147c5c0cffc09529443616531db5b67a87",
+      "lines": 219,
+      "tracked": true,
+      "scope": "repository_working_tree"
+    },
+    {
+      "path": "src/webapp-foundry-oauth/backend/static/procurement.js",
+      "sha256": "5ef2b55192db870f405042dc245103b5d5905be01af311d89bdc7db948234b4e",
+      "lines": 118,
+      "tracked": true,
+      "scope": "repository_working_tree"
+    },
+    {
+      "path": ".venv/lib/python3.13/site-packages/agent_framework/_agents.py",
+      "sha256": "362f9cc98fda41cefc7a900fa7e5900b61f21783f69349a482f8ef26f6a69bec",
+      "lines": 1948,
+      "tracked": false,
+      "scope": "installed_sdk"
+    },
+    {
+      "path": "src/trace_pipeline/stage_b.py",
+      "sha256": "a4c57a5a2d303d0a7f253e77073fab48f8e759cc0e37dfd8b166c8e34bd2f132",
+      "lines": 375,
+      "tracked": true,
+      "scope": "repository_working_tree"
+    },
+    {
+      "path": "tests/unit/test_plan_v2.py",
+      "sha256": "10232f8de0687980f503e2482f8f3741a52f1a36c67141e91f587d118c9e015d",
+      "lines": 93,
+      "tracked": true,
+      "scope": "repository_working_tree"
+    },
+    {
+      "path": "tests/integration/test_conversation_intake.py",
+      "sha256": "1f7d7618d69182940805de82109a547a7213281bbabbae9f212a416f14f73c5a",
+      "lines": 598,
+      "tracked": true,
+      "scope": "repository_working_tree"
+    },
+    {
+      "path": "tests/integration/test_azure_validation_v2.py",
+      "sha256": "b675affd46b4a101ee7bf0530a87b52c0a6bfa00b256c743b5b3f0562591cacf",
+      "lines": 144,
+      "tracked": true,
+      "scope": "repository_working_tree"
+    },
+    {
+      "path": "src/webapp-foundry-oauth/backend/static/index.html",
+      "sha256": "17081929fede020940fa07c45b74fa25923510df29e10cdd3800cba359405bcb",
+      "lines": 72,
+      "tracked": true,
+      "scope": "repository_working_tree"
+    },
+    {
+      "path": "src/webapp-foundry-oauth/backend/static/app.js",
+      "sha256": "71704b506cf5482ea6c6a93286d4562e8598dd2c8511963d5899d6a6ce095491",
+      "lines": 862,
+      "tracked": true,
+      "scope": "repository_working_tree"
+    },
+    {
+      "path": "src/webapp-foundry-oauth/backend/static/procurement.html",
+      "sha256": "cde6e29f34db809340556fa23694e2016702299b25850f8cae8562f90cd4048e",
+      "lines": 55,
+      "tracked": true,
+      "scope": "repository_working_tree"
+    },
+    {
+      "path": "src/trace_pipeline/__init__.py",
+      "sha256": "39e3d650bd2900c6a8acfae99f34accbbb34d92a17f14b692401e5cc9d49ac50",
+      "lines": 6,
+      "tracked": true,
+      "scope": "repository_working_tree"
+    },
+    {
+      "path": "scripts/run_s5_boundary_validation.py",
+      "sha256": "a44e37e91fe855796e3bd836dfd340b43b946909da3688cd7c140a95fc3b5d64",
+      "lines": 196,
+      "tracked": true,
+      "scope": "repository_working_tree"
+    },
+    {
+      "path": "scripts/deploy_foundation.py",
+      "sha256": "64a6226972c854e28d85a20aea2f6f7dbb3e7260f78a7d49f107dda1e646b3a8",
+      "lines": 153,
+      "tracked": true,
+      "scope": "repository_working_tree"
+    },
+    {
+      "path": "src/trace_pipeline/detectors.py",
+      "sha256": "6cb4ba196b914bb96377450250a6e76384c70855038e8756227457fe0a3b6747",
+      "lines": 137,
+      "tracked": true,
+      "scope": "repository_working_tree"
+    },
+    {
+      "path": "src/webapp-foundry-oauth/backend/static/styles.css",
+      "sha256": "a87d33fb7b1c9cb7c99f4f08646a15da0db48d37e127387d889023ab9a5cdb5c",
+      "lines": 482,
+      "tracked": true,
+      "scope": "repository_working_tree"
+    },
+    {
+      "path": "tests/unit/test_hosted_package_v2.py",
+      "sha256": "397fbfd30ec9e2ee85e71e3097ef00a0da40d9f018b4c8bd6fa71fdc2cdf6732",
+      "lines": 24,
+      "tracked": true,
+      "scope": "repository_working_tree"
     }
   ]
 }
