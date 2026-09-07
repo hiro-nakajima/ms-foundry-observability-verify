@@ -13,6 +13,14 @@ def test_build_query_uses_exact_trace_id_and_allowlist():
     assert "user.id" not in query
     assert "app.authenticated.display_name" not in query
     assert "user.id" not in FIELDS
+    assert "app.validation.boundary.synthetic_payload" in query
+    assert "boundary_channel == 'property'" in query
+    assert "boundary_channel == 'message'" in query
+    assert "column_ifexists('Message', '')" in query
+    assert "boundary_payload" not in FIELDS
+    assert "boundary_channel" in FIELDS
+    assert "boundary_stored_chars" in FIELDS
+    assert "boundary_first_truncated_position" in FIELDS
 
 
 @pytest.mark.parametrize("trace_id", ["", "xyz", "A" * 32, "0" * 31, "0' or true"])

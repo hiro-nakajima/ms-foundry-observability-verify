@@ -36,6 +36,7 @@ from .session_state import (
     load_execution_state, save_execution_state,
 )
 from .progress import ProgressMiddleware, publish
+from .azure_validation import run_azure_validation
 
 
 PARENT_INSTRUCTIONS = """You are the single Hosted procurement coordinator.
@@ -151,12 +152,32 @@ class ControllerContextProvider(ContextProvider):
         trace.get_current_span().set_attributes(attributes)
         token = request_correlation.set(attributes)
         try:
-            result = await _execute_hosted_components(
-                planner=self.planner, catalog_tool=self.catalog_tool, code_tool=self.code_tool,
-                natural_request=self._latest_user_text(context), session=session,
-                test_case_id=test_case_id, telemetry=self.telemetry,
-                applicant_name=authenticated_applicant_name.get(),
-            )
+            validation_profile = attributes.get("app.validation.profile")
+            if validation_profile:
+                result = await run_azure_validation(
+                    validation_profile,
+                    catalog_invoker=lambda payload: _invoke_remote_tool(
+                        self.catalog_tool, payload, session,
+                    ),
+                    code_invoker=lambda payload: _invoke_remote_tool(
+                        self.code_tool, payload, session,
+                    ),
+                    session=session,
+                    test_case_id=test_case_id,
+                    telemetry=self.telemetry,
+                    system_prompt=PARENT_INSTRUCTIONS,
+                    tool_definitions=[{
+                        "name": tool.name,
+                        "description": tool.description,
+                    } for tool in (self.catalog_tool, self.code_tool)],
+                )
+            else:
+                result = await _execute_hosted_components(
+                    planner=self.planner, catalog_tool=self.catalog_tool, code_tool=self.code_tool,
+                    natural_request=self._latest_user_text(context), session=session,
+                    test_case_id=test_case_id, telemetry=self.telemetry,
+                    applicant_name=authenticated_applicant_name.get(),
+                )
         finally:
             request_correlation.reset(token)
         result.trace["correlation"] = {**attributes, "framework_session_id_hash": sha256(session.session_id)}
@@ -304,6 +325,19 @@ def _with_response_text(result: ScenarioResult) -> ScenarioResult:
             )
         elif missing == ["confirmation"]:
             text = "確認情報を構成できませんでした。商品選択からやり直してください。"
+        elif "selected_product_code" in missing and result.candidates:
+            candidates = result.candidates[:5]
+            choices = "\n".join(
+                f"{number}. {candidate.product_name}（商品コード "
+                f"{candidate.product_code}／単価 {candidate.unit_price:,.0f}円）"
+                for number, candidate in enumerate(candidates, start=1)
+            )
+            text = (
+                "商品候補を確認しました。\n"
+                f"{choices}\n\n"
+                f"選択する場合は「商品コード {candidates[0].product_code} "
+                "を選びます。」のように入力してください。"
+            )
         else:
             requested = "・".join(labels[name] for name in missing if name in labels)
             prefix = "商品候補を確認しました。" if result.candidates else "入力内容をAgentSessionへ保存しました。"

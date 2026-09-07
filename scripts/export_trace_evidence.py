@@ -19,10 +19,23 @@ FIELDS = (
     "plan_id", "plan_step_id", "execution_attempt", "agent_definition_id",
     "agent_definition_version", "toolbox_name", "search_index_name",
     "technical_status", "business_status", "mcp_status", "search_status", "parse_status",
+    "validation_profile", "validation_outcome", "injection_requested",
+    "injection_activated", "validation_scenario_id", "validation_expected_label",
+    "validation_trace_complete", "detector_version", "evidence_ref_count",
+    "system_prompt_sha256", "tool_definitions_sha256",
+    "boundary_profile", "boundary_sent_chars", "boundary_sent_utf8_bytes",
+    "boundary_sent_sha256", "boundary_channel", "boundary_stored_chars",
+    "boundary_stored_utf8_bytes",
+    "boundary_stored_sha256", "boundary_truncated", "boundary_first_truncated_position",
 )
 QUERY = r"""
 union withsource=table_name AppRequests, AppDependencies, AppTraces, AppExceptions
 | where OperationId == '{trace_id}'
+| extend boundary_channel=tostring(Properties['app.validation.boundary.channel'])
+| extend boundary_payload=case(
+    boundary_channel == 'property', tostring(Properties['app.validation.boundary.synthetic_payload']),
+    boundary_channel == 'message', tostring(column_ifexists('Message', '')),
+    '')
 | project
     timestamp=TimeGenerated,
     table_name,
@@ -50,7 +63,28 @@ union withsource=table_name AppRequests, AppDependencies, AppTraces, AppExceptio
     business_status=tostring(Properties['business.status']),
     mcp_status=tostring(Properties['mcp.status']),
     search_status=tostring(Properties['search.status']),
-    parse_status=tostring(Properties['parse.status'])
+    parse_status=tostring(Properties['parse.status']),
+    validation_profile=tostring(Properties['app.validation.profile']),
+    validation_outcome=tostring(Properties['app.validation.outcome']),
+    injection_requested=tostring(Properties['app.validation.injection_requested']),
+    injection_activated=tostring(Properties['app.validation.injection_activated']),
+    validation_scenario_id=tostring(Properties['app.validation.scenario_id']),
+    validation_expected_label=tostring(Properties['app.validation.expected_label']),
+    validation_trace_complete=tostring(Properties['app.validation.trace_complete']),
+    detector_version=tostring(Properties['app.validation.detector_version']),
+    evidence_ref_count=tostring(Properties['app.validation.evidence_ref_count']),
+    system_prompt_sha256=tostring(Properties['app.validation.system_prompt.sha256']),
+    tool_definitions_sha256=tostring(Properties['app.validation.tool_definitions.sha256']),
+    boundary_profile=tostring(Properties['app.validation.boundary.profile']),
+    boundary_sent_chars=tolong(Properties['app.validation.boundary.sent_chars']),
+    boundary_sent_utf8_bytes=tolong(Properties['app.validation.boundary.sent_utf8_bytes']),
+    boundary_sent_sha256=tostring(Properties['app.validation.boundary.sent_sha256']),
+    boundary_channel,
+    boundary_stored_chars=iif(isempty(boundary_payload), long(null), strlen(boundary_payload)),
+    boundary_stored_utf8_bytes=iif(isempty(boundary_payload), long(null), string_size(boundary_payload)),
+    boundary_stored_sha256=iif(isempty(boundary_payload), '', hash_sha256(boundary_payload)),
+    boundary_truncated=iif(isempty(boundary_payload), bool(null), strlen(boundary_payload) < tolong(Properties['app.validation.boundary.sent_chars'])),
+    boundary_first_truncated_position=iif(strlen(boundary_payload) < tolong(Properties['app.validation.boundary.sent_chars']), strlen(boundary_payload), long(null))
 | order by timestamp asc, table_name asc, span_id asc
 """.strip()
 

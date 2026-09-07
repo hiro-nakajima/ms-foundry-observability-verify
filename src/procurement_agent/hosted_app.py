@@ -15,6 +15,13 @@ from .hosted import FoundryRuntimeSettings, authenticated_applicant_name, build_
 from .observability import request_correlation
 
 
+_VALIDATION_PROFILES = {
+    "TV-02", "TV-03", "SD-03", "SD-05", "MA-04", "MA-05",
+    "S1-HEALTHY", "S5-HEALTHY", "S5-SMALL", "S5-32768", "S5-65536",
+    "S5-OVER",
+}
+
+
 class _RequestCorrelationMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
         attributes = {}
@@ -42,6 +49,19 @@ class _RequestCorrelationMiddleware(BaseHTTPMiddleware):
                 contract = metadata.get("app.client.contract")
                 if contract == "web-json-v1":
                     attributes["app.client.contract"] = contract
+                validation_contract = metadata.get("app.validation.contract")
+                validation_profile = metadata.get("app.validation.profile")
+                if (
+                    os.getenv("PROCUREMENT_ENABLE_SYNTHETIC_INJECTIONS") == "true"
+                    and metadata.get("synthetic") == "true"
+                    and validation_contract == "stage-b-v1"
+                    and validation_profile in _VALIDATION_PROFILES
+                    and isinstance(case, str)
+                    and re.fullmatch(r"[A-Za-z0-9_-]{1,128}", case)
+                    and case.startswith("AZURE-CORE-")
+                ):
+                    attributes["app.validation.contract"] = validation_contract
+                    attributes["app.validation.profile"] = validation_profile
             except (ValueError, AttributeError, TypeError):
                 pass  # Protocol handler owns rejection; never log the raw body.
         token = request_correlation.set(attributes)

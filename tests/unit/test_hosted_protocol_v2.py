@@ -62,6 +62,46 @@ async def test_hosted_request_metadata_is_allowlisted_and_request_scoped():
 
 
 @pytest.mark.anyio
+async def test_stage_b_metadata_requires_every_synthetic_gate(monkeypatch):
+    async def endpoint(_request: Request):
+        return JSONResponse(current_request_attributes())
+
+    app = Starlette(routes=[Route("/responses", endpoint, methods=["POST"])])
+    app.add_middleware(_RequestCorrelationMiddleware)
+    transport = httpx.ASGITransport(app=app)
+    metadata = {
+        "test.case.id": "AZURE-CORE-S2-TV-02",
+        "synthetic": "true",
+        "app.validation.contract": "stage-b-v1",
+        "app.validation.profile": "TV-02",
+    }
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        assert "app.validation.profile" not in (
+            await client.post("/responses", json={"metadata": metadata})
+        ).json()
+        monkeypatch.setenv("PROCUREMENT_ENABLE_SYNTHETIC_INJECTIONS", "true")
+        accepted = (await client.post("/responses", json={"metadata": metadata})).json()
+        assert accepted["app.validation.contract"] == "stage-b-v1"
+        assert accepted["app.validation.profile"] == "TV-02"
+        boundary_metadata = {**metadata, "app.validation.profile": "S5-65536"}
+        boundary = (await client.post(
+            "/responses", json={"metadata": boundary_metadata},
+        )).json()
+        assert boundary["app.validation.profile"] == "S5-65536"
+
+        for key, value in (
+            ("synthetic", "false"),
+            ("app.validation.contract", "other"),
+            ("app.validation.profile", "SD-01"),
+            ("app.validation.profile", "S5-1234"),
+            ("test.case.id", "BROWSER-S2-TV-02"),
+        ):
+            rejected = {**metadata, key: value}
+            actual = (await client.post("/responses", json={"metadata": rejected})).json()
+            assert "app.validation.profile" not in actual
+
+
+@pytest.mark.anyio
 async def test_sdk_incoming_baggage_reaches_allowlisted_application_attributes():
     from azure.ai.agentserver.core._tracing import TraceContextMiddleware
     from opentelemetry import propagate

@@ -18,7 +18,14 @@ def package(destination: Path) -> dict:
             archive.write(ROOT / name, name)
         # Flatten the package next to main.py; no pip-install of the repository.
         for source in sorted((ROOT / "src/procurement_agent").glob("*.py")):
+            if source.name == "devui_app.py":  # Local-only UI; App Service is packaged separately.
+                continue
             archive.write(source, "procurement_agent/" + source.name)
+        # Stage B runs inside the Hosted boundary. Include only its detector and
+        # harness package; local fixtures and report tooling stay outside the ZIP.
+        for name in ("__init__.py", "detectors.py", "envelope.py", "stage_b.py"):
+            source = ROOT / "src/trace_pipeline" / name
+            archive.write(source, "trace_pipeline/" + name)
         names = archive.namelist()
     return {"path": str(destination), "files": len(names),
             "sha256": hashlib.sha256(destination.read_bytes()).hexdigest(),

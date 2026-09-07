@@ -19,8 +19,11 @@ Serverless Developerはidle時にscale-to-zeroするpreviewであるため、コ
 | v20 turn 4 確認票生成 | 53.530秒 | Code Prompt子`invoke_agent`約22.111秒を含む |
 | v20 turn 5 「確定」 | 1.478秒 | Catalog/Codeを再実行せず、保存済みEvidenceとmergeだけを実行 |
 | v18 Toolbox/Search envelope | 約1.5～1.7秒 | Searchは存在するが全体の支配要因ではない |
+| v24 Azure Core 8 run | 35.104～78.420秒/turn | 実Prompt子/Toolbox/SearchとEvaluatorを含む。25 model span、input 204,357/output 63,389 token |
 
 上記はApplication Insightsのallowlist evidenceとAzure会話の受信時間から得た値である。APIM内部とSearch service内部のspanはPlatformから取得できないため、1.5～1.7秒をSearch engineだけの純粋な処理時間とはみなさない。
+
+v24のtoken値はnested multi-agent spanの合計であり、1 turnあたりの一意課金tokenではない。それでも8 runで25 model spanが生じた事実は、Serverless Search単体よりLLM/managed orchestrationの呼出し数を先に減らすべきという判断を補強する。
 
 ## 早くする優先順位
 

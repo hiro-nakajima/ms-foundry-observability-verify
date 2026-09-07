@@ -16,6 +16,7 @@ from procurement_agent.models import (
     CodeDeterminationInput, PlanStatus, ProcurementRequest, ScenarioResult,
     TechnicalStatus,
 )
+from procurement_agent.observability import TelemetryRecorder
 from procurement_agent.plan import stable_input_hash
 from procurement_agent.session_state import load_execution_state, save_execution_state
 
@@ -23,6 +24,7 @@ from .detectors import TraceFacts
 
 
 StageBPattern = Literal["TV-02", "TV-03", "SD-03", "SD-05", "MA-04", "MA-05"]
+StageBHealthyScenario = Literal["S1", "S5"]
 StructuredInvoker = Callable[[BaseModel], Awaitable[dict[str, Any] | BaseModel]]
 
 
@@ -36,6 +38,8 @@ class StageBArtifact:
     user_input: dict[str, Any] = field(default_factory=dict)
     response: dict[str, Any] = field(default_factory=dict)
     retrieved_contexts: list[dict[str, Any]] = field(default_factory=list)
+    system_prompt: dict[str, Any] = field(default_factory=dict)
+    tool_definitions: list[dict[str, Any]] = field(default_factory=list)
     tool_outputs: list[dict[str, Any]] = field(default_factory=list)
     conversation: list[dict[str, Any]] = field(default_factory=list)
     plan: dict[str, Any] = field(default_factory=dict)
@@ -46,16 +50,27 @@ class StageBArtifact:
     injection_activated: bool = False
 
 
+@dataclass(kw_only=True)
+class StageBHealthyArtifact(StageBArtifact):
+    pattern_id: None = None
+    scenario_id: StageBHealthyScenario
+    injection_requested: bool = False
+
+
 class StageBInjectionHarness:
-    """Execute the real Controller while activating one explicit semantic fault."""
+    """Execute the real Controller while optionally activating a semantic fault."""
 
     def __init__(
-        self, pattern_id: StageBPattern, *,
+        self, pattern_id: StageBPattern | None, *,
         catalog_invoker: StructuredInvoker, code_invoker: StructuredInvoker,
+        telemetry: TelemetryRecorder | None = None,
+        healthy_scenario: StageBHealthyScenario | None = None,
     ) -> None:
         self.pattern_id = pattern_id
+        self.healthy_scenario = healthy_scenario
         self.catalog_invoker = catalog_invoker
         self.code_invoker = code_invoker
+        self.telemetry = telemetry
         self.sequence: list[dict[str, Any]] = []
         self.tool_outputs: list[dict[str, Any]] = []
         self.boundary_missing_fields: list[str] = []
@@ -122,7 +137,9 @@ class StageBInjectionHarness:
         test_case_id: str,
     ) -> StageBArtifact:
         session = session or AgentSession()
-        controller = ProcurementController(self._catalog, self._code)
+        controller = ProcurementController(
+            self._catalog, self._code, telemetry=self.telemetry,
+        )
         result = await controller.execute(
             request, session=session, test_case_id=test_case_id,
         )
@@ -198,8 +215,7 @@ class StageBInjectionHarness:
                     item.model_dump(mode="json") for item in child_result.evidence
                 )
 
-        return StageBArtifact(
-            pattern_id=self.pattern_id,
+        artifact_fields = dict(
             case_id=test_case_id,
             result=result,
             session=session,
@@ -207,6 +223,14 @@ class StageBInjectionHarness:
             user_input=request.model_dump(mode="json"),
             response=result.model_dump(mode="json"),
             retrieved_contexts=retrieved_contexts,
+            system_prompt={
+                "agent_role": "coordinator",
+                "implementation_kind": "controller",
+            },
+            tool_definitions=[
+                {"name": "catalog", "input_schema": "CatalogSearchInput"},
+                {"name": "code", "input_schema": "CodeDeterminationInput"},
+            ],
             tool_outputs=list(self.tool_outputs),
             conversation=[{"role": "user", "request_id": request.request_id}],
             plan=persisted.plan.model_dump(mode="json") if persisted.plan else {},
@@ -215,6 +239,39 @@ class StageBInjectionHarness:
             used_code_input=self.used_code_input,
             injection_activated=self.injection_activated,
         )
+        if self.pattern_id is not None:
+            return StageBArtifact(pattern_id=self.pattern_id, **artifact_fields)
+        assert self.healthy_scenario is not None
+        return StageBHealthyArtifact(
+            scenario_id=self.healthy_scenario, **artifact_fields,
+        )
+
+
+class StageBHealthyControlHarness(StageBInjectionHarness):
+    """Execute an S1/S5 control through the same real child-invoker path."""
+
+    def __init__(
+        self, scenario_id: StageBHealthyScenario, *,
+        catalog_invoker: StructuredInvoker, code_invoker: StructuredInvoker,
+        telemetry: TelemetryRecorder | None = None,
+    ) -> None:
+        super().__init__(
+            None,
+            catalog_invoker=catalog_invoker,
+            code_invoker=code_invoker,
+            telemetry=telemetry,
+            healthy_scenario=scenario_id,
+        )
+
+    async def run(
+        self, request: ProcurementRequest, *, session: AgentSession | None = None,
+        test_case_id: str,
+    ) -> StageBHealthyArtifact:
+        artifact = await super().run(
+            request, session=session, test_case_id=test_case_id,
+        )
+        assert isinstance(artifact, StageBHealthyArtifact)
+        return artifact
 
 
 def derive_trace_facts(artifact: StageBArtifact) -> TraceFacts:
@@ -234,6 +291,10 @@ def derive_trace_facts(artifact: StageBArtifact) -> TraceFacts:
         present_fields.append("response")
     if artifact.retrieved_contexts:
         present_fields.append("retrieved_contexts")
+    if artifact.system_prompt:
+        present_fields.append("system_prompt")
+    if artifact.tool_definitions:
+        present_fields.append("tool_definitions")
     if calls or "handoff.rejected" in kinds:
         present_fields.append("tool_calls")
     if artifact.tool_outputs:
