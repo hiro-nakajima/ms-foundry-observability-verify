@@ -2,11 +2,13 @@
 
 [ガイド本体](/home/hnakajima/work/foundry-procurement-agent/docs/observability-integration/README.md)の補足。以下は**移植先へ追加する設計例**であり、このリポジトリのアプリコードへ適用した変更ではない。移植先サンプルのAPIやFunctions runtimeでの動作は未検証である。コードブロック内の配置先は新設案、`planner`や`invoke`等は移植先の既存処理を渡す接続点を表す。
 
+現行の`FoundryAgent.as_tool()`を採用する場合の登録・実呼出し・順序・再利用は、[HostedAgent補足資料](/home/hnakajima/work/foundry-procurement-agent/docs/observability-integration/hosted-agent-as-tool.md)を参照。購買Webの公開API／応答契約は[App Service補足資料](/home/hnakajima/work/foundry-procurement-agent/docs/observability-integration/appservice-procurement-changes.md)を参照。以下は移植用の提案例であり、最新ソースの全文ではない。
+
 ## 1. ソース内Toolを維持する場合
 
 ### 1.1 Hostedの初期化
 
-移植元: [hosted_app.py:64](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted_app.py:64)、[observability.py:63](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/observability.py:63)。同じ `ResponsesHostServer` を利用する場合、共通Recorderをサンプルのpackageへコピーし、既存の起動処理へ次の順で統合する。
+移植元: [hosted_app.py:84](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted_app.py:84)、[observability.py:66](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/observability.py:66)。同じ `ResponsesHostServer` を利用する場合、共通Recorderをサンプルのpackageへコピーし、既存の起動処理へ次の順で統合する。
 
 ```python
 import os
@@ -98,7 +100,7 @@ async def execute_observed_plan(
 
 この例にサンプルの業務制御を置換する意図はない。対応する`with`／eventを既存処理へ差し込む。retryがあるサンプルでは各attemptを別Spanにし、実際に次の呼出しを行う場合だけ`step.retry_scheduled`を記録する。Planner／mergeの例外・入力schema不正もサンプル側の既存例外処理で分類し、最終`response.status`まで記録する。
 
-相関ContextVarを移す場合は、[hosted_app.py:18](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted_app.py:18)の本文検証とfinally resetも含める。`user.id`を残したまま次の利用者の実行に入らない。
+相関ContextVarを移す場合は、[hosted_app.py:25](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted_app.py:25)の本文検証とfinally resetも含める。`user.id`を残したまま次の利用者の実行に入らない。
 
 ### 1.3 Tool自動Spanの有無による違い
 
@@ -108,7 +110,7 @@ async def execute_observed_plan(
 | 普通のPython関数を直接呼ぶ | 標準Tool Spanがないことを確認し、ToolラッパーにSpanを1つ追加 |
 | 標準計装付きSearch SDKを内部で呼ぶ | Tool SpanとSDK dependencyは異なる処理範囲。同じHTTP呼出し用のmanual dependencyを重ねない |
 
-`TelemetryRecorder.span()`は4つの業務Span名だけを許可するため、`telemetry.span("tool.invoke")`を追加するとValueErrorになる。普通の関数を直接呼ぶ場合のTool SpanはOTelのtracerで作るか、サンプルのFramework標準Toolとして登録する。
+`TelemetryRecorder.span()`は通常業務4種類とSynthetic評価用`semantic.evaluate`の合計5種類だけを許可するため、`telemetry.span("tool.invoke")`を追加するとValueErrorになる。普通の関数を直接呼ぶ場合のTool SpanはOTelのtracerで作るか、サンプルのFramework標準Toolとして登録する。
 
 以下は**自動Tool Spanがない**async検索関数向けの小さなラッパー。`invoke`は引数なしのasync callableに既存関数と引数を束ねたもの、戻り値はlistという例である。商品と部署のどちらにも適用できる。
 

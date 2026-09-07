@@ -1,26 +1,34 @@
 # Plan&Execute購買支援サンプルへのObservability組み込みガイド
 
-作成日: 2026-09-06 / 調査対象: このリポジトリの作業ツリー
+作成日: 2026-09-06 / 更新日: 2026-09-07 / 調査対象: このリポジトリの作業ツリー
 
-最終照合HEAD: `483d79c80a37c1dd6762c5fd97cbaf6b50963240` / branch: `main`
+最終照合HEAD: `6cbdec83b2daefebb11350a1cc97781a6c55a260` / branch: `main`
 
-調査開始時HEAD: `8e255bffa922419563c4da5d2f8a3e25d2aea21f` / branch: `codex/deployment-reproduction-docs`
+前回資料の基準HEAD: `483d79c80a37c1dd6762c5fd97cbaf6b50963240`。今回の更新はAzure Core検証を取り込んだ最新mainを基準とする。
 
 **移植の中心はHostedAgentの `observability.py`、Planner／Executor周辺のSpanとイベント、App Serviceの `backend/procurement.py` にある初期化と相関処理である。** 商品・部署検索をソース内Toolのまま残しても、これらを組み込める。
 
 一方、`functions-mcp-selfhosted`にはOTelの明示的な初期化・業務Spanがまだない。現在の購買検索はPrompt Agent → Foundry Toolbox → Azure AI Searchで実行する。Functionsを検索Toolの配置先にする場合は、Toolの外部化とFunctionsへの計装を新規に行う。
 
-本資料は次の3点で構成する。
+関連資料は次のとおり。
 
 | 資料 | 用途 |
 | --- | --- |
 | 本書 | 現行実装の詳細、移植範囲、Plan&Executeとの対応、設定、確認手順 |
 | [組み込みコード例](/home/hnakajima/work/foundry-procurement-agent/docs/observability-integration/integration-examples.md) | ソース内Toolを残す例、Functionsへ新設する例、ログ送信を追加する例 |
+| [HostedAgent: agent_as_toolの呼出し箇所と順序](/home/hnakajima/work/foundry-procurement-agent/docs/observability-integration/hosted-agent-as-tool.md) | 登録と実呼出し、Controllerの順序、turnごとの再利用、最新Synthetic検証経路 |
+| [App Service: 購買支援向けの変更点](/home/hnakajima/work/foundry-procurement-agent/docs/observability-integration/appservice-procurement-changes.md) | 元OAuth版との比較、購買UI／API／会話管理／公開応答／NDJSON stream |
 | [ソース索引・調査時点のハッシュ](/home/hnakajima/work/foundry-procurement-agent/docs/observability-integration/source-map.md) | ファイル・関数・行番号と、参照した作業ツリーの同一性確認 |
 
 移植先サンプルのソースは未提供のため、移植先の実ファイル名・SDK・シグネチャは未確認である。以下の「Planner」「Executor」「商品検索Tool」「部署検索Tool」は役割名であり、存在を確認した移植先ファイル名ではない。元サンプルの実装を変更せず、役割に対応する境界へ観測処理を追加する前提で説明する。
 
-調査開始時に未コミット／未追跡だったFunctions・OAuth参考Web等も対象にした。作業中に共有リポジトリが上記の最終HEADへ更新され、参照ファイルをハッシュで再照合した。SDKの実装はローカル`.venv`も参照しているため、再現時はソース索引のSDKバージョンを合わせる。実行コードとSDK実装を優先し、過去のAzure配備報告は過去の実測として扱った。今回Azure環境の再照会・配備は行っていない。
+前回Snapshotと最新ソースを比較し、行番号・関数索引・ハッシュを更新した。最新mainの参照ファイルと作業ツリーの内容が一致することも照合した。SDKの実装はローカル`.venv`も参照しているため、再現時はソース索引のSDKバージョンを合わせる。保存済みのAzure配備報告は既存の実測として扱い、今回Azure環境の再照会・配備は行っていない。
+
+今回追加した要点は次のとおり。
+
+- Hostedの子Agent呼出しは `FoundryAgent.as_tool()` → Controllerのinvoker → `tool.invoke()`。Catalog → Code → merge_validateの順序はControllerが制御し、確認・確定では保存結果を再利用する。
+- 最新HostedにはSynthetic検証用の `semantic.evaluate` とmetadata gateがある。通常の購買Spanとは用途を分け、Hosted全体をコピーする場合の新しいimport依存も確認する。
+- App Serviceの購買向け変更は、リポジトリに残る元OAuth版との比較として補足した。前回Snapshot収録のWeb本体・設定・テストは今回も内容が一致し、直近のWeb仕様変更を意味しない。
 
 ## 1. 全体構成と移植する範囲
 
@@ -45,11 +53,11 @@ flowchart LR
   F --> G[Microsoft Graph /me]
 ```
 
-Functionsの経路は購買E2Eとは別である。この区別は[リポジトリREADME](/home/hnakajima/work/foundry-procurement-agent/README.md:55)、起動コマンド、配備用ZIPの収録リストから確認した。
+Functionsの経路は購買E2Eとは別である。この区別は[リポジトリREADME](/home/hnakajima/work/foundry-procurement-agent/README.md:57)、起動コマンド、配備用ZIPの収録リストから確認した。
 
 | 対象 | 現在の役割 | Traceの初期化 | アプリ独自の記録 | 移植方法 |
 | --- | --- | --- | --- | --- |
-| `procurement_agent` | Hosted親・Planner・業務Controller | `ResponsesHostServer`のSDK経由 | 4種類のSpan、状態イベント、相関属性 | 共通Recorderをコピーし、サンプルのPlanner／Executorへ挿入 |
+| `procurement_agent` | Hosted親・Planner・業務Controller | `ResponsesHostServer`のSDK経由 | 通常業務4種類＋Synthetic評価1種類のSpan、状態イベント、相関属性 | 共通Recorderをコピーし、サンプルのPlanner／Executorへ挿入 |
 | `webapp-foundry-oauth/backend/procurement.py` | 購買Webの実行入口 | 独自Provider＋Azure Monitor Trace Exporter | HTTP Spanへの利用者・会話・応答ID、伝播チェック | lifespan・ASGI・HTTPX・identity・metadataの組を移植 |
 | `webapp-foundry-oauth/backend/server.py` | OAuth／OBO／Graph参考Web | 明示的なOTelなし | Python標準logging | 観測機能の移植元は `procurement.py` を使う |
 | `functions-mcp-selfhosted` | `whoami`／`greet`参考MCP | 明示的なOTelなし | Python標準logging | OTel依存・初期化・Tool Spanを新設 |
@@ -111,11 +119,11 @@ agent-framework-foundry-hosting
 
 | 移植ID | 実ファイル・位置 | 処理 | サンプルで組み込む場所 |
 | --- | --- | --- | --- |
-| H-01 | [hosted_app.py:64](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted_app.py:64) `main()` | message content captureをfalse、propagator既定を設定 | プロセス起動時、Host生成前 |
-| H-02 | [hosted_app.py:82](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted_app.py:82) | `ResponsesHostServer(bundle.parent)` | 既存Hosted起動処理。Hostが同じなら重複追加しない |
-| H-03 | [observability.py:63](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/observability.py:63) `TelemetryRecorder` | 共通Span／event／content保護 | サンプルの共通観測モジュール |
-| H-04 | [observability.py:85](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/observability.py:85) `for_hosted_runtime()` | global Providerを利用 | Hosted用Recorderの生成場所 |
-| H-05 | [hosted.py:220](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted.py:220) | RecorderをControllerへ渡す | Planner／Executorに同じRecorderを注入 |
+| H-01 | [hosted_app.py:84](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted_app.py:84) `main()` | message content captureをfalse、propagator既定を設定 | プロセス起動時、Host生成前 |
+| H-02 | [hosted_app.py:102](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted_app.py:102) | `ResponsesHostServer(bundle.parent)` | 既存Hosted起動処理。Hostが同じなら重複追加しない |
+| H-03 | [observability.py:66](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/observability.py:66) `TelemetryRecorder` | 共通Span／event／content保護 | サンプルの共通観測モジュール |
+| H-04 | [observability.py:88](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/observability.py:88) `for_hosted_runtime()` | global Providerを利用 | Hosted用Recorderの生成場所 |
+| H-05 | [hosted.py:241](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted.py:241) | RecorderをControllerへ渡す | Planner／Executorに同じRecorderを注入 |
 
 現行の起動コードの要点は次である。抜粋のためその他の起動処理は省略している。
 
@@ -148,10 +156,11 @@ Foundry HostedではApplication Insights接続文字列をプラットフォー�
 | `plan.step.execute` コード | [controller.py:603](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/controller.py:603) | 勘定科目／部署コード取得と検証 | 部署検索／コード決定Stepの1 attempt全体 |
 | `merge.validate` | [controller.py:655](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/controller.py:655) | 商品・コードの統合、申請案、予算検証 | Executor結果をまとめる検証処理 |
 | `response.generate` | [controller.py:405](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/controller.py:405) | 最終machine statusの記録 | 成功・確認待ち・失敗の最終結果を返す処理 |
-| 会話だけの応答status | [hosted.py:390](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted.py:390) | 挨拶・本人名確認のstatus | 検索を実行しない会話の終了処理 |
-| Planner例外の分類 | [hosted.py:558](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted.py:558) | `error.type`、取得できる場合のHTTP status | Planner呼出しの例外処理 |
+| 会話だけの応答status | [hosted.py:424](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted.py:424) | 挨拶・本人名確認のstatus | 検索を実行しない会話の終了処理 |
+| Planner例外の分類 | [hosted.py:592](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted.py:592) | `error.type`、取得できる場合のHTTP status | Planner呼出しの例外処理 |
+| `semantic.evaluate` | [azure_validation.py:187](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/azure_validation.py:187) | Synthetic検証の評価結果・設定hash・content境界の記録 | 同じ評価Harnessを移す場合のみ。通常購買では作らない |
 
-**計測時間の読み方:** 現行のPlanner LLM呼出しは [hosted.py:492](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted.py:492) にあり、`plan.create`の外である。`plan.create`のdurationをLLMの計画生成時間と解釈しない。`response.generate`も主にstatusイベントを記録する短いSpanであり、LLM応答生成やHTTPストリーミング全体の時間ではない。移植先でPlanner全体を囲む場合は計測範囲が変わることを資料・ダッシュボードに明記する。
+**計測時間の読み方:** 現行のPlanner LLM呼出しは [hosted.py:526](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted.py:526) にあり、`plan.create`の外である。`plan.create`のdurationをLLMの計画生成時間と解釈しない。`response.generate`も主にstatusイベントを記録する短いSpanであり、LLM応答生成やHTTPストリーミング全体の時間ではない。移植先でPlanner全体を囲む場合は計測範囲が変わることを資料・ダッシュボードに明記する。
 
 #### 主要イベント
 
@@ -193,10 +202,10 @@ OTelの `Span.status` と上記の業務statusは別である。現行の `apply
 
 ### 2.4 Hostedで受け取る相関とユーザー情報
 
-1. [hosted_app.py:18](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted_app.py:18) `_RequestCorrelationMiddleware`がResponses本文の`conversation`と`metadata`を読む。
+1. [hosted_app.py:25](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted_app.py:25) `_RequestCorrelationMiddleware`がResponses本文の`conversation`と`metadata`を読む。
 2. 検証済みの会話ID、case、turn、client contractを`request_correlation`のContextVarへ設定し、終了時にresetする。
-3. [observability.py:23](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/observability.py:23) `current_request_attributes()`がContextVarとbaggageを合成する。`user.id`は64桁の小文字16進hashの場合のみ採用する。
-4. [hosted.py:141](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted.py:141) `ControllerContextProvider.before_run()`がcurrent Spanへ属性を追加し、Controller内の業務Spanにも渡す。
+3. [observability.py:26](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/observability.py:26) `current_request_attributes()`がContextVarとbaggageを合成する。`user.id`は64桁の小文字16進hashの場合のみ採用する。
+4. [hosted.py:142](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted.py:142) `ControllerContextProvider.before_run()`がcurrent Spanへ属性を追加し、Controller内の業務Spanにも渡す。
 5. 最終結果には`trace.correlation`とFramework Session ID hashを付け、Webが限定的に利用する。
 
 Trace ContextのHTTP抽出自体はHost SDKのmiddlewareが担当する。`_RequestCorrelationMiddleware`は本文metadataの抽出であり、手書きの `propagate.extract()`はない。
@@ -205,9 +214,9 @@ Trace ContextのHTTP抽出自体はHost SDKのmiddlewareが担当する。`_Requ
 
 ### 2.5 content保護とコピー時の調整
 
-[observability.py:53](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/observability.py:53) `sanitize_attributes()`はキーに`secret`、`password`、`token`、`chain_of_thought`を含む属性を除く。値のPIIを検出する汎用マスキング機構ではない。例えば`reason`というキーへ生の例外文字列を入れると、その値の内容は保護されない。
+[observability.py:56](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/observability.py:56) `sanitize_attributes()`はキーに`secret`、`password`、`token`、`chain_of_thought`を含む属性を除く。値のPIIを検出する汎用マスキング機構ではない。例えば`reason`というキーへ生の例外文字列を入れると、その値の内容は保護されない。
 
-`protect_content()`は入力のhashと文字数を生成し、明示的なsynthetic環境のcontent-on時だけrawを含める。この関数が存在することと、全runtime payloadが自動でhash化されることは別である。現行では主にローカルTrace評価の正規化処理から呼ばれ、Hostedの全リクエストに適用するmiddlewareではない。
+`protect_content()`は入力のhashと文字数を生成し、明示的なsynthetic環境のcontent-on時だけrawを含める。この関数が存在することと、全runtime payloadが自動でhash化されることは別である。ローカルTrace評価に加え、最新の [azure_validation.py:113](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/azure_validation.py:113) でもsystem prompt／Tool定義の証拠生成に使う。Hostedの全リクエストに適用するmiddlewareではない。
 
 移植先では、ユーザー入力、Tool引数／戻り値、氏名、claim、Authorization、例外本文を観測属性へ直接渡さず、件数・分類・理由コード・必要なIDを明示的に選ぶ。外部例外が`with telemetry.span(...)`の外へ伝播するとOTel標準の例外記録でメッセージが保存され得るため、Tool境界で例外型と制御された結果に変換する組み込み例を別紙に示す。
 
@@ -220,9 +229,33 @@ Trace ContextのHTTP抽出自体はHost SDKのmiddlewareが担当する。`_Requ
 | [azure.yaml:48](/home/hnakajima/work/foundry-procurement-agent/azure.yaml:48) | Hosted entrypoint、Python runtime、env設定の再現 |
 | [Toolbox設定](/home/hnakajima/work/foundry-procurement-agent/docs/deployment/toolboxes-and-search-mcp.md) | B構成を採用するときだけ |
 | [Prompt Agent設定](/home/hnakajima/work/foundry-procurement-agent/docs/deployment/prompt-agents.md) | B構成の子Agent／server-side telemetryを用意するときだけ |
-| [trace_pipeline](/home/hnakajima/work/foundry-procurement-agent/src/trace_pipeline/envelope.py) | 同じ正規化・Failure Pattern評価も移植するときだけ |
+| [trace_pipeline](/home/hnakajima/work/foundry-procurement-agent/src/trace_pipeline/envelope.py) | 同じ正規化・Failure Pattern評価を移すとき。最新Hosted本体をそのままコピーする場合もimport依存として一部が必要 |
 
 標準計装と業務Spanの導入だけなら、PoCのS1～S5シナリオ、fault injection、detector、全業務Controller、ローカルMCP fixtureを丸ごと移す必要はない。
+
+ただし最新の `hosted.py` は `azure_validation.py` をimportする。Hosted本体をそのまま移す場合、[package_hosted.py:25](/home/hnakajima/work/foundry-procurement-agent/scripts/package_hosted.py:25) の `trace_pipeline/__init__.py`、`detectors.py`、`envelope.py`、`stage_b.py` も必要である。検証用環境変数をfalseにするだけではimport依存は消えない。
+
+### 2.7 agent_as_toolの呼出し箇所と順序
+
+詳細な抜粋・順序図・turn別の実行表は [HostedAgent補足資料](/home/hnakajima/work/foundry-procurement-agent/docs/observability-integration/hosted-agent-as-tool.md) を参照。
+
+| 確認すること | 実装箇所 | 読み取り |
+| --- | --- | --- |
+| 子AgentのTool化 | [hosted.py:217](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted.py:217)、222行 | Catalog／Codeのproxyを `as_tool(propagate_session=False)` で変換 |
+| 呼出し境界 | [hosted.py:437](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted.py:437) | `task` に構造化JSONを渡し、許可middlewareを通して `tool.invoke()` |
+| 呼出し順序 | [plan.py:25](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/plan.py:25)、[controller.py:724](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/controller.py:724) | Catalog → Code → merge_validate。Plannerの `tools=[]`、登録配列の順序だけに依存しない |
+| 複数turn | [controller.py:855](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/controller.py:855) | 商品候補・入力内容を保存し、情報が揃うまで待つ |
+| 確定 | [controller.py:806](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/controller.py:806) | 有効な保存Catalog／Codeを再利用し、remote再呼出しなしでmerge_validate |
+
+`agent_as_tool` と同名の手書きSpanを追加しない。通常業務の `plan.step.execute` で呼出し境界を囲み、Agent／Function等はFramework標準計装へ任せる。
+
+### 2.8 最新のSynthetic検証経路
+
+[hosted_app.py:52](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted_app.py:52) が環境変数、synthetic指定、contract、許可profile、`AZURE-CORE-` case IDをすべて検証した場合のみ、[hosted.py:155](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted.py:155) が通常Plannerを省略して `run_azure_validation()` を実行する。
+
+`TelemetryRecorder` の許可Span名は、通常の4種類に `semantic.evaluate` を加えた5種類。評価Spanには `evaluation.completed` と `app.validation.*` を記録する。S5は固定Synthetic文字列による保存長測定であり、通常ユーザー本文の記録とは別である。評価計算はSpan作成前に行うため、`semantic.evaluate` のdurationを評価処理全体の時間としない。
+
+現行PoCの配備スクリプトは `PROCUREMENT_ENABLE_SYNTHETIC_INJECTIONS=true` を設定する。通常購買への移植でHarnessを使わなければ、移植先は未設定またはfalseとする。gate・コピー範囲・追加ログの詳細は [HostedAgent補足資料](/home/hnakajima/work/foundry-procurement-agent/docs/observability-integration/hosted-agent-as-tool.md) の5節を参照。
 
 ## 3. App Service: webapp-foundry-oauth
 
@@ -394,6 +427,21 @@ request関数でcontextを設定するだけでなく、遅れて実行される
 
 旧logger全体にLogExporterを付けるだけでは、現行購買Webの本文非記録と同じ動作にはならない。
 
+### 3.7 購買支援エージェント向けに変更した部分
+
+詳細な新旧比較と移植対応は [App Service補足資料](/home/hnakajima/work/foundry-procurement-agent/docs/observability-integration/appservice-procurement-changes.md) を参照。
+
+| 変更のまとまり | 主な移植元 | 購買版の動作 |
+| --- | --- | --- |
+| 起動・配備単位 | `startup.sh`、`package-procurement.py`、Webルートrequirements | `procurement.py` と購買HTML／JSを起動・収録する |
+| Agent接続・認証 | [procurement.py:190](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement.py:190) | MI＋計装HTTPX＋named Agent SDK。元版のOBO mode選択から変更 |
+| API・会話 | [procurement.py:343](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement.py:343) | `{message}`、Foundry Conversation、署名Cookie、owner／turn管理 |
+| 購買結果の公開 | [procurement.py:129](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement.py:129)、286行 | `web-json-v1` を要求し、公開文章・限定候補・status・相関情報へ投影 |
+| 購買UI | [procurement.js:26](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/static/procurement.js:26) | 商品候補ボタンと共通textarea。数量・部署・メモ・確認・確定の判断はHostedへ委譲 |
+| 進捗 | [procurement.py:294](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement.py:294) | Responsesイベントを公開NDJSONへ変換。元版のbackground job／SSEとはAPIが異なる |
+
+観測だけの移植と購買Web一式の移植では範囲が異なる。後者はHostedの公開応答契約と合わせる必要があり、移植先Agentが自由文だけを返す状態では現行 `_public_result()` のJSONパースに失敗する。
+
 ## 4. Functions: functions-mcp-selfhosted
 
 ### 4.1 要求項目に対する現状
@@ -509,7 +557,7 @@ Agent Frameworkがプロセス内で開くMCP transportには`params._meta`を�
 
 今回再確認したローカル実装では、Web送信地点におけるTrace Contextと`user.id` baggageの一致チェックがある。Hosted側にもbaggageの`user.id`を読む実装がある。**両端のコードが存在しても、Managed境界を越えて届くことの証明にはならない。**
 
-保存済みの[2026-09-06検証レポート](/home/hnakajima/work/foundry-procurement-agent/docs/report/validation-results-2026-09-06.md:94)では、特定caseでWeb→Hosted→Prompt子→Toolboxが同じTraceになった一方、Managed下流の`user.id`は `NOT_PROPAGATED`。別Traceになるcaseではresponse IDで代替相関している。これは既存レポートの記録であり、今回のAzure再測定結果ではない。
+保存済みの[2026-09-07更新の検証レポート](/home/hnakajima/work/foundry-procurement-agent/docs/report/validation-results-2026-09-06.md:125)では、特定caseでWeb→Hosted→Prompt子→Toolboxが同じTraceになった一方、Managed下流の`user.id`は `NOT_PROPAGATED`。別Traceになるcaseではresponse IDで代替相関している。これは既存レポートの記録であり、今回のAzure再測定結果ではない。
 
 Webの `PLATFORM_PROPAGATION` は固定文字列で、各リクエストの受信結果を動的に判定する値ではない。移植先でそのまま「伝播確認済み」の表示に使わず、実測結果または未検証状態に合わせる。
 
@@ -604,18 +652,22 @@ case属性が全てのManaged Spanに付く保証はないため、一度case付
 ### 7.3 この資料を作る際に確認した範囲
 
 - ファイル・起動コマンド・requirements・SDK配布メタデータ・初期化ソースを照合した。
-- Web／Hostedの既存相関・content保護テストを実行し、**27 passed、2 warnings**を確認した。
-- 最初の実行ではsandboxがlocalhost socket生成を禁止しWeb fixtureが失敗した。localhost模擬HTTPサーバーの実行を許可した環境で同じ対象を再実行し成功した。Azureには接続していない。
-- 資料内のPython 13ブロックを構文解析し、うち独立した組み込み例9ブロックをcompile確認した。ローカルリンク275件の実在・行番号、参照ファイル62件のハッシュも照合した。
+- Web／Hostedの相関・content保護、Toolのsession分離、Plan順序、聞き取り・再利用、Synthetic検証gate・評価、ZIPの既存テストを実行し、**66 passed、2 warnings**を確認した。warningsは既存Starlette／AnyIOの非推奨警告。
+- 最新ソースの検証用テストはscriptsの直接importを含むため、初回は `deploy_foundation` が見つからず収集に失敗した。`PYTHONPATH=src:scripts` を付け、localhost模擬HTTPサーバーを実行できる環境で同じ対象を再実行して成功した。Azureには接続していない。
+- 資料内Python 15ブロックの構文（関数内抜粋1件は関数へ包んでcompile）、ローカルリンク460件の実在・行番号、関数／クラス45件のAST行範囲、参照ファイル78件のハッシュを確認した。確認用コードは配備先の実行・依存統合を保証しない。
 
 実行したコマンド:
 
 ```bash
-env TMPDIR=/tmp .venv/bin/python -m pytest -q -s --tb=short \
+env TMPDIR=/tmp PYTHONPATH=src:scripts .venv/bin/python -m pytest -q -s --tb=short \
   tests/unit/test_webui.py \
   tests/unit/test_hosted_protocol_v2.py \
   tests/unit/test_hosted_factory_v2.py \
+  tests/unit/test_plan_v2.py \
+  tests/unit/test_hosted_package_v2.py \
+  tests/integration/test_conversation_intake.py \
+  tests/integration/test_azure_validation_v2.py \
   tests/trace/test_envelope_v3.py
 ```
 
-未検証事項は、移植先サンプルとのAPI／state統合、Functions追加案の実行・依存解決・Azure収集、Managed境界の最新のuserid伝播、今回のKQLの実環境結果である。移植済み・デプロイ済みという意味ではない。
+未検証事項は、移植先サンプルとのAPI／state統合、Functions追加案の実行・依存解決・Azure収集、ブラウザ実操作、Managed境界の最新のuserid伝播、今回のKQLの実環境結果である。移植済み・デプロイ済みという意味ではない。
