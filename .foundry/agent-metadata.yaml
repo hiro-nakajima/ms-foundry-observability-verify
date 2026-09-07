@@ -9,7 +9,7 @@ environments:
     dependencyResolution: remote_build
     azureContainerRegistry: null # User requires ZIP deploy; ACR is not used.
     deploymentStatus: ACTIVE
-    agentVersion: '22'
+    agentVersion: '28'
     searchIngestion:
       mode: blob_indexer
       apiVersion: 2026-08-01-preview
@@ -18,7 +18,7 @@ environments:
       indexers:
         - procurement-catalog-blob-indexer
         - procurement-code-master-blob-indexer
-    zipSha256: 8bc17940787ef4193c616993657e5843d389010c2ba886dd7ceaf4fb56880562
+    zipSha256: c9eba9c0456f822666da261db83a3f2dee1955fdd3451317a483d9b50d549b7c
     childAgents:
       - catalog-search-agent
       - code-determination-agent
@@ -46,13 +46,35 @@ environments:
     testCases:
       - id: S1-S5-Core
         source: tests/integration/test_core_scenarios_v2.py
-        azureStatus: AZURE_PENDING
+        azureStatus: PARTIAL
       - id: Stage-A-14-contracts
         source: tests/trace/test_failure_detectors_v2.py
         scope: local-positive-negative
       - id: Stage-B-6-injections
         source: tests/integration/test_stage_b_e2e_v2.py
-        azureStatus: AZURE_PENDING
+        azureStatus: PASS
+        azureRunId: AZURE-CORE-20260906131540
+      - id: AZURE-CORE-20260906131540
+        scope: hosted-v24-stage-b-six-and-s1-s5-healthy
+        azureStatus: PASS_STAGE_B_AND_HEALTHY_DETECTORS
+        traceIds:
+          - 2e83ef5b3f1c96764f9a48050dac3873
+          - 97ee70232e7ee7ee8d717e9afd947db6
+          - 87a66d44c89380659bc95e128f81788a
+          - 1750337a5d4fe19dae75575c5946759f
+          - 093922446d0a840224bd7f363d39a622
+          - da749e366d8856ae42d08d57a5d8932e
+          - 865bb6c137d0c4f49b6bb49ec13e98a9
+          - 5cc81459dcbc2cc2ad7ef272e86b1b41
+        traceEvidence:
+          - .foundry/evidence/AZURE-CORE-TV-02-20260906131540.jsonl
+          - .foundry/evidence/AZURE-CORE-TV-03-20260906131540.jsonl
+          - .foundry/evidence/AZURE-CORE-SD-03-20260906131540.jsonl
+          - .foundry/evidence/AZURE-CORE-SD-05-20260906131540.jsonl
+          - .foundry/evidence/AZURE-CORE-MA-04-20260906131540.jsonl
+          - .foundry/evidence/AZURE-CORE-MA-05-20260906131540.jsonl
+          - .foundry/evidence/AZURE-CORE-S1-HEALTHY-20260906131540.jsonl
+          - .foundry/evidence/AZURE-CORE-S5-HEALTHY-20260906131540.jsonl
       - id: CHAT-WEBMI-20260904004800
         scope: app-container-mi-new-apim-three-turn
         azureStatus: PARTIAL
@@ -171,4 +193,51 @@ environments:
         firstTurnTraceId: 0d96cca6d6bb74d7ac35864bb7d1cbcc
         rejectedTurnTraceId: 2fa1e8c4b431ad9b02dfa180b2f5c1fa
         traceEvidence: .foundry/evidence/S4-SELECTED-SPEC-V22-20260905013922-turn2.jsonl
+        azureStatus: PASS
+      - id: S1-DIRECT-20260907004109
+        scope: hosted-v24-normal-path-validation-gate-isolation
+        traceId: 77734b98d6b84a8f3fa3508c5979464c
+        conversationId: conv_0254ed346813a2f000wgtRVeFJdTcVOsoxkigVn59YrVYSl27Y
+        azureStatus: PASS_DIRECT_NOT_WEBAPP
+      - id: AZURE-CORE-S5-BOUNDARY-20260907010100
+        scope: hosted-v25-s5-five-size-boundary-diagnostic
+        azureStatus: PARTIAL_BOUNDARY_SPAN_NOT_RECORDED
+        traceIds:
+          - 6f31b1012ceff6e7adbd7ed5b9410785
+          - 43b3348b74c5090ee0257845a30e8d33
+          - 07d0fdec0531ed85a2190478fd6d60ed
+          - 53132d1aa1f9435686f19025546b7af2
+          - 9c5e3b06151ee1887f976ec0981bb027
+      - id: AZURE-CORE-S5-SMALL-20260907011451
+        scope: hosted-v26-boundary-span-event-preflight
+        traceId: 34375648021e3f367bfca2d1c2998e41
+        azureStatus: UNEVALUABLE_TRACE_INCOMPLETE
+        reasonCode: child_output_schema_invalid
+        boundarySpanStatus: NOT_RECORDED_BY_PLATFORM
+      - id: AZURE-CORE-S5-BOUNDARY-V27-20260907
+        scope: hosted-v27-s5-five-size-app-insights-boundary
+        runIds:
+          - AZURE-CORE-S5-BOUNDARY-20260907012834
+          - AZURE-CORE-S5-BOUNDARY-20260907013019
+        azureStatus: PARTIAL_FOUNDRY_PORTAL_DISPLAY_NOT_VERIFIED
+        agentAndDetectorStatus: PASS_5_OF_5
+        appInsightsBoundaryStatus: PASS
+        backendCoreSpanStatus: PARTIAL
+        catalogPlanStepRecordedTraces: 1
+        catalogPlanStepMissingTraces: 4
+        catalogPlanStepMissingClassification: NOT_RECORDED_BY_PLATFORM
+        propertyStoredCharacterLimit: 8192
+        messageStoredCharacterLimit: 32768
+        traceIds:
+          - d3a706f9f3ac932d23e78aba596a9a8a
+          - b927eb25a54b1164007d05358e273c7d
+          - 903d1883ceb999a17257a5acf54fc7c5
+          - 65cd4786ec4819d9b3c85d2f217ed541
+          - 915c7bfcfff48dd861c1221397bb6d49
+        traceEvidence: .foundry/evidence/AZURE-CORE-S5-BOUNDARY-V27-20260907.jsonl
+      - id: PLAYGROUND-CANDIDATES-20260907015643
+        scope: hosted-v28-playground-natural-language-candidate-list-and-selection
+        conversationId: conv_0f5e3eabf351f54000IRntfBX6clnrkjNgyieF0PHSJt1BIssA
+        candidateResponseId: caresp_0f5e3eabf351f54000fCNjt7Rp61nBL11mMjJXOVdv4S9bMlKG
+        selectionResponseId: caresp_0f5e3eabf351f54000AwEhS0nYRCu96a5vQG9OfNlYbaCtgn8N
         azureStatus: PASS

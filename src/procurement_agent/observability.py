@@ -16,7 +16,10 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-CUSTOM_SPAN_BOUNDARIES = {"plan.create", "plan.step.execute", "merge.validate", "response.generate"}
+CUSTOM_SPAN_BOUNDARIES = {
+    "plan.create", "plan.step.execute", "merge.validate", "semantic.evaluate",
+    "response.generate",
+}
 request_correlation: ContextVar[dict[str, Any]] = ContextVar("procurement_request_correlation", default={})
 
 

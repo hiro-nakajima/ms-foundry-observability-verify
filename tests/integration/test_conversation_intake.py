@@ -102,6 +102,9 @@ async def test_vague_request_lists_grounded_candidates_and_resumes_after_selecti
     assert first.status.parse_status == 'SUCCESS'
     assert first.candidates[0].product_code == 'LAPTOP-DEV-14'
     assert first.missing_fields == ['selected_product_code']
+    assert '1. 開発用ノートPC 14インチ（架空商品）' in first.response_text
+    assert '商品コード LAPTOP-DEV-14／単価 180,000円' in first.response_text
+    assert '「商品コード LAPTOP-DEV-14 を選びます。」' in first.response_text
     assert catalog.calls[0].quantity is None
     assert not codes.calls and first.draft is None
     assert load_execution_state(session).request is None

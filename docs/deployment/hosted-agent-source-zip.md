@@ -19,6 +19,7 @@ Repository root
 ├─ requirements.txt             # ZIP root
 ├─ requirements-lock.txt        # ZIP root constraints
 ├─ src/procurement_agent/*.py    # ZIP内 procurement_agent/*.py
+├─ src/trace_pipeline/           # ZIP内 Stage B harness/detectorの4 allowlist file
 └─ scripts/package_hosted.py     # allowlist packager
 ```
 
@@ -43,7 +44,7 @@ PYTHONPATH=src:scripts .venv/bin/python scripts/package_hosted.py \
 unzip -l /tmp/procurement-parent-source-*.zip
 ```
 
-期待するallowlistは`main.py`、`requirements.txt`、`requirements-lock.txt`、`procurement_agent/*.py`だけ。packagerはSHA-256を表示するのでdeployment記録へ保存する。
+期待するallowlistは`main.py`、`requirements.txt`、`requirements-lock.txt`、`procurement_agent/*.py`と、`trace_pipeline`の`__init__.py`/`detectors.py`/`envelope.py`/`stage_b.py`だけ。packagerはSHA-256を表示するのでdeployment記録へ保存する。
 
 ## 3. 新version作成
 
@@ -66,6 +67,7 @@ scriptが作成する定義:
 | child references | Catalog/Codeの記録済みimmutable version |
 | propagator | `tracecontext,baggage` |
 | content capture | Hosted側はfalse。Managed Prompt側への適用は保証しない |
+| Azure Core injection gate | `PROCUREMENT_ENABLE_SYNTHETIC_INJECTIONS=true`。`synthetic=true`、`stage-b-v1` contract、固定profile、`AZURE-CORE-` case prefixの全条件が必要 |
 
 既存Agentの上書きや削除は行わず、新versionだけを作る。記録済み既存versionがない状態で同名Agentを検出した場合は停止する。
 
@@ -80,3 +82,5 @@ scriptが作成する定義:
 - draftは全検証成功時だけ存在
 
 Platform境界でTraceが分かれる場合は`NOT_PROPAGATED`とし、response ID/Conversation IDで代替相関する。失敗versionや以前のversionを削除しない。rollbackは既知の正常versionを呼出し先として再選択する。
+
+Stage Bを別環境で再現するときは、通常WebUIからmetadataを転送せず、project RBACを持つ検証callerだけが`scripts/run_azure_core_validation.py`を明示実行する。6 injectionとS1/S5 Healthyの結果は`semantic.evaluate` spanで確認し、通常会話にfailure profileを混在させない。

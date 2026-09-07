@@ -2,6 +2,7 @@ import json
 
 from agent_framework import Agent, AgentSession, FunctionInvocationContext, InMemoryHistoryProvider
 import pytest
+import procurement_agent.hosted as hosted_module
 
 from procurement_agent.framework import DeterministicChatClient, local_parent_handler
 from procurement_agent.hosted import (
@@ -38,6 +39,40 @@ def test_single_hosted_parent_has_two_remote_foundry_proxy_tools():
     assert bundle.parent.additional_properties["child_implementation_location"] == "Foundry Agent Service"
     assert bundle.parent.additional_properties["propagate_child_session"] is False
     assert bundle.telemetry.uses_global_provider is True
+
+
+@pytest.mark.anyio
+async def test_validation_metadata_bypasses_planner_and_uses_gated_runner(monkeypatch):
+    calls = []
+
+    async def fake_validation(profile, **kwargs):
+        calls.append((profile, kwargs))
+        return ScenarioResult(
+            scenario_id="S2",
+            test_case_id=kwargs["test_case_id"],
+            technical_status="SUCCESS",
+            business_status="SUCCESS",
+            injection_requested=profile,
+            injection_activated=True,
+        )
+
+    monkeypatch.setattr(hosted_module, "run_azure_validation", fake_validation)
+    bundle = make_bundle()
+    token = request_correlation.set({
+        "test.case.id": "AZURE-CORE-S2-TV-02",
+        "app.client.contract": "web-json-v1",
+        "app.validation.contract": "stage-b-v1",
+        "app.validation.profile": "TV-02",
+    })
+    try:
+        response = await bundle.parent.run("run approved synthetic profile", session=AgentSession())
+    finally:
+        request_correlation.reset(token)
+
+    result = ScenarioResult.model_validate_json(response.text)
+    assert result.injection_requested == "TV-02"
+    assert calls[0][0] == "TV-02"
+    assert calls[0][1]["test_case_id"] == "AZURE-CORE-S2-TV-02"
 
 
 @pytest.mark.anyio

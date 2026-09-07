@@ -50,6 +50,8 @@ Search投入documentはversion付きSynthetic JSONから生成します。生成
 - Raw contentは`synthetic-content-on`だけ。production-like profileはcontent-off
 - Framework標準Agent/Chat/Function Spanをcustom spanで二重生成しない
 
+承認済みdeploymentでのみ、`PYTHONPATH=src:scripts .venv/bin/python scripts/run_azure_core_validation.py`を実行する。Hosted側の環境flag、固定contract/profile、`AZURE-CORE-` case prefixがすべて一致した場合だけStage B injectionが有効になる。通常WebUIはこれらのmetadataを転送しない。
+
 現行結果は[2026-09-06 validation report](docs/report/validation-results-2026-09-06.md)、遅延の内訳と改善候補は[latency analysis](docs/report/latency-analysis-2026-09-06.md)に記録します。既存Azure環境へのSearch/Toolbox/Prompt/Hosted再配置は[deployment guide](docs/deployment/README.md)を参照してください。
 
 購買E2EのApp Service sourceは`src/webapp-foundry-oauth/backend/procurement.py`です。`src/webapp-foundry-oauth/backend/server.py`と`src/functions-mcp-selfhosted/`は、別途OBO/Graph `/me`を確認するための参考経路であり、購買E2Eには配備しません。

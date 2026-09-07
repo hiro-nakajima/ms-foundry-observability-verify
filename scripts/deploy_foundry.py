@@ -154,6 +154,7 @@ def hosted(project, manifest, *, new_version=False):
         environment_variables={"PROCUREMENT_PARENT_MODEL_DEPLOYMENT": PARENT_MODEL,
             "PROCUREMENT_CATALOG_AGENT_NAME": "catalog-search-agent", "PROCUREMENT_CATALOG_AGENT_VERSION": str(manifest["catalog-search-agent"]["version"]),
             "PROCUREMENT_CODE_AGENT_NAME": "code-determination-agent", "PROCUREMENT_CODE_AGENT_VERSION": str(manifest["code-determination-agent"]["version"]),
+            "PROCUREMENT_ENABLE_SYNTHETIC_INJECTIONS": "true",
             "OTEL_PROPAGATORS": "tracecontext,baggage", "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "false"})
     with target.open("rb") as code:
         version = project.agents.create_version_from_code(agent_name=name, definition=definition,
