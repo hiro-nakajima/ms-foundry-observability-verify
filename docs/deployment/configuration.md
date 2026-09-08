@@ -12,6 +12,8 @@
 | [統合ガイド](../observability-integration/README.md) | 別のPlan&Executeサンプルへ組み込むソースの対応 |
 | [配備手順](README.md) | Search／Toolbox／Prompt／Hostedの再配置 |
 
+別環境への移植では、この一覧の全設定をコピーせず、[必要な環境差分の抽出](../observability-integration/minimal-environment-and-executor.md)を参照する。
+
 ## 1. 共通リソース
 
 | 項目 | 現在値 |

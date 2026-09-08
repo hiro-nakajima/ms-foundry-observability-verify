@@ -6,6 +6,8 @@
 
 移植先のサンプルソースは未提供である。本書の「Planner」「Executor」「商品検索Tool」「部署検索Tool」は移植先の役割を指し、実在を確認したファイル名ではない。ソース内検索Toolを残したままOTelを組み込める。
 
+App Service／Functionsをそのまま配布し、別のContext Provider型Executorへ統合する場合は、[環境差分とHostedの最小実装](minimal-environment-and-executor.md)を先に参照する。
+
 ## 1. 資料の読み方と現在の構成
 
 | 資料 | 内容 |
@@ -50,7 +52,7 @@ Webは購買Hostedを1つ呼ぶラッパーで、表示名を取得・送信し�
 | opentelemetry-api / opentelemetry-sdk | 各1.43.0 | Span／Context／Provider。MCP privacy hookもこの版に依存 |
 | agent-framework-core | 1.16.0 | Agent／Chat／Functionの標準計装 |
 | agent-framework-foundry-hosting | 1.0.0b260827 | ResponsesHostServer、Hostedの観測初期化 |
-| agent-framework-foundry | 1.11.0 | FoundryAgent、FoundryToolbox、FoundryChatClient |
+| agent-framework-foundry | 1.11.0 | FoundryAgent、FoundryChatClient（FoundryToolboxはhostingパッケージ） |
 | agent-framework-openai | 1.14.1 | 現行モデルクライアント関連 |
 | agent-framework-devui | 1.0.0b260821 | ローカルDevUI。OTel移植だけなら必須ではない |
 | azure-identity / azure-ai-projects | 1.26.0b2 / 2.3.0 | Azure認証／Foundry接続 |
