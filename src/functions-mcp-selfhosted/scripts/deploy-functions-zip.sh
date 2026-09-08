@@ -52,6 +52,7 @@ rm -rf "${STAGE_DIR}"
 mkdir -p "${STAGE_DIR}"
 
 cp "${FUNCTION_ROOT}/mcp_server.py" "${STAGE_DIR}/"
+cp "${FUNCTION_ROOT}/mcp_telemetry.py" "${STAGE_DIR}/"
 cp "${FUNCTION_ROOT}/host.json" "${STAGE_DIR}/"
 cp "${FUNCTION_ROOT}/requirements.txt" "${STAGE_DIR}/"
 cp -R "${FUNCTION_ROOT}/mcp_handler" "${STAGE_DIR}/"

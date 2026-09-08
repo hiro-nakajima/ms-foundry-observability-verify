@@ -15,6 +15,11 @@ param foundryProjectEndpoint string
 @description('Hosted parent agent name.')
 param hostedParentAgentName string = 'procurement-parent-agent'
 
+@description('Enable optional Graph OBO lookup in the restored OAuth wrapper.')
+param identityLookupEnabled bool = false
+@description('False for a ZIP with Linux/Python 3.13 dependencies included.')
+param webRemoteBuild bool = false
+
 param location string = resourceGroup().location
 param searchLocation string = 'westcentralus'
 param apimName string
@@ -88,7 +93,7 @@ resource webApp 'Microsoft.Web/sites@2024-04-01' = {
       appSettings: [
         {
           name: 'SCM_DO_BUILD_DURING_DEPLOYMENT'
-          value: 'true'
+          value: string(webRemoteBuild)
         }
         {
           name: 'PROJECT_ENDPOINT'
@@ -105,10 +110,15 @@ resource webApp 'Microsoft.Web/sites@2024-04-01' = {
         { name: 'WEB_APP_URL', value: 'https://${webAppName}.azurewebsites.net' }
         { name: 'WEBUI_SESSION_SIGNING_KEY', value: sessionSigningKey }
         { name: 'ENTRA_CLIENT_SECRET', value: entraClientSecret }
+        { name: 'FOUNDRY_OBO_CLIENT_ID', value: entraClientId }
+        { name: 'FOUNDRY_OBO_TENANT_ID', value: tenant().tenantId }
+        { name: 'FOUNDRY_TOKEN_SCOPES', value: 'https://ai.azure.com/.default' }
+        { name: 'IDENTITY_LOOKUP_ENABLED', value: string(identityLookupEnabled) }
+        { name: 'FOUNDRY_USER_AUTH_MODE', value: 'refresh_token' }
         { name: 'OTEL_PROPAGATORS', value: 'tracecontext,baggage' }
         { name: 'OTEL_TRACES_SAMPLER', value: 'always_on' }
         { name: 'ENABLE_SENSITIVE_DATA', value: 'false' }
-        { name: 'ENABLE_ORYX_BUILD', value: 'true' }
+        { name: 'ENABLE_ORYX_BUILD', value: string(webRemoteBuild) }
       ]
     }
   }
@@ -130,9 +140,12 @@ resource auth 'Microsoft.Web/sites/config@2024-04-01' = {
           openIdIssuer: '${environment().authentication.loginEndpoint}${tenant().tenantId}/v2.0'
         }
         validation: { allowedAudiences: [entraClientId] }
+        login: {
+          loginParameters: ['scope=openid profile email offline_access https://ai.azure.com/.default']
+        }
       }
     }
-    login: { tokenStore: { enabled: false } }
+    login: { tokenStore: { enabled: true } }
   }
 }
 
@@ -162,6 +175,7 @@ module apim 'apim.bicep' = {
     publisherEmail: apimPublisherEmail
     projectEndpoint: foundryProjectEndpoint
     webAppPrincipalId: webApp.identity.principalId
+    webAppClientId: entraClientId
     agentName: hostedParentAgentName
     instrumentationKey: appInsights.properties.InstrumentationKey
   }

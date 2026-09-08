@@ -156,6 +156,12 @@ def hosted(project, manifest, *, new_version=False):
             "PROCUREMENT_CODE_AGENT_NAME": "code-determination-agent", "PROCUREMENT_CODE_AGENT_VERSION": str(manifest["code-determination-agent"]["version"]),
             "PROCUREMENT_ENABLE_SYNTHETIC_INJECTIONS": "true",
             "OTEL_PROPAGATORS": "tracecontext,baggage", "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "false"})
+    identity_manifest = STATE / "identity-deployment.json"
+    if identity_manifest.exists():
+        identity_endpoint = json.loads(identity_manifest.read_text())["toolboxEndpoint"]
+        if not identity_endpoint.startswith(ENDPOINT + "/toolboxes/procurement-identity-toolbox/"):
+            raise RuntimeError("Identity toolbox is outside the approved project")
+        definition.environment_variables["PROCUREMENT_IDENTITY_TOOLBOX_ENDPOINT"] = identity_endpoint
     with target.open("rb") as code:
         version = project.agents.create_version_from_code(agent_name=name, definition=definition,
             code=code, code_zip_sha256=artifact["sha256"], description="Synthetic procurement observability PoC; source ZIP")

@@ -4,3 +4,5 @@ requests>=2.31.0
 httpx
 # mcp 2.x removed mcp.server.fastmcp, which mcp_server.py still uses.
 mcp>=1.28,<2
+opentelemetry-sdk==1.43.0
+azure-monitor-opentelemetry-exporter==1.0.0b56

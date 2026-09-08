@@ -15,7 +15,7 @@ export PYTHONPATH="${APP_ROOT}/.python_packages/lib/site-packages:${PYTHONPATH:-
 
 cd "${APP_ROOT}/backend"
 
-exec python -m uvicorn procurement:app \
+exec python -m uvicorn server:app \
   --host 0.0.0.0 \
   --port "${PORT:-8080}" \
   --workers 1 \

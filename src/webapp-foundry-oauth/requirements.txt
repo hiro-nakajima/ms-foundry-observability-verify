@@ -1,5 +1,6 @@
-# App Service Oryx reads this root file. The original OAuth demo dependencies
-# remain in backend/requirements.txt, but are not needed by the procurement app.
+# App Service Oryx reads this root file for the restored OAuth wrapper.
+msal==1.38.0
+python-dotenv==1.2.3
 fastapi==0.138.0
 uvicorn==0.52.4
 azure-ai-projects==2.3.0

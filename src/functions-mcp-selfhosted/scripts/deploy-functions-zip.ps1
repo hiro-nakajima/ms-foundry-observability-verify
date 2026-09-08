@@ -93,6 +93,7 @@ New-Item -ItemType Directory -Path $StageDir | Out-Null
 
 $itemsToCopy = @(
   "mcp_server.py",
+  "mcp_telemetry.py",
   "host.json",
   "requirements.txt",
   "mcp_handler"

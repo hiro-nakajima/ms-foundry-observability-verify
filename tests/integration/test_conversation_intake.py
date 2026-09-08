@@ -30,6 +30,26 @@ class _Tool:
         return await self.recorded(payload)
 
 
+@pytest.mark.anyio
+@pytest.mark.parametrize("status", ["SKIPPED", "FAILED"])
+async def test_explicit_lookup_outcome_clears_saved_identity(status):
+    def unused(*_):
+        raise AssertionError("identity text must not call the planner")
+    session = AgentSession()
+    args = dict(planner=Agent(DeterministicChatClient(unused)),
+                catalog_tool=_Tool('catalog_search_agent', RecordedCatalogAgent()),
+                code_tool=_Tool('code_determination_agent', RecordedCodeAgent()),
+                session=session, test_case_id='IDENTITY-CLEAR', telemetry=TelemetryRecorder(),
+                natural_request='私は誰？')
+    result = await _execute_hosted_components(**args, applicant_name='架空 OBO', applicant_status='SUCCESS')
+    assert 'Graph OBO' in result.response_text
+    assert load_execution_state(session).applicant_source == 'graph_obo'
+    cleared = await _execute_hosted_components(**args, applicant_status=status)
+    assert load_execution_state(session).applicant_name is None
+    assert load_execution_state(session).applicant_source is None
+    assert '架空 OBO' not in cleared.response_text and '未設定' in cleared.response_text
+
+
 def test_missing_memo_guidance_accepts_explicit_none_answer():
     result = ScenarioResult(
         scenario_id='S3', test_case_id='MEMO-NONE',
@@ -137,7 +157,8 @@ async def test_vague_request_lists_grounded_candidates_and_resumes_after_selecti
 
 
 @pytest.mark.anyio
-async def test_exact_business_card_match_advances_through_each_intake_step():
+@pytest.mark.parametrize("applicant", ["架空 太郎", None])
+async def test_exact_business_card_match_advances_through_each_intake_step(applicant):
     turns = [
         {'query': '名刺'},
         {'query': '名刺', 'quantity': 10},
@@ -163,7 +184,7 @@ async def test_exact_business_card_match_advances_through_each_intake_step():
     args = dict(
         planner=planner, catalog_tool=catalog, code_tool=codes, session=session,
         test_case_id='WEB-BUSINESS-CARD', telemetry=TelemetryRecorder(),
-        applicant_name='架空 太郎',
+        applicant_name=applicant,
     )
 
     product = await _execute_hosted_components(
@@ -188,8 +209,8 @@ async def test_exact_business_card_match_advances_through_each_intake_step():
     assert memo.missing_fields == ['confirmation']
     assert load_execution_state(session).intake.memo == 'なし'
     assert memo.confirmation_preview.model_dump(mode='json') == {
-        'applicant_authenticated': True,
-        'applicant_name': '架空 太郎',
+        'applicant_authenticated': bool(applicant),
+        'applicant_name': applicant,
         'product_code': 'BUSINESS-CARD-01',
         'product_name': '名刺',
         'category': 'printing',
@@ -207,7 +228,7 @@ async def test_exact_business_card_match_advances_through_each_intake_step():
     for expected in (
         '名刺（BUSINESS-CARD-01）', '単価: 100円', '数量: 10', '小計: 1,000円',
         '営業部（架空部署）（DPT-SALES）', '7310-SUPPLIES', 'メモ: なし',
-        '申請者: 架空 太郎（EasyAuth認証済み）',
+        f'申請者: {applicant or "未取得"}',
     ):
         assert expected in memo.response_text
 

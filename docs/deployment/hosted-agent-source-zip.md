@@ -4,6 +4,8 @@
 
 公式資料: [Deploy a hosted agent from source code](https://learn.microsoft.com/en-us/azure/foundry/agents/how-to/deploy-hosted-agent-code)
 
+2026-09-08の配布済み構成はv33。[Hosted実設定](hosted-agent-settings.md)と[OBO検証記録](../report/validation-results-2026-09-08-obo.md)を参照する。以下は新しいversionを作成するときの手順であり、資料更新のために再配布する必要はない。
+
 ## Repository配置の判断
 
 `azure.yaml`はHosted専用ファイルではなく、azdがproject全体のservice mappingを読むmanifestである。公式[azure.yaml schema](https://learn.microsoft.com/en-us/azure/developer/azure-developer-cli/azd-schema)のconventionどおりRepository rootに置く。`src/procurement_agent`へ移さない。
@@ -31,7 +33,9 @@ Repository root
 - 使用versionを記録済み
 - deployment callerに既存Foundry projectの`Foundry Project Manager`相当
 - Hosted identityはAgent version作成後にFoundryが作る
-- App Service system MIへHosted endpoint呼出し用`Foundry Agent Consumer`をAgent scopeで付与できる
+- Hosted runtime identityにprojectスコープの`Foundry User`があることを確認できる
+- WebがOBOを使用する現構成では利用者委任Tokenを使用し、利用者にもFoundry実行権限が必要。Web MIのroleだけでOBOを成立させない
+- OBOを有効にする場合は同一projectのIdentity Toolbox／OAuth connection／Functionsと、対象環境の`identity-deployment.json`を用意する
 
 ## 2. Local検証とZIP作成
 
@@ -65,11 +69,14 @@ scriptが作成する定義:
 | CPU/memory | 0.5 CPU / 1 GiB |
 | parent model | `PROCUREMENT_PARENT_MODEL_DEPLOYMENT` |
 | child references | Catalog/Codeの記録済みimmutable version |
+| identity Tool | 同一projectのidentity manifestがあればPROCUREMENT_IDENTITY_TOOLBOX_ENDPOINTを設定 |
 | propagator | `tracecontext,baggage` |
 | content capture | Hosted側はfalse。Managed Prompt側への適用は保証しない |
 | Azure Core injection gate | `PROCUREMENT_ENABLE_SYNTHETIC_INJECTIONS=true`。`synthetic=true`、`stage-b-v1` contract、固定profile、`AZURE-CORE-` case prefixの全条件が必要 |
 
 既存Agentの上書きや削除は行わず、新versionだけを作る。記録済み既存versionがない状態で同名Agentを検出した場合は停止する。
+
+identity manifestがない場合、スクリプトはToolbox endpointを設定しない。その配布にWebのlookup=trueだけを組み合わせてもGraph名は取得できない。現在のOBO構成を再現する場合はmanifestの存在・project一致を先に確認する。
 
 ## 4. Verify
 
@@ -80,6 +87,8 @@ scriptが作成する定義:
 - technical/business/MCP/Search/parse status
 - Conversation ID、Framework Session hash、turn、test.case.id
 - draftは全検証成功時だけ存在
+- OBO有効時は同意要求→同意後の名前取得、同一会話での省略→氏名null、identity.lookup／auth.obo.exchange／graph.meの実Trace
+- Webの委任認証・同意操作は実ユーザーで確認。直接FoundryのSynthetic成功だけでWebの全経路完了としない
 
 Platform境界でTraceが分かれる場合は`NOT_PROPAGATED`とし、response ID/Conversation IDで代替相関する。失敗versionや以前のversionを削除しない。rollbackは既知の正常versionを呼出し先として再選択する。
 

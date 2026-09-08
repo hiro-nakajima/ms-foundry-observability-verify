@@ -2,6 +2,8 @@
 
 このディレクトリは、Foundry account/project、Azure AI Search、App Serviceが既に存在する環境へ、購買申請Agentの定義・データ・コードを再配置する手順をまとめる。新しいFoundry resourceやnetworkを作る手順ではない。
 
+現在の配布状態・認証・環境変数・RBACは **[App Service／APIM／HostedAgent設定資料](configuration.md)** を参照する。2026-09-08に実設定を読み戻して照合済み。別サンプルへのソース統合は[統合ガイド](../observability-integration/README.md)。
+
 ## 手順の順序
 
 1. [Azure AI Searchの静的JSON定義・document再投入](search-json-indexer.md)
@@ -9,7 +11,7 @@
 3. [2つのPrompt Agent](prompt-agents.md)
 4. [Hosted親Agentのsource ZIP deployment](hosted-agent-source-zip.md)
 
-App Serviceのresource/EasyAuth/APIM作成はこの再現手順の対象外。購買WebApp sourceは`src/webapp-foundry-oauth/backend/procurement.py`、任意のOBO検証sourceは`src/webapp-foundry-oauth/backend/server.py`と`src/functions-mcp-selfhosted/`に分離している。
+App Serviceのresource/EasyAuth/APIM新規作成は上記の再配置手順の対象外。現在の購買Web入口は`src/webapp-foundry-oauth/backend/server.py`で、既存APIM経由で購買Hostedを呼ぶ。任意OBOはHosted内の専用Agent Tool → Identity Toolbox → Functionsで実行する。OBOを再現する場合はHosted新version作成前に、[Hosted設定](hosted-agent-settings.md)のOAuth connection／Identity Toolbox／Functionsとidentity manifestを用意する。Webの起動・依存同梱ZIPは[App Service設定](appservice-settings.md)を参照。
 
 ## 共通の環境変数
 

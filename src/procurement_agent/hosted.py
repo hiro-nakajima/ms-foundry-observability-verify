@@ -37,6 +37,7 @@ from .session_state import (
 )
 from .progress import ProgressMiddleware, publish
 from .azure_validation import run_azure_validation
+from .identity import build_identity_tool
 
 
 PARENT_INSTRUCTIONS = """You are the single Hosted procurement coordinator.
@@ -72,6 +73,9 @@ older completed procurement found in conversation history.
 # It is deliberately not an OpenTelemetry attribute or baggage item.
 authenticated_applicant_name: ContextVar[str | None] = ContextVar(
     "procurement_authenticated_applicant_name", default=None,
+)
+applicant_lookup_status: ContextVar[str | None] = ContextVar(
+    "procurement_applicant_lookup_status", default=None,
 )
 
 
@@ -111,6 +115,7 @@ class HostedAgentBundle:
     code_tool: Any
     history_provider: InMemoryHistoryProvider
     telemetry: TelemetryRecorder
+    identity_tool: Any = None
 
 
 class ControllerContextProvider(ContextProvider):
@@ -177,6 +182,7 @@ class ControllerContextProvider(ContextProvider):
                     natural_request=self._latest_user_text(context), session=session,
                     test_case_id=test_case_id, telemetry=self.telemetry,
                     applicant_name=authenticated_applicant_name.get(),
+                    applicant_status=applicant_lookup_status.get(),
                 )
         finally:
             request_correlation.reset(token)
@@ -239,6 +245,7 @@ def build_hosted_bundle(
         additional_properties={"architecture_id": "procurement_application_v2"},
     )
     telemetry = TelemetryRecorder.for_hosted_runtime()
+    identity_tool = build_identity_tool(credential)
     controller_provider = ControllerContextProvider(
         planner, catalog_tool, code_tool, telemetry,
     )
@@ -248,7 +255,7 @@ def build_hosted_bundle(
         name=settings.parent_name,
         description="Single Hosted parent for the revised procurement E2E.",
         instructions=PARENT_INSTRUCTIONS,
-        tools=[catalog_tool, code_tool],
+        tools=[identity_tool, catalog_tool, code_tool],
         context_providers=[history, controller_provider],
         middleware=[
             ProgressMiddleware(),
@@ -271,6 +278,7 @@ def build_hosted_bundle(
         code_tool=code_tool,
         history_provider=history,
         telemetry=telemetry,
+        identity_tool=identity_tool,
     )
 
 
@@ -294,9 +302,7 @@ def _with_response_text(result: ScenarioResult) -> ScenarioResult:
               "memo": "メモ（ない場合は「なし」）", "selected_product_code": "商品の選択"}
     missing = result.missing_fields
     if result.business_status == BusinessStatus.WAITING_USER:
-        if "authenticated_applicant_name" in missing:
-            text = "EasyAuthから申請者名を取得できませんでした。サインイン状態を確認してください。"
-        elif (missing == ["selected_product_code"]
+        if (missing == ["selected_product_code"]
               and result.status.search_status == "NOT_FOUND"):
             text = "商品をCatalogで確認できませんでした。別の商品名または型番を入力してください。"
         elif (missing == ["quantity"]
@@ -311,7 +317,7 @@ def _with_response_text(result: ScenarioResult) -> ScenarioResult:
             ) or "なし"
             text = (
                 "申請内容を確認してください。\n"
-                f"申請者: {preview.applicant_name}（EasyAuth認証済み）\n"
+                f"申請者: {preview.applicant_name or '未取得'}\n"
                 f"商品: {preview.product_name}（{preview.product_code}）\n"
                 f"商品分類: {preview.category}\n"
                 f"仕様: {specifications}\n"
@@ -388,14 +394,14 @@ def _conversation_result(
     state.test_case_id = test_case_id
     if interaction_type == "identity":
         if applicant_name:
+            source = "Graph OBO" if state.applicant_source == "graph_obo" else "EasyAuth"
             text = (
-                f"現在このWeb Appにサインインしている方の表示名は「{applicant_name}」です。"
-                "この名前はEasyAuthの検証済みclaimから取得しており、Graph OBOは使用していません。"
+                f"今回連携された表示名は「{applicant_name}」です。"
+                f"この名前は{source}の取得結果です。"
             )
         else:
             text = (
-                "Playgroundのサインイン利用者名はHosted Agentへ直接渡されません。"
-                "本人確認にはOAuth Identity Passthrough対応MCPを介したGraph OBO接続が必要です。"
+                "今回は名前を取得していません。申請者名は未設定のまま購買支援を利用できます。"
             )
         scenario_id = "IDENTITY"
     else:
@@ -462,6 +468,7 @@ async def _execute_hosted_components(
     *, planner: Agent, catalog_tool: Any, code_tool: Any, natural_request: str,
     session: AgentSession | None, test_case_id: str, telemetry: TelemetryRecorder,
     applicant_name: str | None = None,
+    applicant_status: str | None = None,
 ) -> ScenarioResult:
     if session is None:
         raise ValueError("Framework AgentSession is required; implicit sessions are forbidden")
@@ -481,12 +488,22 @@ async def _execute_hosted_components(
     if state.plan is not None and state.plan.status.name == "COMPLETED":
         previous_turn = state.turn_number
         previous_applicant = state.applicant_name
+        previous_source = state.applicant_source
         state = initialize_execution_state(session, test_case_id=test_case_id)
         state.turn_number = previous_turn
         state.applicant_name = previous_applicant
+        state.applicant_source = previous_source
         save_execution_state(session, state)
-    if applicant_name:
+    if applicant_status is not None:
+        # Explicit SKIPPED/FAILED also clears a previously successful lookup.
+        state.applicant_name = applicant_name if applicant_status == "SUCCESS" else None
+        state.applicant_source = "graph_obo" if state.applicant_name else None
+        if state.request is not None:
+            state.request = state.request.model_copy(update={"applicant_name": state.applicant_name})
+        save_execution_state(session, state)
+    elif applicant_name:
         state.applicant_name = applicant_name
+        state.applicant_source = "easyauth"
         save_execution_state(session, state)
     interaction_type = _intent(
         natural_request,
@@ -495,7 +512,7 @@ async def _execute_hosted_components(
     if interaction_type != "procurement":
         return _conversation_result(
             session=session, state=state, test_case_id=test_case_id,
-            interaction_type=interaction_type, applicant_name=applicant_name,
+            interaction_type=interaction_type, applicant_name=state.applicant_name,
             telemetry=telemetry,
         )
     controller = ProcurementController(
@@ -567,7 +584,6 @@ async def _execute_hosted_components(
             intake.request.quantity,
             intake.request.department_name,
             intake.request.memo,
-            state.applicant_name,
             selected,
         ))
         if confirming and complete:

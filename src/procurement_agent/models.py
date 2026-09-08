@@ -138,7 +138,7 @@ class ProcurementRequest(StrictModel):
     request_id: str = Field(min_length=1)
     query: str = Field(min_length=1)
     quantity: int = Field(gt=0)
-    applicant_name: str = Field(min_length=1)
+    applicant_name: str | None = Field(default=None, min_length=1, max_length=120)
     department_name: str = Field(min_length=1)
     memo: str = Field(min_length=1)
     constraints: RequestConstraints = Field(default_factory=RequestConstraints)
@@ -353,8 +353,8 @@ class ApplicationDraft(StrictModel):
 
 
 class ConfirmationPreview(StrictModel):
-    applicant_authenticated: Literal[True] = True
-    applicant_name: str = Field(min_length=1, max_length=120)
+    applicant_authenticated: bool = False
+    applicant_name: str | None = Field(default=None, min_length=1, max_length=120)
     product_code: str
     product_name: str
     category: str
