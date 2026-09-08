@@ -48,7 +48,7 @@ Functions は Graph token を直接受け取るのではなく、MCP API 用 tok
 
 ## このRepositoryでの位置づけ
 
-このFunctionsは購買E2Eとは別のOBO/Graph `/me`検証用sourceで、現行Azure購買経路へは配備していません。購買Agentの正本は[Repository README](../../README.md)、EasyAuth/OBO判断は[ADR](../../docs/adr-0001-easyauth-and-obo.md)、現行検証結果は[validation report](../../docs/report/validation-results-2026-09-06.md)を参照してください。
+2026-09-08から購買Hosted内のOBO Agent Tool用として `rg-ms-foundry-observability-verify` へ配備します。`mcp_telemetry.py` でOTelを初期化し、MCP/OBO/GraphのSpanを記録します。whoamiが外部へ返すのは本人照合済みの表示名とsubjectHashのみです。現行構成は [OAuth連携実装ガイド](../../docs/observability-integration/oauth-wrapper-implementation.md) を参照してください。
 
 ## ディレクトリ構成
 

@@ -9,7 +9,7 @@ environments:
     dependencyResolution: remote_build
     azureContainerRegistry: null # User requires ZIP deploy; ACR is not used.
     deploymentStatus: ACTIVE
-    agentVersion: '28'
+    agentVersion: '33'
     searchIngestion:
       mode: blob_indexer
       apiVersion: 2026-08-01-preview
@@ -18,7 +18,22 @@ environments:
       indexers:
         - procurement-catalog-blob-indexer
         - procurement-code-master-blob-indexer
-    zipSha256: c9eba9c0456f822666da261db83a3f2dee1955fdd3451317a483d9b50d549b7c
+    zipSha256: 8978c3512b3a7bce02654b3af46c7daebd6c8ecd5e2228476558fce88f96e1a3
+    identityAgentTool:
+      name: obo_identity_agent
+      implementation: hosted_local_agent_as_tool
+      toolbox: procurement-identity-toolbox
+      toolboxVersion: '1'
+      connection: procurement-whoami
+      functionApp: func-procurement-obo-nkjm
+      functionDeploymentId: a5a45d82-30b8-4bfb-bdd2-23843f846d36
+      identityResultContract: displayName_and_subjectHash
+      exposedMcpToolName: whoami_func___whoami
+      azureStatus: PASS_WEB_HOSTED_OBO_GRAPH
+      applicantAcquisitionStatus: PASS_NAME_AND_CLEAR_ON_SKIP
+      traceId: ac05d5d0796bca9975933c1647ace37f
+      runtimePrincipalId: 80a1bbc5-c4b4-49da-b78e-b817696fe464
+      runtimeRole: Foundry User
     childAgents:
       - catalog-search-agent
       - code-determination-agent
@@ -35,15 +50,37 @@ environments:
       appGenAIContentRetentionDays: 90
     webApp:
       name: web-procurement-observe-nkjm
-      deploymentId: e857af08-219a-437c-8d59-572a6fd86fd2
-      packageSha256: b2fccfae7b5965ec61e1d5e8faeedc315ff7185cc25516ee171bc27ab2d037b6
-      browserValidation: PASS_CORE_FLOW
+      deploymentId: eb3dc567-dec1-4e45-a175-3284d7f88e09
+      packageSha256: 67b37f892c4f92d9b32496f8bad98307892db7e399483a823b73cf6b1740ab20
+      dependencyResolution: vendored_linux_python_3_13
+      browserValidation: PASS_OBO_NAME_DISPLAY_USER_CONFIRMED
+      delegatedFoundryInvocation: PASS
+      webHostedTracePropagation: PASS
+      validationTraceId: ac05d5d0796bca9975933c1647ace37f
     apiManagement:
       activeName: apim-procurement-stream-nkjm
       sku: Developer
       oldConsumptionStatus: SOFT_DELETED
       oldConsumptionRecoverableUntilUtc: '2026-09-06T01:13:20Z'
     testCases:
+      - id: WEB-988629d69c414fe58a1974c8c9a29cfb
+        scope: hosted-v33-web-delegated-obo-name-and-trace
+        azureStatus: PASS
+        traceId: ac05d5d0796bca9975933c1647ace37f
+      - id: OBO-CHAIN-20260908042318
+        scope: hosted-v33-name-then-clear-on-skip-in-same-conversation
+        azureStatus: PASS
+        traceIds:
+          - 395beca4629945f38d997d5ee8b6c4d0
+          - b067823d76904ff9ad2f1af3dd64449a
+      - id: OBO-HOSTED-20260908033842
+        scope: hosted-v29-direct-delegated-oauth-consent
+        azureStatus: PASS_CONSENT_REQUEST
+        traceId: f510c26f2694867672332b56d8c75fb6
+      - id: S1-DIRECT-20260908033625
+        scope: hosted-v29-null-applicant-procurement
+        azureStatus: PASS_SEARCH_AND_WAITING_USER
+        traceId: ffcb0bd1bd45d8eea2b2a4f94d612e6c
       - id: S1-S5-Core
         source: tests/integration/test_core_scenarios_v2.py
         azureStatus: PARTIAL

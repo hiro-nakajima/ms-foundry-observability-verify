@@ -1,155 +1,74 @@
-# App Service: 購買支援エージェント向けに変更した部分
+# App Service：旧OAuth版を再利用した購買支援向け変更
 
-更新日: 2026-09-07。基準ソースは [Snapshot](/home/hnakajima/work/foundry-procurement-agent/docs/observability-integration/source-snapshot.json)。この資料は、リポジトリに残る元のOAuth／Graph用 `server.py` と、現在起動する購買用 `procurement.py` を比較する。
+更新日: 2026-09-08。稼働入口は **server.py**、UIは元のOAuth版。購買専用procurement.pyを入口としていた構成から戻した。[実設定](../deployment/appservice-settings.md)／[統合ガイド](README.md)を参照。
 
-**購買Webは、認証・会話管理・Hosted呼出し・公開応答の表示を担当する。商品検索や聞き取り、確認・確定の業務判断はHosted側にある。** Observabilityだけを移す場合は [本書のApp Service章](/home/hnakajima/work/foundry-procurement-agent/docs/observability-integration/README.md) の初期化・相関部分を組み込む。購買UIも採用する場合は、以下のAPI・応答契約・会話管理を一緒に合わせる。
+## 1. 旧OAuth版から何を変えたか
 
-なお、前回2026-09-06のSnapshotに収録したApp Service関連6ファイルと `test_webui.py` は、今回もhash・行数が一致している。「前回資料以降にWebの仕様が変わった」という意味ではなく、既に実装されていた購買向けの変更を今回詳述する。frontendも今回のSnapshotへ追加した。
-
-## 1. 元サンプルとの比較と移すソース
-
-| 観点 | 元OAuth／Graph版 | 現在の購買版／移植対象 |
+| 対象 | 今回使用するもの／変更内容 | 理由 |
 | --- | --- | --- |
-| backend | [server.py](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/server.py) | [procurement.py](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement.py)。観測・owner管理・購買Agent接続を持つ |
-| frontend | [index.html:16](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/static/index.html:16)、[app.js](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/static/app.js): OAuth説明、Who am I等、Tool Logs、承認／同意 | [procurement.html:28](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/static/procurement.html:28)、[procurement.js:26](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/static/procurement.js:26): 購買チャット、商品候補ボタン、最新turnのstatus／相関情報 |
-| Web→Foundryの認証 | [server.py:577](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/server.py:577): OBO／forward／MI等のmode選択、既定OBO | [procurement.py:205](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement.py:205): `ManagedIdentityCredential` とSDK client |
-| chat入力 | `{conversationId, userMessage}` | [procurement.py:107](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement.py:107): `{message}` のみ。余分なfieldを拒否 |
-| 実行方式 | [server.py:1259](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/server.py:1259): background jobを作成し202、job API／SSE／pollで取得 | [procurement.py:343](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement.py:343): request内でResponsesを実行、JSONまたはNDJSON streamを返す |
-| 会話継続 | browser UUID、serverの `previous_response_id`／in-memory state | Foundry Conversationとowner付きmetadata、利用者に結び付けた署名Cookie |
-| ブラウザ保存 | [app.js:43](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/static/app.js:43): localStorageにmessages／Tool logs／job等 | localStorageを使用せず、chat表示はDOM、CSRFはJSメモリ。会話参照はHttpOnly Cookie |
-| MCP承認・同意 | [server.py:1349](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/server.py:1349): `/api/continue`、approve／deny、同意後再開 | 現行購買API・UIにその操作はない。Prompt子／Toolboxを構成済みとしてHostedへ依頼する |
-| ログ | [server.py:60](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/server.py:60): Python通常logger | [procurement.py:173](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement.py:173): OTel Trace、相関属性、送信headerの検証boolean |
-| 配備対象 | 元サンプルのファイル一式 | [package-procurement.py:12](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/scripts/package-procurement.py:12) の6ファイルallowlist |
+| HTML/JS/CSS | 元の `index.html` / `app.js` / `styles.css` を使用 | チャット、job/SSE、OAuth同意カードを再利用 |
+| 起動 | startup.sh → `uvicorn server:app --workers 1` | 旧OAuth APIを稼働入口に戻す |
+| 接続先 | PROJECT_ENDPOINT=既存APIM、AGENT_NAME=購買Hosted | Webを単一Agentのラッパーにする |
+| 認証 | EasyAuthとMSALの既存方式を再利用し、委任Tokenの主体照合を追加 | Web利用者とFoundry利用者の一致を確認 |
+| 購買実行 | 新規 `procurement_flow.py` | 会話作成、相関metadata、同意後の元依頼再送をまとめる |
+| OTel | 新規 `telemetry.py` とserverへの接続 | 受信／送信HTTP、job、Token取得、Hosted呼び出しを観測 |
+| 利用者分離 | hashをjob／会話のownerに使用、認証・Origin検査 | 他利用者のjobや状態を参照させない |
+| 名前取得 | Hosted内の任意OBO Toolへ委譲 | WebでGraph結果を取得・氏名を送信する処理は不要 |
+| API追加項目 | chatのlookupApplicant、continueのskipIdentity | 名前取得を省略可能にする |
+| 配布 | 旧UIとserver/flow/telemetryを許可リストZIPへ収録 | 稼働に必要な入口を明確にする |
 
-現行の配備単位は、`backend/procurement.py`、`backend/static/procurement.html`、`backend/static/procurement.js`、`backend/static/styles.css`、Webルートの `requirements.txt`、`startup.sh`。新モジュール／assetを作る場合はpackagerにも加える。
+このWebは購買の商品選択や部署コード決定を独自処理しない。それらはHostedの会話・Controllerが担当する。元のOAuth版はラッパーとして利用でき、今回必要だった変更はOTel、単一接続先、利用者相関と状態分離、Hostedが返す同意待ち／再開への対応である。
 
-起動は [startup.sh:18](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/startup.sh:18) の `uvicorn procurement:app --workers 1`。`backend/requirements.txt` は元版の依存定義であり、購買版のOryx build入力は [Webルートrequirements.txt](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/requirements.txt) である。
+## 2. ファイル単位の組み込み箇所
 
-## 2. Browser・Web・Hostedの責務
-
-```mermaid
-flowchart LR
-  B["Browser: message入力・候補選択・公開結果表示"]
-  W["Web: identity・owner・CSRF・会話・Trace"]
-  H["Hosted: 聞き取り・Plan・検索・検証・確認・確定"]
-  B -->|"message / Cookie / CSRF"| W
-  W -->|"conversation / metadata / message"| H
-  H -->|"公開progress / ScenarioResult JSON"| W
-  W -->|"NDJSON progress / 公開result"| B
-```
-
-WebはAI Searchを直接呼ばず、商品／部署検索Toolも持たない。Hostedの `response_text` を業務文章の正本とし、Webは `draft` や内部の `trace.events` から確認票や成功文章を再構築しない。
-
-### 現行APIと組み込む場所
-
-| API | ソース | 入力・処理・戻り値 |
-| --- | --- | --- |
-| `GET /` | [procurement.py:239](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement.py:239) | identityを確認し購買HTMLをno-storeで配信 |
-| `GET /static/{name}` | [procurement.py:245](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement.py:245) | `procurement.js`／`styles.css` のみ配信 |
-| `GET /api/state` | [procurement.py:252](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement.py:252) | 署名Cookieを確認しconversation ID・CSRFを返す。会話本文は返さない |
-| `POST /api/conversation` | [procurement.py:265](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement.py:265) | Origin／CSRF確認後、Cookieの会話参照を外しCSRFを更新 |
-| `POST /api/chat` | [procurement.py:343](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement.py:343) | `{message}` を受け、owner確認・turn予約後、Responsesを呼び公開JSONを返す |
-| `POST /api/chat/stream` | [procurement.py:381](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement.py:381)、[294行](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement.py:294) | 同じ前処理の後、NDJSONの進捗と最終結果を返す。現行Browserはこちらを使用 |
-
-移植先が元版のAPIを使用している場合、bodyのfield名、非同期jobの有無、stream形式が変わるため、backendだけ差し替えず呼出し側も合わせる。
-
-## 3. 購買会話の段階とUIの実装
-
-| 段階 | Webが表示・送信するもの | 判断を行う場所 |
-| --- | --- | --- |
-| 購買依頼 | textareaから `message` を送信。[procurement.js:95](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/static/procurement.js:95) | Hostedが商品queryとIntakeを抽出 |
-| 候補提示 | `WAITING_USER` かつ `missing_fields` に `selected_product_code` がある場合のみ、最大5件の商品ボタン。[procurement.py:145](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement.py:145) | HostedのCatalog結果・選択待ち判定 |
-| 商品選択 | ボタンから `商品コード <code> を選びます。` を通常messageとして送信。[procurement.js:40](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/static/procurement.js:40) | Hostedが保存候補との一致を検証。Browserが選択stateを直接書き換えない |
-| 数量・部署・メモ | Hostedの問いかけを表示し、同じtextareaで回答を送信 | Hostedが入力を保存し、不足項目を判定。Webに専用form／段階stateはない |
-| 確認表示 | `response_text` 内の申請者・商品・単価・数量・金額・部署・勘定科目・メモを表示 | [hosted.py:307](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted.py:307) が保存済み確認内容から文章生成 |
-| 確定 | 利用者が `確定` と通常入力。専用確定API／buttonはない | Hostedが保存Catalog／Codeを検証・再利用してmerge_validateを実行 |
-| 追加入力待ち・失敗 | 公開応答と許可されたstatusを表示 | Hostedの業務判定。WebがHTTP 200だけで成功文章を作らない |
-
-確定で生成されるのは購買申請案。現行ソースの公開応答にも [提出・発注を行わない旨:345](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted.py:345) があり、外部購買システムへの提出・発注処理を組み込んだ状態ではない。
-
-候補の公開項目はcode／name／unit_priceに限る。[procurement.py:145](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement.py:145) と [166行](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement.py:166) でコード形式、価格形式、名称の長さ等を検査する。部署の聞き直しなどで商品選択が不要な場合は候補ボタンを出さない。
-
-[procurement.js:26](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/static/procurement.js:26) の `show()` は `textContent` を使って応答・候補・statusを表示する。[procurement.html:38](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/static/procurement.html:38) のdetails内には最新turnの相関IDとstatusを表示する。これらは利用者向けの診断情報であり、内部Tool引数や推論過程の表示機能ではない。
-
-## 4. Hostedとの公開応答契約
-
-WebからのResponses metadataは [_response_metadata():286](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement.py:286) で組み立てる。
-
-| metadata | 用途 |
+| ファイル・関数 | 組み込む内容 |
 | --- | --- |
-| `app.client.contract=web-json-v1` | Hostedに構造化最終応答を要求する |
-| `test.case.id` | 同一Web会話の検索キー |
-| `app.turn.number` | Webが予約した送信番号 |
-| `app.authenticated.display_name` | EasyAuth由来の任意の表示名。申請者名の業務連携 |
+| [requirements.txt](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/requirements.txt) | MSAL/dotenv、OTel ASGI/HTTPX、Azure Monitor exporter。backendのrequirementsはこのファイルを参照 |
+| [lifespan](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/telemetry.py:55) | Provider/exporter/Resourceのprocess初期化と終了 |
+| [server.py / FastAPI生成](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/server.py) | FastAPI生成時に観測lifespanを接続 |
+| [BrowserBoundary](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/telemetry.py:90)／[Instrumentation](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/telemetry.py:75) | Browser文脈を破棄してからASGI Spanを生成 |
+| [_get_request_user](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/server.py:349)／[_conversation_state_key](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/server.py:392) | 認証済み利用者hashとowner key |
+| [_build_outbound_headers](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/server.py:590)／[_validate_delegated_subject](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/server.py:638) | 選択した認証方式でToken取得、同一利用者確認 |
+| [_get_foundry_config](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/server.py:649) | PROJECT_ENDPOINTとAGENT_NAMEから接続先を読む |
+| [run](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement_flow.py:29) | Hostedを1つ呼ぶ、同一Foundry会話、OTel、metadata |
+| [_stream_response](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/server.py:678) | Responses SSEを既存UIのeventへ変換。consent付きincompleteをpause扱い |
+| [package-procurement.py](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/scripts/package-procurement.py) | 配布8ファイル＋依存パッケージの許可リスト |
 
-[hosted.py:184](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted.py:184) はclient contractに応じて `ScenarioResult.model_dump_json()` を返し、それ以外は公開文章を返す。Webの [_public_result():129](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement.py:129) はこのJSONから `response_text`、許可status、候補等を抽出する。
+ソース内に残る `_build_outbound_headers()` の「procurement always explicitly selects MI」というdocstringは旧説明である。実際の呼出し元 `procurement_flow.run()` とAzure設定では `refresh_token` を明示選択しており、本書は実行コード・実設定を基準にする。
 
-**移植先Agentが自由文だけを返す場合、そのまま現行Webへ接続するとJSON契約のパースに失敗する。** 移植先Agentの結果を同等の公開schemaへ変換するか、Webのprojectionをそのサンプルの確定した契約に合わせる。観測のために内部payload全体をBrowserへ渡す必要はない。
+## 3. リクエストと同意の流れ
 
-Conversation metadataの `contract=procurement-intake-v2` は会話stateの互換性を管理する値で、Responses metadataの `web-json-v1` は応答形式の値。両者を同じversion文字列へ置換しない。
+1. EasyAuth認証済みBrowserから `/api/chat` へ依頼を送る。
+2. Webがownerを確認し、バックグラウンドjobとcase/turnを作る。
+3. EasyAuth refresh tokenからFoundry委任Tokenを取得し、EasyAuth利用者とTokenのtid/oidを照合する。署名検証はAPIM/Foundryが担当する。
+4. 初回はAPIM経由でFoundry Conversationを作成し、以降もその会話でResponsesを呼ぶ。
+5. Hostedが同意を要求すると、Webは既存の同意カードを表示する。`response.incomplete` だけを一律成功扱いにはしない。
+6. `/api/continue` で同じ認証方式・会話を維持し、保存した元の依頼を再送する。
+7. Hostedが名前照合と購買処理を行い、Webが応答をSSEで表示する。
 
-## 5. 会話管理とuserid連携
+購買専用NDJSON APIは今回の稼働入口では使わない。Web APIのjob/SSE方式を維持する。Browserへ公開するTool eventのargumentsは `{}` に縮小する。氏名を指定するBrowser APIは設けない。
 
-| 情報 | 保持先／参照箇所 | 移植時に保つ動作 |
-| --- | --- | --- |
-| 仮名化利用者ID | [_identity():52](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement.py:52) | EasyAuthのtid／oid双方を必須とし `SHA-256(tid + ':' + oid)` を作る。欠落401 |
-| Cookie | [_sign():78](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement.py:78)、[_state():83](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement.py:83) | user、csrf、exp、conversation参照をHMAC署名。署名は暗号化ではない |
-| Cookie送信設定 | [procurement.py:100](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement.py:100) | `__Host-procurement`、Secure／HttpOnly／SameSite=strict、1日有効 |
-| POSTの検証 | [_validate_post():258](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement.py:258) | `WEB_APP_URL` とOriginを照合し、CSRFを比較する |
-| 会話所有者 | [procurement.py:362](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement.py:362) | Foundry Conversationの `metadata.owner` をログイン利用者と照合。不一致403 |
-| turnとcase | [procurement.py:371](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement.py:371) | 新規会話にowner／turn／case／contractを持たせ、実行前にturnを予約 |
-| 観測用userid | [procurement.py:347](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement.py:347) | Web Spanの `user.id` とbaggageへ設定。終了時detach |
-| 業務の聞き取りstate | [session_state.py](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/session_state.py) | HostedのAgentSession側で管理。Cookieに商品・メモ等を格納しない |
+| APIの項目 | 挙動 |
+| --- | --- |
+| POST /api/chat のlookupApplicant省略 | IDENTITY_LOOKUP_ENABLEDの設定値を使用（現環境true） |
+| lookupApplicant=false | このturnはOBO省略。Hostedの申請者名をnullへ |
+| POST /api/continue のskipIdentity=true | 同意待ちを省略し、元の依頼をlookup=falseで再送 |
+| job状態／eventsの取得 | 認証済みownerと照合。API pathはserver.pyのrouteが正本 |
 
-新しい会話ボタンはCookieのconversation参照を外す操作であり、Foundryの会話をDELETEしない。元版のClear Historyもserverの会話参照を破棄する処理なので、どちらもremote履歴削除の実装として移植しない。
+上記はAPI機能であり、既存UIに新しい省略ボタンを追加したという意味ではない。OBOを使わない運用は環境設定でも選べる。
 
-リロードすると `GET /api/state` から同じ会話を継続できるが、Browserは過去の文章を再取得しないため画面上のchatは復元されない。旧contractの会話を見つけた場合は新しいConversationを作り `conversationReset=true` を返す。次の応答生成には `previous_response_id` ではなく `conversation` を使う。
+## 4. 認証・相関・状態の注意点
 
-全利用者のturnは1つの `asyncio.Lock` で直列化し、1 worker／1 instanceを前提としている。[procurement.py:198](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement.py:198)、357行。これは現行PoCの会話更新方式であり、観測導入だけで移植先の並行制御を置換する必要はない。
+Webからのmetadataはuser hash／case／turn／Web trace ID／lookupの5項目。TokenはAuthorization headerだけに入れる。申請者名はGraphからHostedへ入り、Webからmetadataへ設定しない。
 
-観測用 `user.id`、業務用表示名、Foundry認証用Managed Identity tokenは用途が異なる。表示名をbaggageへ入れず、観測IDを認可の根拠にしない。元版のOBO関連処理を、このMI方式へ観測機能の一部として追加する必要はない。
+`refresh_token` はWeb→FoundryのToken取得方式である。検証対象のGraph OBOはFunctions側の `acquire_token_on_behalf_of()` で実行する別処理。名称が似ていても同じTokenや同じ交換処理ではない。
 
-## 6. ストリーミングを変えた部分
+OBO有効時にMIモードを指定するとエラーにする。委任Token取得失敗でMIへ自動切替せず、会話中の認証方式変更も拒否する。MIを選ぶ場合は名前取得を無効にして新規会話を使用する。
 
-現行Browserへのstreamは **NDJSON**。WebはFoundry Responses SDKのイベントを受け取り、公開progressと最終resultに変換する。元版のjob APIのSSE形式とは異なる。
+Webのjob・再開情報は **1workerのメモリ内**。App Serviceの再起動・再配布で消えるため、新しい会話を始める。複数worker化、永続化、完全な購買UI再設計は今回の変更に含めていない。
 
-```text
-Browser: POST /api/chat/stream {"message":"..."}
-  → Web: identity / Cookie / CSRF / owner確認、turn予約
-  → Foundry: responses.create(conversation=..., metadata=..., stream=True)
-  ← Foundry: response.output_text.delta
-  ← Browser: {"type":"progress","text":"..."} の行
-  ← Foundry: response.completed
-  ← Browser: {"type":"result","value":{公開応答・status・相関ID等}} の行
-```
+## 5. 配布と検証
 
-上記は契約の形を示す模式図。実装は [_stream_turn():294](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement.py:294) と [procurement.js:67](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/static/procurement.js:67)。
+配布ZIPはstartup.sh、root requirements、server.py、procurement_flow.py、telemetry.py、旧HTML/JS/CSSの8ファイルとLinux/Python 3.13依存を含む。旧購買専用procurement.py／procurement.* UIは参考ソースとして残るが収録しない。Oryx無効設定との組み合わせは[App Service設定](../deployment/appservice-settings.md)を参照。
 
-- [_stream_progress():274](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement.py:274) はstep／stateの許可リスト、messageの長さと改行を検査する。raw delta全体やTool引数をBrowserへ中継しない。
-- [procurement.py:317](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement.py:317) は最終 `response.completed` と `status=completed` を確認してresultを返す。deltaを受け取っただけでは成功扱いしない。
-- stream中のエラーはHTTP 200送信後にも発生し得る。[procurement.py:330](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement.py:330) でSpanをERRORにし、公開resultのtechnical ERRORと相関IDを返す。
-- generator自身でもbaggageをattach／detachし、終了時にlockを解放する。request関数の外で動くstreamの相関を維持する。
-- [procurement.js:74](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/static/procurement.js:74) は改行単位でJSONを読む。最終resultがなければ通信中断・完了未確認と表示する。進捗表示は最終responseへ置き換える。
-- 送信中は入力・送信・新しい会話を無効にし、終了時に戻す。現行に旧版のjob cancel／cursor再開APIはない。
-
-## 7. Observabilityと配備を一緒に合わせる
-
-`_lifespan()` では、署名key／HTTPS originの検証、会話lock、OTel Provider、Managed Identity、計装HTTPX、named Agent clientを構成する。[procurement.py:190](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement.py:190)。サンプルへ初期化を移す際は、観測用Providerと実際にSDKへ渡すHTTPX clientの対応を保つ。
-
-必要なWeb設定は `APPLICATIONINSIGHTS_CONNECTION_STRING`、`PROJECT_ENDPOINT`、`AGENT_NAME`、`WEB_APP_URL`、`WEBUI_SESSION_SIGNING_KEY` とEasyAuth設定。[infra/webui.bicep:94](/home/hnakajima/work/foundry-procurement-agent/infra/webui.bicep:94)。接続文字列・署名key・tokenの値はソースや資料に埋め込まない。
-
-userid伝播の実装詳細は本書3.4節、OTel依存は3.1節、初期化は3.2節、ログ記録は3.3節を参照。`PLATFORM_PROPAGATION` やHTMLの伝播注記は固定値であり、毎requestのManaged下流到達を計測した表示ではない。
-
-## 8. 移植時の対応順と確認項目
-
-| 順序 | 組み込むもの | 完了を確認する観点 |
-| --- | --- | --- |
-| 1 | Agentの公開応答契約 | `web-json-v1` の最終JSONから公開文章・候補・statusを取得できる |
-| 2 | backendの認証・会話管理 | 未認証、別owner、CSRF不一致を拒否し、正しい利用者は会話を継続できる |
-| 3 | frontendとAPI | `{message}`、候補ボタン、NDJSON、通信中断時の表示が対応する |
-| 4 | 購買の対話 | 商品選択 → 数量 → 部署 → メモ → 確認 → 確定を進め、追加情報待ちも正しく表示する |
-| 5 | OTel初期化・相関 | Web送信Spanのtraceparent／baggage一致、会話・turn・response IDを確認する |
-| 6 | requirements・startup・ZIP | 実際に起動する購買backendと必要asset／観測依存が同梱される |
-| 7 | 配備先での確認 | MI権限、EasyAuth、Named Agent接続、Trace収集・Managed境界を実測する |
-
-ローカルの根拠テストは [test_webui.py](/home/hnakajima/work/foundry-procurement-agent/tests/unit/test_webui.py) と [test_conversation_intake.py](/home/hnakajima/work/foundry-procurement-agent/tests/integration/test_conversation_intake.py)。今回の資料更新ではブラウザ実操作・Azure再測定・移植先との統合は実施していない。
+最終全体回帰は234 passed、1 skipped、2 subtests。同梱したWeb依存での回帰は22 passedと2 subtests。実Webから同意後に名前表示を確認し、Web→Hosted→Functions→GraphのTraceも照合済み。Web全購買シナリオは未検証であり、[検証記録](../report/validation-results-2026-09-08-obo.md)で分けて記載する。

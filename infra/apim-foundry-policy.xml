@@ -1,0 +1,16 @@
+<policies>
+  <inbound>
+    <base />
+    <validate-azure-ad-token tenant-id="__TENANT__" header-name="Authorization" failed-validation-httpcode="401" output-token-variable-name="validated-token">
+      <audiences><audience>https://ai.azure.com</audience></audiences>
+    </validate-azure-ad-token>
+    <choose>
+      <when condition="@{ var jwt = (Jwt)context.Variables[&quot;validated-token&quot;]; var scp = jwt.Claims.GetValueOrDefault(&quot;scp&quot;, &quot;&quot;); return (String.IsNullOrEmpty(scp) &amp;&amp; jwt.Claims.GetValueOrDefault(&quot;oid&quot;, &quot;&quot;) == &quot;__WEB_PRINCIPAL__&quot;) || (!String.IsNullOrEmpty(&quot;__WEB_CLIENT__&quot;) &amp;&amp; scp.Split(' ').Contains(&quot;user_impersonation&quot;) &amp;&amp; jwt.Claims.GetValueOrDefault(&quot;azp&quot;, jwt.Claims.GetValueOrDefault(&quot;appid&quot;, &quot;&quot;)) == &quot;__WEB_CLIENT__&quot;); }" />
+      <otherwise><return-response><set-status code="403" reason="Forbidden" /></return-response></otherwise>
+    </choose>
+    <set-header name="Ocp-Apim-Subscription-Key" exists-action="delete" />
+  </inbound>
+  <backend><forward-request timeout="210" buffer-response="false" fail-on-error-status-code="false" /></backend>
+  <outbound><base /></outbound>
+  <on-error><base /></on-error>
+</policies>

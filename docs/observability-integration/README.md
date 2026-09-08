@@ -1,673 +1,207 @@
-# Plan&Execute購買支援サンプルへのObservability組み込みガイド
+# Plan&Execute購買支援サンプルへのObservability統合ガイド
 
-作成日: 2026-09-06 / 更新日: 2026-09-07 / 調査対象: このリポジトリの作業ツリー
+更新日: **2026-09-08**。対象は最新の作業ツリーと、指定RGへ配備したHosted v33／OAuth Web／OBO Functions。未コミットの実装を含むため、HEADだけでは内容を特定できない。関数・行番号・SHA-256は[ソース索引](source-map.md)を参照する。
 
-最終照合HEAD: `6cbdec83b2daefebb11350a1cc97781a6c55a260` / branch: `main`
+今回の実装・配備・実ユーザーのWeb同意／名前表示確認は完了した。Web → APIM → Hosted → Toolbox → Functions → GraphのOBO成功とTrace相関を確認済み。Webからの購買全シナリオ、複数実ユーザー、同意失効後の再実行は未検証である。[検証記録](../report/validation-results-2026-09-08-obo.md)に実測範囲を記載した。
 
-前回資料の基準HEAD: `483d79c80a37c1dd6762c5fd97cbaf6b50963240`。今回の更新はAzure Core検証を取り込んだ最新mainを基準とする。
+移植先のサンプルソースは未提供である。本書の「Planner」「Executor」「商品検索Tool」「部署検索Tool」は移植先の役割を指し、実在を確認したファイル名ではない。ソース内検索Toolを残したままOTelを組み込める。
 
-**移植の中心はHostedAgentの `observability.py`、Planner／Executor周辺のSpanとイベント、App Serviceの `backend/procurement.py` にある初期化と相関処理である。** 商品・部署検索をソース内Toolのまま残しても、これらを組み込める。
+## 1. 資料の読み方と現在の構成
 
-一方、`functions-mcp-selfhosted`にはOTelの明示的な初期化・業務Spanがまだない。現在の購買検索はPrompt Agent → Foundry Toolbox → Azure AI Searchで実行する。Functionsを検索Toolの配置先にする場合は、Toolの外部化とFunctionsへの計装を新規に行う。
-
-関連資料は次のとおり。
-
-| 資料 | 用途 |
+| 資料 | 内容 |
 | --- | --- |
-| 本書 | 現行実装の詳細、移植範囲、Plan&Executeとの対応、設定、確認手順 |
-| [組み込みコード例](/home/hnakajima/work/foundry-procurement-agent/docs/observability-integration/integration-examples.md) | ソース内Toolを残す例、Functionsへ新設する例、ログ送信を追加する例 |
-| [HostedAgent: agent_as_toolの呼出し箇所と順序](/home/hnakajima/work/foundry-procurement-agent/docs/observability-integration/hosted-agent-as-tool.md) | 登録と実呼出し、Controllerの順序、turnごとの再利用、最新Synthetic検証経路 |
-| [App Service: 購買支援向けの変更点](/home/hnakajima/work/foundry-procurement-agent/docs/observability-integration/appservice-procurement-changes.md) | 元OAuth版との比較、購買UI／API／会話管理／公開応答／NDJSON stream |
-| [ソース索引・調査時点のハッシュ](/home/hnakajima/work/foundry-procurement-agent/docs/observability-integration/source-map.md) | ファイル・関数・行番号と、参照した作業ツリーの同一性確認 |
-
-移植先サンプルのソースは未提供のため、移植先の実ファイル名・SDK・シグネチャは未確認である。以下の「Planner」「Executor」「商品検索Tool」「部署検索Tool」は役割名であり、存在を確認した移植先ファイル名ではない。元サンプルの実装を変更せず、役割に対応する境界へ観測処理を追加する前提で説明する。
-
-前回Snapshotと最新ソースを比較し、行番号・関数索引・ハッシュを更新した。最新mainの参照ファイルと作業ツリーの内容が一致することも照合した。SDKの実装はローカル`.venv`も参照しているため、再現時はソース索引のSDKバージョンを合わせる。保存済みのAzure配備報告は既存の実測として扱い、今回Azure環境の再照会・配備は行っていない。
-
-今回追加した要点は次のとおり。
-
-- Hostedの子Agent呼出しは `FoundryAgent.as_tool()` → Controllerのinvoker → `tool.invoke()`。Catalog → Code → merge_validateの順序はControllerが制御し、確認・確定では保存結果を再利用する。
-- 最新HostedにはSynthetic検証用の `semantic.evaluate` とmetadata gateがある。通常の購買Spanとは用途を分け、Hosted全体をコピーする場合の新しいimport依存も確認する。
-- App Serviceの購買向け変更は、リポジトリに残る元OAuth版との比較として補足した。前回Snapshot収録のWeb本体・設定・テストは今回も内容が一致し、直近のWeb仕様変更を意味しない。
-
-## 1. 全体構成と移植する範囲
-
-### 1.1 現行の2つの経路
+| 本書 | コンポーネント別のrequirements、初期化、記録、userid、移植範囲 |
+| [組み込みコード例](integration-examples.md) | 既存Plan&Execute／ソース内Toolへの挿入例、Functionsへの適用 |
+| [Agent Toolの呼び出し順](hosted-agent-as-tool.md) | OBOとCatalog/Codeの登録・実行位置・再利用 |
+| [App Service変更点](appservice-procurement-changes.md) | 旧OAuth版の再利用と今回追加した部分 |
+| [OAuth/OBO実装詳細](oauth-wrapper-implementation.md) | 同意bridge、本人照合、SDKのTool名、配布方法 |
+| [Azure設定資料](../deployment/configuration.md) | App Service／APIM／Hostedの実設定・認証・RBAC |
+| [ソース索引](source-map.md) | 実ファイル・関数・行番号、Span/event/logging呼び出し、hash |
 
 ```mermaid
 flowchart LR
-  U[利用者] --> W[App Service: procurement.py]
-  W --> A[APIM]
-  A --> H[HostedAgent: procurement_agent]
-  H --> C[Catalog Prompt Agent]
-  H --> D[Code Prompt Agent]
-  C --> TC[Catalog Toolbox MCP]
-  D --> TD[Code Toolbox MCP]
-  TC --> S[Azure AI Search]
-  TD --> S
-  W -. Trace .-> AI[Application Insights]
-  H -. SDK Trace / 業務Span .-> AI
-  C -. Managed telemetry .-> AI
-  D -. Managed telemetry .-> AI
-  R[参考Web: server.py] --> F[参考Functions: whoami / greet]
-  F --> G[Microsoft Graph /me]
+    U[Browser / EasyAuth] --> W[App Service / server.py]
+    W -->|利用者委任Token| A[既存APIM]
+    A --> H[購買Hosted v33]
+    H --> I[内部OBO Agent Tool]
+    I --> T[Identity Toolbox / OAuth connection]
+    T --> F[Functions / whoami]
+    F -->|MSAL OBO| G[Graph /me]
+    H --> C[Catalog Prompt Agent v4]
+    H --> D[Code Prompt Agent v2]
+    C --> CT[Catalog Toolbox]
+    D --> DT[Code Toolbox]
+    CT --> S[Azure AI Search]
+    DT --> S
+    W -. OTel .-> AI[Application Insights]
+    H -. OTel .-> AI
+    F -. OTel .-> AI
+    A -. 診断 .-> AI
 ```
 
-Functionsの経路は購買E2Eとは別である。この区別は[リポジトリREADME](/home/hnakajima/work/foundry-procurement-agent/README.md:57)、起動コマンド、配備用ZIPの収録リストから確認した。
+Webは購買Hostedを1つ呼ぶラッパーで、表示名を取得・送信しない。Hostedの内部に専用OBO AgentをToolとして組み込み、既存OBOサンプルのFoundryToolbox方式を再利用した。旧環境の遠隔OBO Agentインスタンスを呼ぶ構成ではない。追加のOBO用APIM経路もない。Functionsは現在、名前取得用の稼働コンポーネントである。
 
-| 対象 | 現在の役割 | Traceの初期化 | アプリ独自の記録 | 移植方法 |
-| --- | --- | --- | --- | --- |
-| `procurement_agent` | Hosted親・Planner・業務Controller | `ResponsesHostServer`のSDK経由 | 通常業務4種類＋Synthetic評価1種類のSpan、状態イベント、相関属性 | 共通Recorderをコピーし、サンプルのPlanner／Executorへ挿入 |
-| `webapp-foundry-oauth/backend/procurement.py` | 購買Webの実行入口 | 独自Provider＋Azure Monitor Trace Exporter | HTTP Spanへの利用者・会話・応答ID、伝播チェック | lifespan・ASGI・HTTPX・identity・metadataの組を移植 |
-| `webapp-foundry-oauth/backend/server.py` | OAuth／OBO／Graph参考Web | 明示的なOTelなし | Python標準logging | 観測機能の移植元は `procurement.py` を使う |
-| `functions-mcp-selfhosted` | `whoami`／`greet`参考MCP | 明示的なOTelなし | Python標準logging | OTel依存・初期化・Tool Spanを新設 |
+## 2. HostedAgent：requirementsと観測初期化
 
-### 1.2 サンプルへ適用する3つの構成
+正本: [root requirements.txt](/home/hnakajima/work/foundry-procurement-agent/requirements.txt)、[requirements-lock.txt](/home/hnakajima/work/foundry-procurement-agent/requirements-lock.txt)。
 
-| 構成 | Toolの配置 | 必要な変更 | 今回のソースから利用するもの |
+| 依存 | 指定 | 役割 |
+| --- | --- | --- |
+| opentelemetry-api / opentelemetry-sdk | 各1.43.0 | Span／Context／Provider。MCP privacy hookもこの版に依存 |
+| agent-framework-core | 1.16.0 | Agent／Chat／Functionの標準計装 |
+| agent-framework-foundry-hosting | 1.0.0b260827 | ResponsesHostServer、Hostedの観測初期化 |
+| agent-framework-foundry | 1.11.0 | FoundryAgent、FoundryToolbox、FoundryChatClient |
+| agent-framework-openai | 1.14.1 | 現行モデルクライアント関連 |
+| agent-framework-devui | 1.0.0b260821 | ローカルDevUI。OTel移植だけなら必須ではない |
+| azure-identity / azure-ai-projects | 1.26.0b2 / 2.3.0 | Azure認証／Foundry接続 |
+
+`-c requirements-lock.txt` はインストールされる依存の版を制約する。現行lockではHosted SDK → azure-ai-agentserver-core 2.1.0 → microsoft-opentelemetry 1.3.8 → Azure Monitor exporter 1.0.0b56が入る。Hostedのroot requirementsへexporterを直接追加していなくても、この依存経路で導入される。移植先で異なるSDKを使う場合は依存を再確認し、既存lockを丸ごと置き換えない。
+
+| ID | ソース・関数 | 組み込む位置と内容 |
+| --- | --- | --- |
+| H-01 | [main](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted_app.py:150) | 起動時にGenAI message contentをfalse、propagatorを設定 |
+| H-02 | [ProcurementResponsesHostServer](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted_app.py:99) | 既存HostへOAuth同意bridgeを統合。OTelだけなら同意bridge自体は不要 |
+| H-03 | [configure_host_observability](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/observability.py:45) | Host生成時のconfigure_observability callback。SDK Provider/exporterを初期化 |
+| H-04 | [McpPrivacyProcessor](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/observability.py:26) | MCP例外message／stacktrace／status descriptionをexport前に除去 |
+| H-05 | [for_hosted_runtime](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/observability.py:116) | Hostが構成するglobal Providerを使うRecorder。Planner／Executorへ渡す |
+| H-06 | [_RequestCorrelationMiddleware](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted_app.py:26) | Responses metadataから相関ContextVarを設定し、finallyでreset |
+
+`TelemetryRecorder()` の引数なし生成はローカルのInMemorySpanExporterを作る。HostedのAzure送信では `for_hosted_runtime()` を使う。Providerをリクエストごとに生成しない。Host初期化前にRecorderを構築する現行の順序ではglobal proxy providerが使われ、Host設定後の記録は構成済みProviderへ到達する。
+
+MCP privacy processorは固定版OTel SDKの内部hook `_on_ending` を使用する。SDKを更新する際は `test_identity_tool.py` のexport前除去検証を行う。Agent／LLM／Tool本文、Token、氏名、OAuth同意URLを診断属性へ追加しない。
+
+## 3. HostedAgent：実際に記録する部分
+
+| 処理 | 記録箇所 | Span／主なevent・属性 | 移植先 |
 | --- | --- | --- | --- |
-| A: ソース内Toolを維持 | サンプル内の商品検索／部署検索関数 | 観測初期化とPlanner／Executor／Toolへの計装 | Hosted共通Recorder、status／correlation属性、必要ならWeb観測機能 |
-| B: 現行購買E2Eと同様にする | Prompt子＋Toolbox＋AI Search | 検索の委譲、入出力契約、接続・権限・配備を追加 | `FoundryAgent.as_tool()`、構造化handoff、2つのToolbox／Prompt定義 |
-| C: 自作Functions MCPへ外部化 | Functionsに商品検索／部署検索を実装 | MCPサーバー・検索実装・通信契約・Functions計装を追加 | FunctionsのASGI/MCP骨格、WebのExporter例、Hostedの業務Span設計 |
+| 構造化Plan生成 | [execute](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/controller.py:722) | `plan.create`、`plan.created`、plan.id/version | Plannerの計画構築部分 |
+| 商品検索 | [_run_catalog_step](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/controller.py:502) | `plan.step.execute`、step.started/completed、handoff検証、結果拒否、retry | 商品検索stepを実行するExecutor |
+| 部署・勘定科目検索 | [_run_code_step](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/controller.py:580) | `plan.step.execute`、step.started/completed、result.rejected | 部署検索stepを実行するExecutor |
+| 結果統合 | [_merge_validated](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/controller.py:640) | `merge.validate`、根拠・コード・業務結果の検証 | merge／最終検証 |
+| 応答確定 | [_finish](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/controller.py:381) | `response.generate`、`response.status` | 正常・確認待ち・失敗すべての応答境界 |
+| 名前取得 | [build_identity_tool](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/identity.py:83) 内lookup | `identity.lookup`、lookup.status、error.stage/type/rpc_code | 任意OBO Tool。通常の検索OTelだけなら不要 |
+| 検証専用 | [run_azure_validation](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/azure_validation.py:70) | `semantic.evaluate` | Synthetic Stage B評価。通常業務へ必須移植しない |
 
-Observabilityの導入だけならAで進められる。B/Cは検索の配置・実行方式も変更する。Cを選んでも、現在のFunctionsに商品検索や部署検索の実装は存在しないため、`whoami`をコピーするだけでは購買Toolにならない。
+現行 `plan.create` は `StructuredPlanBuilder.build()` の範囲であり、自然言語intakeのLLM処理全体ではない。PlannerのLLM SpanはFrameworkの標準計装で確認する。Agent/Chat/Functionの自動Spanを同名の手動Spanで二重生成しない。
 
-### 1.3 Trace、イベント、通常ログ、レスポンス内のtraceを区別する
+`TelemetryRecorder.span()` が許可するのは `plan.create`、`plan.step.execute`、`merge.validate`、`response.generate`、`semantic.evaluate` の5種類。`identity.lookup` はglobal tracerで直接作成する。ソース内Tool用の独自Spanも標準Tool計装の有無を確認して直接tracerを使用する。[コード例](integration-examples.md)を参照。
 
-| 記録形式 | このソースの例 | 何が分かるか | 注意点 |
-| --- | --- | --- | --- |
-| OTel Span | `telemetry.span("plan.step.execute", ...)` | 処理時間、親子関係、属性 | Application Insightsでは主に`requests`／`dependencies`で確認 |
-| OTel Span event | `telemetry.event(span, "step.completed", ...)` | Span中の状態変化と時刻 | `logger.info()`とは別。Exporterが変換した保存先で確認 |
-| Python logging | Functionsの`logger.warning(...)` | アプリの診断メッセージ | 標準loggingだけでOTel LogExporterが構成されたとは言えない |
-| 業務レスポンスのJSON | `ScenarioResult.trace` | UI向けのイベントや代替相関情報 | JSONに`trace`というキーがあってもOTel送信ではない |
-| SDK自動計装 | Agent、Chat、Function、HTTP Span | LLM／Tool／HTTPの実呼出し | 対象SDK経由で実行された処理を計装。普通の関数を直接呼ぶだけでは同じ保証にならない |
+結果は技術成否 `technical.status` と業務成否 `business.status` を分ける。通信成功でも候補なし・部署不明・確認待ちは起こる。実行していないMCPやSearchを成功扱いせず `NOT_RUN` 等で区別する。`test.case.id`、`app.turn.number`、plan.id/version/step.id、execution.attempt、Agent/Toolbox/index版、remote.task.id、gen_ai.response.idを適用可能なSpanへ記録する。
 
-標準Agent Framework計装とExport先の設定は別の責務である。現在のHosted SDKがExportを構成し、Frameworkとアプリがそこへ記録する。[Agent Framework公式Observability](https://learn.microsoft.com/en-us/agent-framework/agents/observability)も計装とExporterを分けて説明している。
+## 4. App Service：requirementsと初期化
 
-## 2. HostedAgent: procurement_agent
+稼働入口は **`backend/server.py`**。[startup.sh](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/startup.sh) が `uvicorn server:app --workers 1` を起動する。旧購買専用 `procurement.py` は配布ZIPに入らず、現在の移植元ではない。
 
-### 2.1 requirements.txtで移す依存関係
-
-正本はプロジェクト直下の[requirements.txt](/home/hnakajima/work/foundry-procurement-agent/requirements.txt:1)。`src/procurement_agent/requirements.txt`ではない。
-
-| 依存 | 現行指定 | 役割／移植要否 |
+| 依存 | 現行指定 | 役割 |
 | --- | --- | --- |
-| `opentelemetry-api` | `1.43.0` | trace、baggage、Span API。共通Recorderを使う場合に必要 |
-| `opentelemetry-sdk` | `1.43.0` | Provider、Resource、Processor、テスト用Exporter。Recorderをそのまま移す場合に必要 |
-| `agent-framework-core` | `1.16.0` | Agent／Chat／Functionの標準計装。移植先が同じFrameworkの場合 |
-| `agent-framework-foundry-hosting` | `1.0.0b260827` | `ResponsesHostServer`、Hosted起動と観測初期化 |
-| `agent-framework-foundry` | `1.11.0` | `FoundryAgent`／`FoundryChatClient`。B構成や同じモデルクライアントの場合 |
-| `agent-framework-openai` | `1.14.1` | 現行クライアント関連依存。OTelだけの必須依存とはしない |
-| `agent-framework-devui` | `1.0.0b260821` | ローカルDevUI。Observability移植だけなら必須ではない |
-| `azure-identity`／`azure-ai-projects` | `1.26.0b2`／`2.3.0` | Foundryアクセス。Exporterそのものではない |
+| opentelemetry-instrumentation-asgi | 0.64b0 | 受信HTTP Span |
+| opentelemetry-instrumentation-httpx | 0.64b0 | 実際に作成するHTTPX clientの送信Spanと伝播 |
+| azure-monitor-opentelemetry-exporter | 1.0.0b56 | Azure MonitorへのTrace送信。OTel SDKは依存として導入 |
+| msal / python-dotenv | 1.38.0 / 1.2.3 | OAuth token取得／設定読込み。観測ライブラリではない |
+| fastapi / uvicorn / httpx | 0.138.0 / 0.52.4 / 0.28.1 | WebとHTTP通信 |
 
-このrequirementsには `-c requirements-lock.txt` がある。constraintsは依存をインストールする命令ではなく、実際に導入される依存のバージョンを制約する。現行Hosted SDKの依存解決によって以下が入る。
+依存の正本は [requirements.txt](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/requirements.txt)。backendのrequirementsは `-r ../requirements.txt` を参照する。その他のFoundry依存も正本を使用する。現配布はLinux/Python 3.13の依存をZIPへ同梱し、Oryx buildを無効にしている。
 
-```text
-agent-framework-foundry-hosting
-  -> azure-ai-agentserver-core==2.1.0
-     -> microsoft-opentelemetry==1.3.8
-        -> azure-monitor-opentelemetry-exporter==1.0.0b56
-        -> OTel SDK / instrumentation / OTLP exporters
+| ID | ソース・関数 | 組み込み内容 |
+| --- | --- | --- |
+| W-01 | [lifespan](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/telemetry.py:55) | 1workerで1回Provider／Resource(service.name=procurement-webapp)／BatchSpanProcessor／TraceExporterを生成し、終了時shutdown |
+| W-02 | [server.py / FastAPI生成](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/server.py) | FastAPI生成時にlifespan=telemetry.lifespanを指定 |
+| W-03 | [Instrumentation](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/telemetry.py:75) | ASGI middlewareを構成。receive/send補助Spanを除外 |
+| W-04 | [BrowserBoundary](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/telemetry.py:90) | Browserから持ち込まれたtraceparent/tracestate/baggageをSpan作成前に破棄 |
+| W-05 | [http_client](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/telemetry.py:45) | client生成ごとにHTTPXを計装し、job属性をrequest hookで付与 |
+| W-06 | [job_context](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/telemetry.py:108) | user hash／case／turnをContextVarとbaggageへ設定し、finallyで解除 |
+| W-07 | [run](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement_flow.py:29) | `web.chat.job` → `auth.foundry.token` → `procurement.agent.invoke` を記録 |
+
+`procurement.agent.invoke` には実際の `gen_ai.conversation.id`／`gen_ai.response.id` を付与する。会話作成とResponses送信は計装済みHTTPXを通す。バックグラウンドjobでも文脈を維持し、例外本文ではなく `error.type` とERROR statusを記録する。
+
+## 5. useridと名前の連携
+
+| 段階 | 実装 | 受け渡すもの |
+| --- | --- | --- |
+| Web利用者確定 | [_get_request_user](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/server.py:349) | EasyAuthが渡したtid/oidから `SHA-256(lower(tid)+":"+lower(oid))` |
+| 会話・job所有者 | [_conversation_state_key](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/server.py:392) | 上記hashで利用者を分離。Browser指定の他人のjob/stateを使わせない |
+| Token主体照合 | [_validate_delegated_subject](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/server.py:638) | Foundry tokenのaud/tid/oid/scpを照合。署名検証はAPIM/Foundryが担当 |
+| Web → Hosted | [run](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement_flow.py:29) | metadata: `app.user.id`, `test.case.id`, `app.turn.number`, `app.web.trace_id`, `app.identity.lookup` |
+| Hosted相関 | [_RequestCorrelationMiddleware](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted_app.py:26) | `app.user.id`を観測属性 `user.id` へ対応付け、request終了で解除 |
+| OBO本人確認 | [verified_name](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/identity.py:52) | Functionsが返したsubjectHashとWebのhashを一致確認 |
+| 氏名の業務反映 | [_execute_hosted_components](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted.py:467) | SUCCESS時のみ氏名/source=graph_obo。省略・失敗turnでは両方を消去 |
+
+名前を取らない場合はnull。Webの表示名やBrowser入力を申請者名の代替にしない。同じ会話でOBO成功後に省略しても以前の名前を使わない。実際の氏名は必要な業務状態と画面応答に含むが、観測属性には含めない。hashは匿名化ではなく利用者相関用の仮名IDであり、認可用Tokenの代わりにはならない。
+
+OBOを使う現在のWebは `refresh_token` モード。Web MIにFoundry権限を付けるだけでは利用者の委任文脈は作れない。各境界のToken・MI・call IDは[設定資料](../deployment/configuration.md)で区別する。
+
+## 6. Functions：requirements、初期化、記録
+
+現行Functionsは **whoamiのOBO処理へOTelを実装済み**。商品検索／部署検索はFunctionsに存在せず、現在もPrompt Agent → Toolbox → Azure AI Searchで実行する。
+
+| 依存 | 指定 | 役割 |
+| --- | --- | --- |
+| opentelemetry-sdk | 1.43.0 | 明示的Provider・Span・W3C traceparent |
+| azure-monitor-opentelemetry-exporter | 1.0.0b56 | Azure Monitor Trace送信 |
+| mcp | >=1.28,<2 | FastMCP。2系では使用中APIが変わるため上限あり |
+| msal / requests | >=1.31.0 / >=2.31.0 | MSAL OBO、Graph呼び出し |
+| azure-functions / httpx | 正本参照（固定なし） | Functions ASGI／HTTP基盤 |
+
+正本: [requirements.txt](/home/hnakajima/work/foundry-procurement-agent/src/functions-mcp-selfhosted/requirements.txt)。Web／Hostedと別のパッケージ環境で導入する。
+
+| ID | ソース・関数 | 実装内容 |
+| --- | --- | --- |
+| F-01 | [mcp_telemetry.py](/home/hnakajima/work/foundry-procurement-agent/src/functions-mcp-selfhosted/mcp_telemetry.py) module初期化 | workerごとに1回Provider、service.name=procurement-obo-functions、BatchSpanProcessor／TraceExporterを構成 |
+| F-02 | [carrier_from_mcp](/home/hnakajima/work/foundry-procurement-agent/src/functions-mcp-selfhosted/mcp_telemetry.py:33) | MCP request metadataのtraceparentを検査して抽出 |
+| F-03 | [step](/home/hnakajima/work/foundry-procurement-agent/src/functions-mcp-selfhosted/mcp_telemetry.py:21) | Span開始、例外型とstatus記録。生例外本文は記録しない |
+| F-04 | [whoami](/home/hnakajima/work/foundry-procurement-agent/src/functions-mcp-selfhosted/mcp_server.py:472) | `mcp.whoami` を開始し、MCP由来の親contextを適用 |
+| F-05 | [build_whoami_response](/home/hnakajima/work/foundry-procurement-agent/src/functions-mcp-selfhosted/mcp_server.py:359) | `auth.obo.exchange`、`graph.me` をOBOとGraph呼び出しの前後に配置 |
+| F-06 | [record_outcome](/home/hnakajima/work/foundry-procurement-agent/src/functions-mcp-selfhosted/mcp_telemetry.py:42) | lookup.statusと、成功時の検証済みuser.id hashを記録 |
+| F-07 | [deploy-functions-zip.sh](/home/hnakajima/work/foundry-procurement-agent/src/functions-mcp-selfhosted/scripts/deploy-functions-zip.sh)／[deploy-functions-zip.ps1](/home/hnakajima/work/foundry-procurement-agent/src/functions-mcp-selfhosted/scripts/deploy-functions-zip.ps1) | 新規mcp_telemetry.pyをZIPの許可リストへ追加 |
+
+受信TokenのoidとGraph /meのidが両方存在し一致することを確認する。結果はTool名／auth_mode／表示名／subjectHashを含む最小構造にし、全プロフィールやTokenを戻さない。Functions root Spanのuser.idが子Spanすべてへ自動コピーされるという意味ではない。子のOBO／Graphは親子関係とTrace IDで結ぶ。
+
+## 7. Span、event、通常loggingの区別
+
+| 種類 | 実装例 | 記録内容と確認先 |
+| --- | --- | --- |
+| OTel Span | Recorder.span / telemetry.observe / mcp_telemetry.step | 処理時間・親子関係・status。Application Insights requests/dependencies等 |
+| Span event | Recorder.event / span.add_event | 計画作成、step完了、結果拒否。Exporterの変換先を確認 |
+| Python logging | Web server.py、Functions mcp_server.py | 認証経路、状態変化、HTTP status等の診断。機密値を除いた出力 |
+| 業務JSON | ScenarioResult.trace、Web SSE | 利用者へ返す契約。キー名traceだけではOTel送信を意味しない |
+| APIM診断 | API diagnostic | W3C相関、100% sampling、headers空／body 0byte |
+
+WebとFunctionsが明示的に構成するのはTraceExporterであり、Python logging用のOTel LogExporterは構成していない。App Service/Functionsプラットフォームによるstdout等の収集は別経路。全logger出力が同じTraceに自動相関するとは扱わない。現在のlogger箇所は[ソース索引](source-map.md)へ抽出した。OTel Logsが追加で必要な場合の最小例は[コード例](integration-examples.md)に分けた。
+
+HostedではGenAI本文記録を無効にしMCP例外内容も除去する。Managed Prompt側のcontent recordingはサービス側の制約があり、全管理Spanの本文が必ず無効という保証はない。特定OBO成功Traceの内容検査と、環境全体の恒久的な保証を混同しない。
+
+## 8. サンプルへの移植手順
+
+| 構成 | 維持するもの | 追加・統合するもの |
+| --- | --- | --- |
+| A：ソース内Tool維持 | サンプルのPlanner／Executor／検索関数 | Hosted観測初期化、同じProviderのRecorder、各step境界・status・相関 |
+| B：現行検索方式 | サンプルの業務フロー | Catalog/Code Agent Tool、構造化handoff、Toolbox/Search設定と権限 |
+| C：Functionsへ検索外部化 | 検索の業務契約 | MCP検索実装、mcp_telemetry.py、traceparent metadataの抽出、配布設定 |
+| 任意OBO追加 | A/B/Cいずれにも組み合わせ可能 | identity.py、Hosted同意bridge、nullable氏名、OAuth connection／whoami Functions |
+
+1. サンプルの実ファイルとPlanner・Executor・Tool・Web入口の対応表を作る。
+2. requirementsと既存Providerを照合し、process単位の初期化を統合する。
+3. Planner、各attempt、Tool、merge、応答にSpan/eventを追加する。既存の業務順序を変えない。
+4. Webの認証済みhashとcase/turn/会話IDを伝え、ContextVarの解除まで移植する。
+5. OBOが必要ならTool・同意待ち・本人照合・null消去を一組で移植する。
+6. Functions検索を新設する場合はwhoami固有のGraphコードではなく観測モジュールとMCP境界を再利用する。
+7. ローカルで状態分離と成否を確認し、Azureで実際の親子Spanと属性を確認する。
+
+`traceparent`を送るコードがあるだけで全経路の単一Trace成立を判定しない。今回の実Web OBOは同じOperationIdを確認済みだが、別sample・別SDK・別管理境界では再検証する。途切れた境界は `NOT_PROPAGATED`、プラットフォームが記録しない属性は `NOT_RECORDED_BY_PLATFORM` とし、Conversation／case／response／remote task IDで補完する。
+
+## 9. 確認方法と完了範囲
+
+2026-09-08の最終実装検証は **234 passed、1 skipped、2 subtests**。skipは明示的なAzure gateによる。今回の資料更新では実装を変更せず、Azure設定の再読取り、参照ソース・リンク・hashの検査を行った。
+
+```kusto
+union AppRequests, AppDependencies
+| where TimeGenerated > ago(7d)
+| where OperationId == "ac05d5d0796bca9975933c1647ace37f"
+| project TimeGenerated, AppRoleName, Name, OperationId, Id, ParentId, Success,
+          LookupStatus=tostring(Properties["app.identity.lookup.status"])
+| order by TimeGenerated asc
 ```
 
-上記は[requirements-lock.txt](/home/hnakajima/work/foundry-procurement-agent/requirements-lock.txt:21)とローカル`.venv`の配布メタデータで確認した。**このリポジトリではHostedのrequirementsにAzure Monitor Exporterを直接書いていなくても、Hosted SDKの推移的依存として含まれる。** 別SDK／別バージョンへ同じ前提を持ち込まず、移植先の依存解決を確認する。
+上記はLog Analytics workspace側のテーブル名。Application Insights側のquery scopeでは `requests/dependencies`、`timestamp/operation_Id/customDimensions` 等へ読み替える。保持期間を過ぎた検証Traceは参照できない。
 
-移植先に別のlockがある場合、プロジェクト全体のlockを丸ごと上書きしない。必要な依存を統合し、その環境で解決・固定する。現行ソースはPython `>=3.13,<3.15`、Hosted配備は`python_3_13`を指定している。
-
-### 2.2 ソース内の初期化箇所
-
-| 移植ID | 実ファイル・位置 | 処理 | サンプルで組み込む場所 |
-| --- | --- | --- | --- |
-| H-01 | [hosted_app.py:84](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted_app.py:84) `main()` | message content captureをfalse、propagator既定を設定 | プロセス起動時、Host生成前 |
-| H-02 | [hosted_app.py:102](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted_app.py:102) | `ResponsesHostServer(bundle.parent)` | 既存Hosted起動処理。Hostが同じなら重複追加しない |
-| H-03 | [observability.py:66](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/observability.py:66) `TelemetryRecorder` | 共通Span／event／content保護 | サンプルの共通観測モジュール |
-| H-04 | [observability.py:88](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/observability.py:88) `for_hosted_runtime()` | global Providerを利用 | Hosted用Recorderの生成場所 |
-| H-05 | [hosted.py:241](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted.py:241) | RecorderをControllerへ渡す | Planner／Executorに同じRecorderを注入 |
-
-現行の起動コードの要点は次である。抜粋のためその他の起動処理は省略している。
-
-```python
-os.environ["OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"] = "false"
-os.environ.setdefault("OTEL_PROPAGATORS", "tracecontext,baggage")
-bundle = build_hosted_bundle(FoundryRuntimeSettings.from_env())
-server = ResponsesHostServer(bundle.parent)
-server.add_middleware(_RequestCorrelationMiddleware)
-server.run(host=args.host, port=args.port)
-```
-
-`ResponsesHostServer`の基底Hostが、接続文字列を読み、`microsoft-opentelemetry`経由でTrace／Log等のProvider・Exporterを設定する。この呼出しはアプリの `observability.py` 内には書かれていない。ローカルにインストールされた `azure.ai.agentserver.core._base` と `_tracing` の実装まで確認した。
-
-Foundry HostedではApplication Insights接続文字列をプラットフォームから注入する仕組みがあり、移植先でもProjectとApplication Insightsの接続を確認する。[Hosted Agent配備の公式資料](https://learn.microsoft.com/en-us/azure/foundry/agents/how-to/deploy-hosted-agent)
-
-**注意する初期化の違い:**
-
-- `TelemetryRecorder()`は独立Provider＋`InMemorySpanExporter`を作る。主にローカル検証用であり、これだけではApplication Insightsへ送らない。
-- Hostedでは `TelemetryRecorder.for_hosted_runtime()` を使う。global Providerが後から初期化される場合のProxyも含め、Host側の送信経路を使用する。
-- Web用の独立`TracerProvider`生成処理をHosted起動へ重ねて追加しない。標準Spanと業務Spanが同じProvider経路へ送られる構成にする。
-- 別のHostedランナーを使うサンプルでは、そのランナーにProvider初期化があるか確認する。なければ別途Exporterを構成する必要がある。
-
-### 2.3 ソース内で記録している部分
-
-| Span／記録 | 実ファイル・位置 | 現行の計測範囲 | Plan&Execute側の挿入位置 |
-| --- | --- | --- | --- |
-| `plan.create` | [controller.py:780](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/controller.py:780) | 構造化Planの検証・構築、version付与 | Planner結果をPlanとして確定する処理 |
-| `plan.step.execute` 商品 | [controller.py:523](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/controller.py:523) | 商品検索の呼出し、出力検証、結果判定 | 商品検索Stepの1 attempt全体 |
-| `plan.step.execute` コード | [controller.py:603](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/controller.py:603) | 勘定科目／部署コード取得と検証 | 部署検索／コード決定Stepの1 attempt全体 |
-| `merge.validate` | [controller.py:655](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/controller.py:655) | 商品・コードの統合、申請案、予算検証 | Executor結果をまとめる検証処理 |
-| `response.generate` | [controller.py:405](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/controller.py:405) | 最終machine statusの記録 | 成功・確認待ち・失敗の最終結果を返す処理 |
-| 会話だけの応答status | [hosted.py:424](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted.py:424) | 挨拶・本人名確認のstatus | 検索を実行しない会話の終了処理 |
-| Planner例外の分類 | [hosted.py:592](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted.py:592) | `error.type`、取得できる場合のHTTP status | Planner呼出しの例外処理 |
-| `semantic.evaluate` | [azure_validation.py:187](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/azure_validation.py:187) | Synthetic検証の評価結果・設定hash・content境界の記録 | 同じ評価Harnessを移す場合のみ。通常購買では作らない |
-
-**計測時間の読み方:** 現行のPlanner LLM呼出しは [hosted.py:526](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted.py:526) にあり、`plan.create`の外である。`plan.create`のdurationをLLMの計画生成時間と解釈しない。`response.generate`も主にstatusイベントを記録する短いSpanであり、LLM応答生成やHTTPストリーミング全体の時間ではない。移植先でPlanner全体を囲む場合は計測範囲が変わることを資料・ダッシュボードに明記する。
-
-#### 主要イベント
-
-| イベント | 記録場所／契機 | 主な属性 |
-| --- | --- | --- |
-| `plan.created` | Plan構築完了 | `plan.id`, `plan.version` |
-| `step.started` | 検索／統合開始 | `plan.step.id`, 検索時は`execution.attempt` |
-| `handoff.payload_validated` | 構造化入力検証後 | `agent.role` |
-| `handoff.output_rejected` | 子出力の形式／相関／呼出し失敗 | 制御された境界例外の`reason` |
-| `step.completed` | 成功したStepの完了 | `plan.step.id` |
-| `result.rejected` | 検索結果の不採用、仕様／予算不一致等 | `business.status`, 場所により`reason.code` |
-| `step.retry_scheduled` | 商品検索の再試行を予定 | 次の`execution.attempt` |
-| `plan.replanned` | 商品なしの再計画で利用者確認へ | `business.status=WAITING_USER` |
-| `step.failed` | 再計画後も失敗 | `business.status`, `failure.layer` |
-| `response.status` | 最終結果確定 | 各層status、case、turn、plan |
-
-`PlanExecutor.events`は業務stateにも保存されるが、全要素が自動でOTelへ送信されるわけではない。OTelとして送るのは `telemetry.event()`を呼んだ箇所である。[plan.py](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/plan.py)
-
-#### 相関属性とstatusの共通化
-
-移植元は [controller.py:191](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/controller.py:191) の `operation_status_attributes()`、`correlation_attributes()`、`apply_operation_status()`。既存のサンプルのstatusモデルに合わせてこれらの辞書生成部分を移す。Controller全体をコピーする必要はない。
-
-| 属性 | 意味と移植時の扱い |
-| --- | --- |
-| `test.case.id` | 実行の検索キー。Webでは同じ会話の複数turnに共通 |
-| `app.turn.number` | Framework側のturn。Web送信番号はHosted middlewareで`app.web.turn.number`へ分ける |
-| `app.session.id`／`app.session.id.hash` | Framework Session。現行は場所により生Session IDとhashが混在。全Spanがhashのみとは記載しない |
-| `gen_ai.conversation.id` | Foundry会話ID。Framework Session IDと同一ではない |
-| `plan.id`, `plan.version`, `plan.step.id`, `execution.attempt` | Planの世代、Step、試行番号 |
-| `parent.invocation.id`, `remote.task.id` | アプリがUUIDで生成するhandoff相関ID。Foundryが発行したTask IDではない |
-| `agent.role`, `agent.definition.id`, `toolbox.name`, `search.index.name` | 実際に呼ぶ役割・検索対象。ソース内Toolなら存在しないToolbox名を付けない |
-| `http.status_code` | OperationStatus内のHTTP値。HTTP transportで実測した値と区別して確認 |
-| `technical.status`, `outer.technical.status` | 内側処理と外側処理の技術的成否 |
-| `mcp.status`, `search.status`, `parse.status` | MCP、検索、構造化応答パースの結果 |
-| `business.status`, `inner.business.status` | 最終業務結果と内側業務結果 |
-| `failure.layer`, `retryable`, `reason.code` | 障害層、再試行可否、制御された理由コード |
-
-OTelの `Span.status` と上記の業務statusは別である。現行の `apply_operation_status()`は属性を設定するだけで、OTel statusをERRORへ変更しない。商品0件や利用者確認待ちはHTTP 200・technical SUCCESSでも成立する。トレースの`success=true`だけで購買処理成功と判定しない。
-
-### 2.4 Hostedで受け取る相関とユーザー情報
-
-1. [hosted_app.py:25](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted_app.py:25) `_RequestCorrelationMiddleware`がResponses本文の`conversation`と`metadata`を読む。
-2. 検証済みの会話ID、case、turn、client contractを`request_correlation`のContextVarへ設定し、終了時にresetする。
-3. [observability.py:26](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/observability.py:26) `current_request_attributes()`がContextVarとbaggageを合成する。`user.id`は64桁の小文字16進hashの場合のみ採用する。
-4. [hosted.py:142](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted.py:142) `ControllerContextProvider.before_run()`がcurrent Spanへ属性を追加し、Controller内の業務Spanにも渡す。
-5. 最終結果には`trace.correlation`とFramework Session ID hashを付け、Webが限定的に利用する。
-
-Trace ContextのHTTP抽出自体はHost SDKのmiddlewareが担当する。`_RequestCorrelationMiddleware`は本文metadataの抽出であり、手書きの `propagate.extract()`はない。
-
-`app.authenticated.display_name`は別のContextVar `authenticated_applicant_name`へ格納する。申請者名として業務処理・会話stateで使うが、`request_correlation`やbaggageの属性には追加しない。これは本人名の業務連携であり、OTelの仮名化`user.id`とは用途が異なる。
-
-### 2.5 content保護とコピー時の調整
-
-[observability.py:56](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/observability.py:56) `sanitize_attributes()`はキーに`secret`、`password`、`token`、`chain_of_thought`を含む属性を除く。値のPIIを検出する汎用マスキング機構ではない。例えば`reason`というキーへ生の例外文字列を入れると、その値の内容は保護されない。
-
-`protect_content()`は入力のhashと文字数を生成し、明示的なsynthetic環境のcontent-on時だけrawを含める。この関数が存在することと、全runtime payloadが自動でhash化されることは別である。ローカルTrace評価に加え、最新の [azure_validation.py:113](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/azure_validation.py:113) でもsystem prompt／Tool定義の証拠生成に使う。Hostedの全リクエストに適用するmiddlewareではない。
-
-移植先では、ユーザー入力、Tool引数／戻り値、氏名、claim、Authorization、例外本文を観測属性へ直接渡さず、件数・分類・理由コード・必要なIDを明示的に選ぶ。外部例外が`with telemetry.span(...)`の外へ伝播するとOTel標準の例外記録でメッセージが保存され得るため、Tool境界で例外型と制御された結果に変換する組み込み例を別紙に示す。
-
-### 2.6 Hosted以外にも必要になる設定資産
-
-| 資産 | 必要になる場合 |
-| --- | --- |
-| [scripts/package_hosted.py:14](/home/hnakajima/work/foundry-procurement-agent/scripts/package_hosted.py:14) | Source ZIPで移植モジュールとrequirements／constraintsを配備するとき |
-| [scripts/deploy_foundry.py:69](/home/hnakajima/work/foundry-procurement-agent/scripts/deploy_foundry.py:69) | Foundry ProjectとApplication Insights接続を再現するとき。接続文字列を資料に転記しない |
-| [azure.yaml:48](/home/hnakajima/work/foundry-procurement-agent/azure.yaml:48) | Hosted entrypoint、Python runtime、env設定の再現 |
-| [Toolbox設定](/home/hnakajima/work/foundry-procurement-agent/docs/deployment/toolboxes-and-search-mcp.md) | B構成を採用するときだけ |
-| [Prompt Agent設定](/home/hnakajima/work/foundry-procurement-agent/docs/deployment/prompt-agents.md) | B構成の子Agent／server-side telemetryを用意するときだけ |
-| [trace_pipeline](/home/hnakajima/work/foundry-procurement-agent/src/trace_pipeline/envelope.py) | 同じ正規化・Failure Pattern評価を移すとき。最新Hosted本体をそのままコピーする場合もimport依存として一部が必要 |
-
-標準計装と業務Spanの導入だけなら、PoCのS1～S5シナリオ、fault injection、detector、全業務Controller、ローカルMCP fixtureを丸ごと移す必要はない。
-
-ただし最新の `hosted.py` は `azure_validation.py` をimportする。Hosted本体をそのまま移す場合、[package_hosted.py:25](/home/hnakajima/work/foundry-procurement-agent/scripts/package_hosted.py:25) の `trace_pipeline/__init__.py`、`detectors.py`、`envelope.py`、`stage_b.py` も必要である。検証用環境変数をfalseにするだけではimport依存は消えない。
-
-### 2.7 agent_as_toolの呼出し箇所と順序
-
-詳細な抜粋・順序図・turn別の実行表は [HostedAgent補足資料](/home/hnakajima/work/foundry-procurement-agent/docs/observability-integration/hosted-agent-as-tool.md) を参照。
-
-| 確認すること | 実装箇所 | 読み取り |
-| --- | --- | --- |
-| 子AgentのTool化 | [hosted.py:217](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted.py:217)、222行 | Catalog／Codeのproxyを `as_tool(propagate_session=False)` で変換 |
-| 呼出し境界 | [hosted.py:437](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted.py:437) | `task` に構造化JSONを渡し、許可middlewareを通して `tool.invoke()` |
-| 呼出し順序 | [plan.py:25](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/plan.py:25)、[controller.py:724](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/controller.py:724) | Catalog → Code → merge_validate。Plannerの `tools=[]`、登録配列の順序だけに依存しない |
-| 複数turn | [controller.py:855](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/controller.py:855) | 商品候補・入力内容を保存し、情報が揃うまで待つ |
-| 確定 | [controller.py:806](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/controller.py:806) | 有効な保存Catalog／Codeを再利用し、remote再呼出しなしでmerge_validate |
-
-`agent_as_tool` と同名の手書きSpanを追加しない。通常業務の `plan.step.execute` で呼出し境界を囲み、Agent／Function等はFramework標準計装へ任せる。
-
-### 2.8 最新のSynthetic検証経路
-
-[hosted_app.py:52](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted_app.py:52) が環境変数、synthetic指定、contract、許可profile、`AZURE-CORE-` case IDをすべて検証した場合のみ、[hosted.py:155](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted.py:155) が通常Plannerを省略して `run_azure_validation()` を実行する。
-
-`TelemetryRecorder` の許可Span名は、通常の4種類に `semantic.evaluate` を加えた5種類。評価Spanには `evaluation.completed` と `app.validation.*` を記録する。S5は固定Synthetic文字列による保存長測定であり、通常ユーザー本文の記録とは別である。評価計算はSpan作成前に行うため、`semantic.evaluate` のdurationを評価処理全体の時間としない。
-
-現行PoCの配備スクリプトは `PROCUREMENT_ENABLE_SYNTHETIC_INJECTIONS=true` を設定する。通常購買への移植でHarnessを使わなければ、移植先は未設定またはfalseとする。gate・コピー範囲・追加ログの詳細は [HostedAgent補足資料](/home/hnakajima/work/foundry-procurement-agent/docs/observability-integration/hosted-agent-as-tool.md) の5節を参照。
-
-## 3. App Service: webapp-foundry-oauth
-
-### 3.1 実際に動くソースとrequirementsを選ぶ
-
-[startup.sh:18](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/startup.sh:18)は `uvicorn procurement:app --workers 1` を起動する。[package-procurement.py:12](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/scripts/package-procurement.py:12)が収録するPython本体も `backend/procurement.py` のみである。
-
-| ファイル | 観測依存／設定 | 移植時の扱い |
-| --- | --- | --- |
-| [ルートrequirements.txt](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/requirements.txt:1) | 購買WebのOryx build入力 | こちらを基準に必要依存を統合する |
-| [backend/requirements.txt](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/requirements.txt:1) | OAuth/Graph参考Web。OTel依存なし | 観測依存の移植元にはしない |
-| [backend/server.py:60](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/server.py:60) | `logging.basicConfig()` | Python通常ログ。OTel初期化ではない |
-
-現在の観測用直接依存は次の3つである。
-
-```text
-opentelemetry-instrumentation-asgi==0.64b0
-opentelemetry-instrumentation-httpx==0.64b0
-azure-monitor-opentelemetry-exporter==1.0.0b56
-```
-
-ASGIが受信HTTP、HTTPXが送信HTTPを計装し、ExporterがTraceをApplication Insightsへ送る。`opentelemetry-api`／`opentelemetry-sdk`はこのrequirementsでは推移的に導入される。別サンプルへ移植する場合は互換な組み合わせで固定する。
-
-他の直接依存は `fastapi==0.138.0`, `uvicorn==0.52.4`, `azure-ai-projects==2.3.0`, `azure-identity==1.26.0b2`, `httpx==0.28.1`, `aiohttp==3.14.3`, `openai==2.54.0`。観測3依存を追加しても、実際に使用するHTTPクライアントが計装されていなければ送信Spanはできない。
-
-### 3.2 ソース内の初期化箇所
-
-全て以下の [procurement.py](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement.py) 内にある。
-
-| 移植ID | 位置 | 処理 | 移植先への組み込み |
-| --- | --- | --- | --- |
-| W-01 | 26–33行 | OTel関連import | 同じ観測モジュールへ追加 |
-| W-02 | 190–214行 `_lifespan()` | 独立Provider、Resource、BatchSpanProcessor、TraceExporter | 既存FastAPI lifespanの起動／終了へ統合 |
-| W-03 | 204行 | Trace Context＋BaggageのCompositePropagator | 起動時に一度設定 |
-| W-04 | 205–212行 | HTTPX client計装とSDKへの注入 | 実際にFoundryを呼ぶclientへ適用 |
-| W-05 | 220–236行 `_Instrumentation` | ASGI request Span、receive/send細分Span抑制 | アプリmiddlewareへ登録 |
-| W-06 | 112–126行 `_BrowserBoundary` | ブラウザ入力のtrace／baggage除去 | ASGI計装の外側で実行 |
-| W-07 | 173–187行 `_ObservedTransport` | HTTP送信時のheader一致確認 | 初期導入時の伝播検証に利用 |
-
-初期化の中心部分:
-
-```python
-app.state.provider = TracerProvider(
-    resource=Resource.create({"service.name": "procurement-webapp"})
-)
-if os.environ.get("APPLICATIONINSIGHTS_CONNECTION_STRING"):
-    from azure.monitor.opentelemetry.exporter import AzureMonitorTraceExporter
-    from opentelemetry.sdk.trace.export import BatchSpanProcessor
-    app.state.provider.add_span_processor(
-        BatchSpanProcessor(AzureMonitorTraceExporter())
-    )
-```
-
-このアプリはglobal Providerを置換せず、ASGI／HTTPXに `app.state.provider` を明示的に渡している。Webで独自Spanを追加するときも `request.app.state.provider.get_tracer(...)` を使うなど、同じProviderへ接続する。
-
-`APPLICATIONINSIGHTS_CONNECTION_STRING`が未設定ならExporterを登録しない。起動とSpan生成が成功してもAzureにTraceが届くとは限らない。正常なlifespan終了では `provider.shutdown()` を呼ぶ。
-
-HTTPXは以下の2行を組にして移す。instrumentorだけ追加してSDKが別clientを生成する状態にしない。
-
-```python
-HTTPXClientInstrumentor.instrument_client(http, tracer_provider=app.state.provider)
-# 同じhttpをproject.get_openai_client(..., http_client=http)へ渡す
-```
-
-Middlewareの登録順は `_Instrumentation`、次に `_BrowserBoundary`。この実装では後者が外側で動き、ブラウザが指定したTrace IDや`user.id`をサーバー側のrootとして採用しない。Functionsなど信頼するサービス間の入口へ、このブラウザ用header除去をそのままコピーすると分散Traceを切断する。
-
-### 3.3 ソース内で記録している部分
-
-| 実装位置 | 対象Span | 記録内容 |
-| --- | --- | --- |
-| [procurement.py:180](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement.py:180) | HTTPX送信CLIENT | `app.propagation.traceparent_present`、`traceparent_matches_span`、`baggage_user_id_matches` |
-| [procurement.py:347](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement.py:347) | Web受信SERVER | `user.id` |
-| [procurement.py:377](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement.py:377) | Web受信SERVER | `gen_ai.conversation.id`, `app.turn.number`, `test.case.id` |
-| [procurement.py:390](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement.py:390) | 非streamのWeb受信SERVER | `gen_ai.response.id` |
-| [procurement.py:323](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement.py:323) | streamのWeb受信SERVER | 完了イベントで`gen_ai.response.id` |
-| [procurement.py:399](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement.py:399) | 非streamエラー | OTel status ERROR、`error.type`。例外本文を出さない |
-| [procurement.py:330](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement.py:330) | stream中断／エラー | OTel status ERROR、`error.type` |
-
-`_ObservedTransport`はheaderを注入する関数ではなく、HTTPXの自動計装が注入したheaderを実際の送信地点で検査する。値そのものは保存せずbooleanを記録する。独自検証属性はAzure Monitorの標準HTTP属性変換に埋もれないよう `app.propagation.*` を使う。
-
-現行 `procurement.py`には `logger.info()`、独自`span.add_event()`、LogExporter、MetricReaderがない。業務statusはHostedの応答からUIに投影しており、Web Spanへ全statusを再設定してはいない。通常ログをApplication Insightsの`traces`でも確認したい場合の追加例は別紙に示す。
-
-### 3.4 useridを連携している部分
-
-```mermaid
-sequenceDiagram
-  participant E as EasyAuth
-  participant W as Web procurement.py
-  participant P as APIM / Foundry
-  participant H as HostedAgent
-  E->>W: X-MS-CLIENT-PRINCIPAL (tid / oid / name)
-  W->>W: SHA-256(tid + ':' + oid)
-  W->>W: SERVER span user.id + context baggage
-  W->>P: HTTP traceparent / baggage: user.id=hash
-  Note over P,H: 下流へのuser.id到達は別途実測が必要
-  P-->>H: 保持されたHTTP Trace Context
-  W->>P: Responses metadata (case / turn / display_name)
-  P->>H: conversation + metadata
-  H->>H: 相関ContextVarと業務用表示名を別々に保持
-```
-
-| 移植ID | 場所 | 内容 |
-| --- | --- | --- |
-| U-01 | [procurement.py:52](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement.py:52) `_identity()` | EasyAuthのtid/oidを検証しSHA-256で仮名化。欠落は401 |
-| U-02 | [procurement.py:83](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement.py:83) `_state()` | 署名Cookieのuserとログイン利用者を照合 |
-| U-03 | [procurement.py:348](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement.py:348) | root Spanへ`user.id`、active contextへbaggageを設定 |
-| U-04 | [procurement.py:363](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement.py:363) | Conversation metadataの`owner`を照合／作成 |
-| U-05 | [procurement.py:286](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement.py:286) `_response_metadata()` | case、turn、client contract、任意の表示名をHostedへ渡す |
-| U-06 | [procurement.py:295](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement.py:295) と337行 | stream generator内でもbaggage attach/detach |
-| U-07 | [procurement.py:407](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement.py:407) | request contextをfinallyでdetach |
-
-```python
-# _identity()の戻り値生成
-return hashlib.sha256(f"{tenant}:{oid}".encode()).hexdigest(), display_name.strip()
-
-# chat()での利用
-span.set_attribute("user.id", user)
-token = context.attach(baggage.set_baggage("user.id", user))
-# Foundry呼出し...
-# finally: context.detach(token)
-```
-
-SHA-256は安定した仮名化であり、完全な匿名化を保証するものではない。`_identity()`のBase64 decodeはJWT署名検証ではなく、EasyAuthが認証して付与したheaderを読む処理である。移植先もEasyAuthを使う場合は[authsettingsV2](/home/hnakajima/work/foundry-procurement-agent/infra/webui.bicep:117)の認証必須・HTTPS・issuer／audience設定と組にする。他の認証方式なら、その認証済みidentityから同等の観測IDを作る。[App ServiceのユーザーID取得仕様](https://learn.microsoft.com/en-us/azure/app-service/configure-authentication-user-identities)
-
-#### 3種類のID／名前を混同しない
-
-| 情報 | 現行の渡し方 | 用途 |
-| --- | --- | --- |
-| 仮名化`user.id` | Web Span属性＋baggage | トレース相関。認証／認可の証明には使わない |
-| `app.authenticated.display_name` | Responses本文のmetadata | 申請者名・利用者名の業務機能。Spanやbaggageへ入れない |
-| Managed Identity access token | SDKのAuthorization | WebからFoundryを呼ぶ認証。利用者のdelegated tokenではない |
-
-Responses本文のmetadataに`user.id`を入れる実装はない。Conversation metadataの`owner`も、Webが会話の所有者を管理するための値であり、Hostedへのuserid passthroughではない。
-
-`user.id`を送信してもOBOは発生しない。観測機能だけを移植するなら、参考 `server.py` のtoken取得／OBO、FunctionsのGraph認証処理を追加する必要はない。
-
-#### ストリーミングと非同期実行
-
-request関数でcontextを設定するだけでなく、遅れて実行されるstream generatorでもattach/detachしている。移植先がバックグラウンドjobやqueue方式なら、そのjob全体を覆うSpan寿命とcontext受け渡しを実装構造に合わせる。HTTP requestが終了した後の処理を、終了済みrequest Spanへの属性追加だけで観測しない。
-
-### 3.5 App Settingsと配備に含めるもの
-
-| 設定 | 現行の指定／用途 |
-| --- | --- |
-| `APPLICATIONINSIGHTS_CONNECTION_STRING` | Traceの送信先。値は環境設定から供給 |
-| `OTEL_PROPAGATORS=tracecontext,baggage` | W3C trace contextとbaggage。コード側でも明示設定 |
-| `OTEL_TRACES_SAMPLER=always_on` | PoCの収集方針。データ量増加も含め移植先で選択 |
-| `ENABLE_SENSITIVE_DATA=false` | 設定上の方針。Web独自loggerの内容を自動消去するスイッチではない |
-| `PROJECT_ENDPOINT`／`AGENT_NAME` | 接続先。現行はAPIM proxy＋named Hosted endpoint |
-| `WEB_APP_URL` | HTTPS origin。POSTのOrigin検証にも使用 |
-| `WEBUI_SESSION_SIGNING_KEY` | 会話Cookieの署名用。32 bytes以上。観測Exporterの認証とは別 |
-
-根拠は [infra/webui.bicep:94](/home/hnakajima/work/foundry-procurement-agent/infra/webui.bicep:94)。現行Webは1 worker／1 instanceを前提に全turnを1つの`asyncio.Lock`で直列化している。これは観測設定ではない。サンプルの会話管理を置換する場合、owner／turn相関の整合性を別途保つ。
-
-新しい共通観測ファイルを作った場合は、[package-procurement.py](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/scripts/package-procurement.py:12)の収録リストにも追加する。requirementsだけ変えても新モジュールは自動収録されない。
-
-### 3.6 参考server.pyの既存ログを移植する場合
-
-`server.py`にもTool開始／完了等の通常ログがあるが、購買WebのTrace処理とは別である。
-
-| 場所 | 既存ログ | 観測移植時の扱い |
-| --- | --- | --- |
-| [server.py:695](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/server.py:695) | Responses接続先・Agent・previous response ID | 必要なIDのみ新Spanへ移す |
-| [server.py:799](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/server.py:799)、885行 | Tool開始／完了、call ID | Tool lifecycleの挿入位置の参考 |
-| [server.py:977](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/server.py:977) | response完了／不完全stream | 完了条件と応答IDの相関を参考にする |
-| [server.py:757](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/server.py:757) | raw SSEの一部をDEBUG記録 | content-offの見本としてコピーしない |
-| [server.py:1101](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/server.py:1101) | HTTPエラー本文preview | 例外型・HTTP status・理由コードへ絞る |
-| [server.py:1139](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/server.py:1139) | 例外text／traceback | LogExporter接続前に記録内容を見直す |
-
-旧logger全体にLogExporterを付けるだけでは、現行購買Webの本文非記録と同じ動作にはならない。
-
-### 3.7 購買支援エージェント向けに変更した部分
-
-詳細な新旧比較と移植対応は [App Service補足資料](/home/hnakajima/work/foundry-procurement-agent/docs/observability-integration/appservice-procurement-changes.md) を参照。
-
-| 変更のまとまり | 主な移植元 | 購買版の動作 |
-| --- | --- | --- |
-| 起動・配備単位 | `startup.sh`、`package-procurement.py`、Webルートrequirements | `procurement.py` と購買HTML／JSを起動・収録する |
-| Agent接続・認証 | [procurement.py:190](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement.py:190) | MI＋計装HTTPX＋named Agent SDK。元版のOBO mode選択から変更 |
-| API・会話 | [procurement.py:343](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement.py:343) | `{message}`、Foundry Conversation、署名Cookie、owner／turn管理 |
-| 購買結果の公開 | [procurement.py:129](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement.py:129)、286行 | `web-json-v1` を要求し、公開文章・限定候補・status・相関情報へ投影 |
-| 購買UI | [procurement.js:26](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/static/procurement.js:26) | 商品候補ボタンと共通textarea。数量・部署・メモ・確認・確定の判断はHostedへ委譲 |
-| 進捗 | [procurement.py:294](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement.py:294) | Responsesイベントを公開NDJSONへ変換。元版のbackground job／SSEとはAPIが異なる |
-
-観測だけの移植と購買Web一式の移植では範囲が異なる。後者はHostedの公開応答契約と合わせる必要があり、移植先Agentが自由文だけを返す状態では現行 `_public_result()` のJSONパースに失敗する。
-
-## 4. Functions: functions-mcp-selfhosted
-
-### 4.1 要求項目に対する現状
-
-| 要求項目 | 調査結果 | ソース |
-| --- | --- | --- |
-| requirementsのObservability設定 | OTel／Azure Monitor Python依存なし | [requirements.txt:1](/home/hnakajima/work/foundry-procurement-agent/src/functions-mcp-selfhosted/requirements.txt:1) |
-| ソース内のObservability初期化 | Provider／Exporter／OTel middlewareなし | [mcp_handler:1](/home/hnakajima/work/foundry-procurement-agent/src/functions-mcp-selfhosted/mcp_handler/__init__.py:1) |
-| ソース内のOTelロギング | 明示的なSpan／event／user相関なし。通常loggingのみ | [mcp_server.py:15](/home/hnakajima/work/foundry-procurement-agent/src/functions-mcp-selfhosted/mcp_server.py:15) |
-| Functions Hostの接続先 | BicepにApplication Insightsとconnection stringあり | [main.bicep:70](/home/hnakajima/work/foundry-procurement-agent/src/functions-mcp-selfhosted/infra/azure/main.bicep:70)、134行 |
-| HostのOTel mode | `telemetryMode`なし | [host.json:1](/home/hnakajima/work/foundry-procurement-agent/src/functions-mcp-selfhosted/host.json:1) |
-| 商品検索／部署検索 | 未実装。Toolは`whoami`／`greet` | [mcp_server.py:459](/home/hnakajima/work/foundry-procurement-agent/src/functions-mcp-selfhosted/mcp_server.py:459) |
-
-現在のrequirementsは次だけである。
-
-```text
-azure-functions
-msal>=1.31.0
-requests>=2.31.0
-httpx
-# mcp 2.x removed mcp.server.fastmcp, which mcp_server.py still uses.
-mcp>=1.28,<2
-```
-
-Application Insights接続文字列があることは、Python WorkerでTool Spanや分散Traceが実装された証明ではない。Functions標準監視のログ収集経路と、アプリがOTel APIで記録する経路を分けて確認する。
-
-### 4.2 現在のソース内ロギング箇所
-
-全て [mcp_server.py](/home/hnakajima/work/foundry-procurement-agent/src/functions-mcp-selfhosted/mcp_server.py) のPython標準loggingである。
-
-| 位置 | 関数／場面 | 記録する情報 |
-| --- | --- | --- |
-| 15–29行 | モジュール起動 | loggerレベル、Graph scopes設定状況 |
-| 47、58行 | 数値envパース | 不正値、既定値 |
-| 107–108行 | Bearer抽出 | 抽出例外 |
-| 120–139行 | `log_inbound_token_summary()` | token受信有無、claimの存在有無 |
-| 218行 | Graph scopes選択 | scopes |
-| 258–283行 | `acquire_graph_token_via_obo()` | 試行、retry成功、MSAL失敗詳細 |
-| 312–337行 | `call_graph_api()` | HTTP status、retry、例外、最終失敗 |
-| 362–389行 | `build_whoami_response()` | token検証／OBO失敗、MSAL相関ID |
-| 405–426行 | 同上 | ユーザー不一致、識別子の有無、成功・試行回数 |
-| 446–451行 | 同上 | Graph呼出し失敗 |
-| 480行 | `whoami` | Tool開始 |
-
-この中のMSALレスポンス`trace_id`／`correlation_id`はOTelのTrace IDとは別である。`OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=false`を設定しても、通常loggerが出す文字列は自動的には消えない。
-
-特に405–409行にはGraph user IDの生値、362–366行にはtoken検証details、269–283行にはMSALのerror descriptionがある。これらをそのまま新しいLogExporterへ流すのではなく、例外型、HTTP status、attempt、理由コードに限定する。署名検証やOBOの設計は観測ID連携とは独立に扱う。
-
-### 4.3 Functionsで新規に追加する箇所
-
-以下は**現行ソースに未実装の移植設計**である。実行可能な小さな部品例は別紙に示す。
-
-| 移植ID | 追加／変更場所 | 実装内容 |
-| --- | --- | --- |
-| F-01 | Functions独自の`requirements.txt` | OTel API／SDK、Azure Monitor Exporter、必要なASGI／HTTP計装。通常ログも送るならLogExporter関連 |
-| F-02 | 新規観測モジュール、または`mcp_handler`配下 | process起動でProvider／Exporterを一度だけ構成 |
-| F-03 | `host.json`とApp Settings | HostのOTel mode、送信先、Workerの監視方式を選択 |
-| F-04 | `mcp_handler/__init__.py`のASGI入口 | HTTP contextを取り込む。Host／Worker／ASGIのSpan重複を確認 |
-| F-05 | 新設の商品検索／部署検索Tool | ToolごとのSpan、開始・完了event、status／件数／理由 |
-| F-06 | 新設の検索client | 実際のSearch／DB／HTTP dependencyを計装 |
-| F-07 | Tool内の業務logger | active Span中で許可した属性だけ記録 |
-| F-08 | 配備用ZIP作成script | 新規観測モジュール／constraintsを収録 |
-
-`mcp_server.py:490`の `app()` はHTTP requestごとにFastMCPを生成する。ここや `create_mcp_server()` 内へProvider／Exporter生成を置くと毎回初期化されるため、process起動の位置へ置く。
-
-HostのOTel出力には`host.json`の`telemetryMode: OpenTelemetry`を設定する。PythonではWorkerの自動監視を利用する方式と、コードでProvider／Exporterを初期化する方式を重ねない。公式文書では `PYTHON_APPLICATIONINSIGHTS_ENABLE_TELEMETRY=true` を使う場合は手動の `configure_azure_monitor()` を省略できるため、採用runtimeでどちらが初期化を担当するか確定する。[FunctionsのOpenTelemetry設定](https://learn.microsoft.com/en-us/azure/azure-functions/opentelemetry-howto?pivots=programming-language-python)
-
-このサンプルは `function_app.py` のPython v2形式ではなく、`mcp_handler/__init__.py`＋`function.json`のASGI入口を持つ。公式サンプルのファイル名だけを当てはめず、実際の入口に初期化／wrapperを接続する。
-
-独自のFunctions Providerを作る案、Host modeと組み合わせる際の確認事項、HTTPの伝播とMCPの`params._meta`の違いは別紙で詳述する。
-
-### 4.4 Functionsへ検索Toolを移す場合の結果契約
-
-| 実行結果 | 技術的status | 業務status／付加情報 |
-| --- | --- | --- |
-| 正常・検索結果あり | SUCCESS | SUCCESS、件数、検索対象、必要なsource version |
-| 正常・0件 | SUCCESS | NOT_FOUND、result count=0 |
-| timeout | ERROR | BLOCKED、timeout分類、retryable、attempt |
-| 検索先403 | ERROR | BLOCKED、PERMISSION_DENIED、retryable=false等を実際の原因に合わせる |
-| index不在 | ERROR | INDEX_MISSING。0件検索とは区別 |
-| 戻り値の形式不正 | 呼出し成否と区別 | parse SCHEMA_INVALID、業務BLOCKED |
-| 有効な結果だが要求仕様に合わない | SUCCESS | VALIDATION_FAILED。技術エラーへまとめない |
-
-現行の分類モデルは [OperationStatus](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/models.py:198) を参考にできる。ただし `mcp_contract.py`はローカルのrecorded transcript分類器であり、実稼働FunctionsのSearch実装ではない。
-
-ソース内Toolの構成AではMCPを呼ばないため `mcp.status=NOT_RUN` とする。リモートMCPサーバーを作る構成Cでは、JSON-RPC/MCPプロトコル上の結果とTool内の検索／業務結果を分ける。Tool内で処理を始めた時点では、まだMCPレスポンス送信の成功を確認できていない。
-
-### 4.5 配備漏れを防ぐための変更点
-
-[deploy-functions-zip.sh:54](/home/hnakajima/work/foundry-procurement-agent/src/functions-mcp-selfhosted/scripts/deploy-functions-zip.sh:54)と[deploy-functions-zip.ps1:94](/home/hnakajima/work/foundry-procurement-agent/src/functions-mcp-selfhosted/scripts/deploy-functions-zip.ps1:94)は、収録ファイルを明示的にコピーする。新規`observability.py`をルートへ置くなら双方の収録対象へ追加する。`mcp_handler`配下へ置くなら既存のディレクトリコピーに含まれるかZIPで確認する。
-
-Functions ZIPにリポジトリ直下のHosted用requirementsや`procurement_agent`は自動で入らない。Hosted用`observability.py`を参照するimportだけ追加しても、配備先でimportできるとは限らない。Functionsの配備では`pyproject.toml`だけでなく、実際にremote buildに使うFunctions側`requirements.txt`を変更する。
-
-## 5. コンポーネントをまたぐ相関
-
-### 5.1 相関情報の契約
-
-| 相関対象 | キャリア | 受け渡し元→先 | 移植上の条件 |
-| --- | --- | --- | --- |
-| Trace ID／親Span | HTTP `traceparent`, `tracestate` | HTTPX → APIM／Foundry → Host | 各境界が保持し、受信側がextractすること |
-| 仮名化利用者 | HTTP `baggage`の`user.id` | Web → 下流 | Trace Contextとは独立。到達とSpan属性への採用を別々に確認 |
-| Foundry会話 | Responses `conversation` | Web → Hosted | named Hosted endpointのConversationを使用 |
-| case／Web turn | Responses `metadata` | Web → `_RequestCorrelationMiddleware` | 形式検証とContextVar resetを維持 |
-| 業務Stepのhandoff | 構造化JSONの`correlation` | Hosted → Prompt子 → Hosted | 入力と出力のcorrelation一致を検証 |
-| 応答の特定 | `gen_ai.response.id`等 | SDK／Web／Managed Trace | Trace IDが変わる境界の代替検索キー |
-| MCP Tool呼出し | MCP `params._meta`、またはHTTP headers | MCP client → server | HTTPキャリアとMCP本文のキャリアを区別。受信方式を明示 |
-
-HTTPにbaggageが到着しても、OTelがその全キーを自動で全Span属性にコピーするわけではない。現行Hostedは `current_request_attributes()` が許可した`user.id`を業務Spanへ付ける。その他の自動Spanまで同じ属性が付くとは限らない。[OpenTelemetry Pythonの伝播仕様](https://opentelemetry.io/docs/languages/python/propagation/)
-
-Agent Frameworkがプロセス内で開くMCP transportには`params._meta`を使う伝播があるが、Foundryサービスが発行するMCPリクエストは別の境界である。HTTP ASGI middlewareはMCP本文の`_meta`を自動で抽出しない。移植先のSDKとtransportで実際のcarrierを確認する。[Agent FrameworkのMCP trace propagation](https://learn.microsoft.com/en-us/agent-framework/agents/observability#mcp-trace-propagation)
-
-### 5.2 実装済みと実測済みを分ける
-
-今回再確認したローカル実装では、Web送信地点におけるTrace Contextと`user.id` baggageの一致チェックがある。Hosted側にもbaggageの`user.id`を読む実装がある。**両端のコードが存在しても、Managed境界を越えて届くことの証明にはならない。**
-
-保存済みの[2026-09-07更新の検証レポート](/home/hnakajima/work/foundry-procurement-agent/docs/report/validation-results-2026-09-06.md:125)では、特定caseでWeb→Hosted→Prompt子→Toolboxが同じTraceになった一方、Managed下流の`user.id`は `NOT_PROPAGATED`。別Traceになるcaseではresponse IDで代替相関している。これは既存レポートの記録であり、今回のAzure再測定結果ではない。
-
-Webの `PLATFORM_PROPAGATION` は固定文字列で、各リクエストの受信結果を動的に判定する値ではない。移植先でそのまま「伝播確認済み」の表示に使わず、実測結果または未検証状態に合わせる。
-
-| 判定 | 意味 |
-| --- | --- |
-| 送信地点で一致 | WebのHTTPX Spanとoutgoing headerが一致した |
-| 受信地点で一致 | 下流SpanのTrace ID／親子関係を照合した |
-| `NOT_PROPAGATED` | 必要な相関が境界を越えていない |
-| `NOT_RECORDED_BY_PLATFORM` | 対象情報／Spanがプラットフォームの記録から得られない |
-| 未検証 | まだ受信／保存結果を照合していない |
-
-仮名化`user.id`の本文metadataによるfallbackは現行未実装である。別環境で必要なら、送信者の認証、許可フィールド、保存範囲を確定したうえで追加する。LLMにIDを推測・復元させず、認可判断の根拠にも使用しない。
-
-### 5.3 APIM／Managed Agentにも確認が必要
-
-[infra/apim.bicep:89](/home/hnakajima/work/foundry-procurement-agent/infra/apim.bicep:89)はW3C相関、sampling、client IP非収集、request／response bodyの`bytes=0`、記録headerの空リストを定義する。Webが本文を記録しなくても、中継側が記録する設定なら保存範囲は変わる。
-
-Hostedのcontent captureをfalseにしても、Managed Prompt子のserver-side content保存が一律に無効になるわけではない。既存レポートもこれを制約として記録している。B構成を移植する場合は、Application Insightsの接続だけでなく、Managed Agentの実際の収集内容を確認する。
-
-## 6. Plan&Executeサンプルへ組み込む作業順
-
-| 順序 | 作業 | 完了時の確認 |
-| --- | --- | --- |
-| 1 | サンプルの起動入口、Framework／SDK、Planner、Executor、Tool登録／呼出し、会話stateを特定 | 実ファイルと関数に本書H/W/F/Uの移植IDを対応付ける |
-| 2 | A/B/CのTool配置を確定 | 観測だけの変更か、リモートTool化も含むかが明確 |
-| 3 | 各processのrequirements／constraintsとExporter所有者を決定 | Hosted／Web／Functionsで別々に依存解決できる |
-| 4 | 起動初期化と1つのSpan送信を接続 | 送信先でserviceを識別できる |
-| 5 | Planner／Executorへ4種類のSpanと状態eventを追加 | Plan ID、version、step、attemptが一貫する |
-| 6 | ソース内ToolまたはMCP Toolを計装 | 標準Tool Spanと二重にならず、結果件数・失敗分類を確認できる |
-| 7 | Webのuser／conversation／turnとHTTP contextを接続 | 非stream／stream両方でcontext漏れなし |
-| 8 | B/CならManaged／Functions境界の伝播を実測 | 送信／受信／保存の3点を照合。欠落も明示する |
-| 9 | 最終結果に公開可能なTrace ID／会話ID／statusを追加 | 実行失敗時も調査キーを取得できる |
-| 10 | ZIP内容、依存、正常／負例、収集内容を確認 | 文書上の設定と実際の配備物・Traceが一致する |
-
-Plannerの実装、実行順序、再計画のロジックそのものは、Observabilityを入れるためだけにこのControllerへ置換しない。既存ループにSpanとeventを差し込み、retryが実際に発生する場所でattemptを増やす。
-
-サンプル側に対応するモデルがある場合は、`models.py`から全業務型をコピーせず、相関／statusの辞書変換を合わせる。サンプル側にない検索index名やRemote Task IDを記録して実在するように見せない。
-
-## 7. 移植後の確認方法
-
-### 7.1 必須の動作確認ケース
-
-| ケース | 確認するTrace／結果 |
-| --- | --- |
-| 商品・部署検索の正常完了 | Planner、各Tool、統合、応答のSpanを確認。technicalとbusinessの両方が成功 |
-| 商品／部署が0件 | 呼出し成功と業務NOT_FOUNDを区別。取得件数0を記録 |
-| timeout／外部403 | 例外型・障害層・attemptを記録。生の例外本文やtokenを含めない |
-| schema不正 | parse失敗と外側HTTP／technical statusを区別 |
-| retry／replan | attempt単位のSpan、同じ／新しいPlan version、実際の追加呼出しとの一致 |
-| 利用者へ確認して再開 | 同じ会話、増えるturn、適切なFramework Session、WAITING_USERと再開の追跡 |
-| 2ユーザーの並行実行 | `user.id`、会話owner、ContextVar／baggageが混線しない |
-| streaming途中失敗 | HTTP 200が先に返っていても最終technical ERRORとSpan ERRORが確認できる |
-| ブラウザに偽traceparent／baggageを指定 | Webがサーバー側rootと認証済みuserから相関を作る |
-| B/C構成で既知Trace Contextを送信 | 下流の実受信と保存済みSpanまで照合。HTTPとMCP `_meta`の両carrierを識別 |
-| content-off | 検索本文、結果本文、氏名、claim、token、Graph ID、生例外が観測データに入らない |
-| 配備と終了 | 新モジュールがZIPにあり、正常終了でbufferを送信。重複初期化／二重送信なし |
-
-`always_on`でも、プロセス異常終了、export失敗、Managed側の収集方針による欠落がなくなるわけではない。Spanがないことだけで「処理を実行していない」と断定しない。
-
-### 7.2 Application Insightsでの照会例
-
-以下は[既存KQL](/home/hnakajima/work/foundry-procurement-agent/infra/observability/kql/core-status-correlation.kql)を基に、caseからTrace全体をたどるための追加案。今回Azureで実行していない。Application Insightsのテーブル名を使う。Log Analytics Workspaceの`AppRequests`／`AppDependencies`等へ直接照会する場合はテーブル・列名を対応させる。
-
-```kql
-let targetCase = "REPLACE_WITH_TEST_CASE_ID";
-let relatedOperations = materialize(
-    union isfuzzy=true requests, dependencies, traces, customEvents
-    | where timestamp > ago(24h)
-    | where tostring(customDimensions["test.case.id"]) == targetCase
-    | distinct operation_Id
-);
-union isfuzzy=true requests, dependencies, traces, customEvents
-| where timestamp > ago(24h)
-| where operation_Id in (relatedOperations)
-| extend conversation = coalesce(
-             tostring(customDimensions["gen_ai.conversation.id"]),
-             tostring(customDimensions["azure.ai.agentserver.conversation_id"])),
-         userHash = coalesce(tostring(customDimensions["user.id"]), tostring(user_Id)),
-         technical = tostring(customDimensions["technical.status"]),
-         business = tostring(customDimensions["business.status"]),
-         step = tostring(customDimensions["plan.step.id"]),
-         attempt = toint(customDimensions["execution.attempt"])
-| project timestamp, itemType, cloud_RoleName, name, operation_Id,
-          operation_ParentId, id, conversation, userHash, technical, business, step, attempt
-| order by timestamp asc
-```
-
-case属性が全てのManaged Spanに付く保証はないため、一度case付きの行から`operation_Id`集合を取得し、そのTrace全体へ広げる。`user.id`はExporterによって標準`user_Id`へ変換される場合があるため両方を見る。別Traceになった下流はこのクエリだけでは回収できないので、response ID、構造化handoffの相関IDを別途照合する。
-
-ローカルで確認したAzure Monitor Exporter `1.0.0b56`では、通常Span eventを`MessageData`（`traces`）、`exception` eventを`ExceptionData`（`exceptions`）へ変換する。例えば`plan.created`は通常のイベント名として`traces.message`を調べ、`operation_ParentId`を元SpanのIDと照合する。イベントにSpanの全属性が自動複製されるわけではない。別Exporterでは変換先を再確認する。Python loggingの`traces`が空でも、WebのSpanが`requests`／`dependencies`へ正常に出ている可能性がある。
-
-### 7.3 この資料を作る際に確認した範囲
-
-- ファイル・起動コマンド・requirements・SDK配布メタデータ・初期化ソースを照合した。
-- Web／Hostedの相関・content保護、Toolのsession分離、Plan順序、聞き取り・再利用、Synthetic検証gate・評価、ZIPの既存テストを実行し、**66 passed、2 warnings**を確認した。warningsは既存Starlette／AnyIOの非推奨警告。
-- 最新ソースの検証用テストはscriptsの直接importを含むため、初回は `deploy_foundation` が見つからず収集に失敗した。`PYTHONPATH=src:scripts` を付け、localhost模擬HTTPサーバーを実行できる環境で同じ対象を再実行して成功した。Azureには接続していない。
-- 資料内Python 15ブロックの構文（関数内抜粋1件は関数へ包んでcompile）、ローカルリンク460件の実在・行番号、関数／クラス45件のAST行範囲、参照ファイル78件のハッシュを確認した。確認用コードは配備先の実行・依存統合を保証しない。
-
-実行したコマンド:
-
-```bash
-env TMPDIR=/tmp PYTHONPATH=src:scripts .venv/bin/python -m pytest -q -s --tb=short \
-  tests/unit/test_webui.py \
-  tests/unit/test_hosted_protocol_v2.py \
-  tests/unit/test_hosted_factory_v2.py \
-  tests/unit/test_plan_v2.py \
-  tests/unit/test_hosted_package_v2.py \
-  tests/integration/test_conversation_intake.py \
-  tests/integration/test_azure_validation_v2.py \
-  tests/trace/test_envelope_v3.py
-```
-
-未検証事項は、移植先サンプルとのAPI／state統合、Functions追加案の実行・依存解決・Azure収集、ブラウザ実操作、Managed境界の最新のuserid伝播、今回のKQLの実環境結果である。移植済み・デプロイ済みという意味ではない。
+この実Web TraceでWeb、Hosted identity.lookup、Functions mcp.whoami、OBO、Graphの成功を確認し、利用者も「私は誰ですか」に名前が表示されたことを確認した。同一会話で名前取得→省略→nullになる挙動はHostedへの直接実行で確認した。詳細なcase／Trace／配布hash／未検証事項は[検証記録](../report/validation-results-2026-09-08-obo.md)にまとめている。

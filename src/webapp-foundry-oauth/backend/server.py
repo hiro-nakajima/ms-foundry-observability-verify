@@ -46,7 +46,7 @@ from typing import Any, AsyncIterator, Optional
 
 import httpx
 import msal
-from azure.identity.aio import DefaultAzureCredential
+from azure.identity.aio import ManagedIdentityCredential
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -55,7 +55,10 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
+from opentelemetry import trace
+from opentelemetry.trace import StatusCode
+import telemetry
 
 logging.basicConfig(
     level=logging.INFO,
@@ -131,16 +134,13 @@ def _tool_event_from_item(item: dict[str, Any]) -> Optional[dict[str, str]]:
     detail = f"{item_type}"
     if server_label:
         detail = f"{detail} on {server_label}"
-    arguments = item.get("arguments", "")
-    if arguments and not isinstance(arguments, str):
-        arguments = json.dumps(arguments, ensure_ascii=False)
 
     return {
         "callId": str(call_id),
         "toolName": str(tool_name),
         "toolType": item_type,
         "detail": detail,
-        "arguments": arguments or "",
+        "arguments": "",  # Tool arguments are not part of the public execution log.
     }
 
 
@@ -170,6 +170,7 @@ def _public_job(job: dict[str, Any], cursor: int = 0) -> dict[str, Any]:
         "error": job.get("error"),
         "createdAt": job["createdAt"],
         "updatedAt": job["updatedAt"],
+        **{key: job.get(key) for key in ("identityStatus", "identityResponseId", "procurementResponseId", "testCaseId", "turn", "traceId")},
     }
 
 
@@ -180,7 +181,7 @@ def _public_conversation_state(conversation_id: str, state: Optional[dict[str, A
             "approvalRequestId": item.get("id", ""),
             "serverLabel": item.get("serverLabel", ""),
             "toolName": item.get("toolName", ""),
-            "arguments": item.get("arguments", "{}"),
+            "arguments": "{}",
         }
         for item in state.get("pending_approvals", [])
     ]
@@ -225,20 +226,24 @@ def _reset_conversation_state(conversation_state_key: str, conversation_id: str,
 # Pydantic models
 # ──────────────────────────────────────────────────────────────────────────────
 class ChatRequest(BaseModel):
-    conversationId: str
-    userMessage: str
+    model_config = ConfigDict(extra="forbid")
+    conversationId: str = Field(pattern=r"^[A-Za-z0-9_-]{1,128}$")
+    userMessage: str = Field(min_length=1, max_length=8000)
+    lookupApplicant: bool | None = None
 
 
 class ContinueRequest(BaseModel):
-    conversationId: str
+    model_config = ConfigDict(extra="forbid")
+    conversationId: str = Field(pattern=r"^[A-Za-z0-9_-]{1,128}$")
     approve: bool = True
     approvalRequestIds: Optional[list[str]] = None
+    skipIdentity: bool = False
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # FastAPI app
 # ──────────────────────────────────────────────────────────────────────────────
-app = FastAPI(title="Foundry OAuth UI Backend", version="1.0.0")
+app = FastAPI(title="Foundry OAuth UI Backend", version="2.0.0", lifespan=telemetry.lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -252,6 +257,25 @@ app.add_middleware(
 )
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
+@app.middleware("http")
+async def authenticated_api(request: Request, call_next):
+    if request.url.path.startswith("/api/"):
+        user = _get_request_user(request)
+        if not user["authenticated"] and os.getenv("WEBUI_ALLOW_ANONYMOUS") != "true":
+            return JSONResponse({"detail": "Sign in with App Service Authentication."}, status_code=401)
+        origin = request.headers.get("origin")
+        if request.method in {"POST", "DELETE"} and (
+            request.headers.get("sec-fetch-site") == "cross-site"
+            or (origin and origin.rstrip("/") != os.getenv("WEB_APP_URL", "").rstrip("/"))
+        ):
+            return JSONResponse({"detail": "Invalid request origin."}, status_code=403)
+    return await call_next(request)
+
+
+app.add_middleware(telemetry.Instrumentation)
+app.add_middleware(telemetry.BrowserBoundary)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -345,16 +369,20 @@ def _get_request_user(request: Request) -> dict[str, Any]:
             "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress",
         )
     )
-    authenticated = bool(user_id)
+    tenant_id = _extract_claim(principal, "tid", "http://schemas.microsoft.com/identity/claims/tenantid")
+    authenticated = bool(user_id and tenant_id)
     if not user_id:
         # Local development fallback. In Azure App Service, EasyAuth should
         # populate x-ms-client-principal-id before these API routes are reached.
         user_id = "local-anonymous-user"
         user_name = user_name or "local-anonymous-user"
 
-    storage_key = _hash_user_key(user_id)
+    storage_key = hashlib.sha256(f"{tenant_id.lower()}:{user_id.lower()}".encode()).hexdigest()
+    if authenticated:
+        trace.get_current_span().set_attribute("user.id", storage_key)
     return {
         "id": user_id,
+        "tenant_id": tenant_id,
         "name": user_name or "unknown",
         "storage_key": storage_key,
         "authenticated": authenticated,
@@ -370,12 +398,12 @@ async def _fetch_easyauth_me(request: Request) -> list[dict[str, Any]]:
     cookie = request.headers.get("cookie", "").strip()
     if not cookie:
         return []
-    host = os.environ.get("WEBSITE_HOSTNAME", "").strip() or request.headers.get("host", "").strip()
+    host = os.environ.get("WEBSITE_HOSTNAME", "").strip()
     if not host:
         return []
     url = f"https://{host}/.auth/me"
     try:
-        async with httpx.AsyncClient(timeout=10.0, follow_redirects=False) as client:
+        async with telemetry.http_client(timeout=10.0, follow_redirects=False) as client:
             response = await client.get(url, headers={"Cookie": cookie, "Accept": "application/json"})
         if response.status_code != 200:
             logger.warning("/.auth/me returned HTTP %s", response.status_code)
@@ -386,7 +414,7 @@ async def _fetch_easyauth_me(request: Request) -> list[dict[str, Any]]:
         if isinstance(data, dict):
             return [data]
     except Exception as exc:  # noqa: BLE001
-        logger.warning("Failed to fetch /.auth/me: %s", exc)
+        logger.warning("Failed to fetch /.auth/me: %s", type(exc).__name__)
     return []
 
 
@@ -394,16 +422,16 @@ async def _refresh_easyauth_tokens(request: Request) -> None:
     cookie = request.headers.get("cookie", "").strip()
     if not cookie:
         return
-    host = os.environ.get("WEBSITE_HOSTNAME", "").strip() or request.headers.get("host", "").strip()
+    host = os.environ.get("WEBSITE_HOSTNAME", "").strip()
     if not host:
         return
     url = f"https://{host}/.auth/refresh"
     try:
-        async with httpx.AsyncClient(timeout=10.0, follow_redirects=False) as client:
+        async with telemetry.http_client(timeout=10.0, follow_redirects=False) as client:
             response = await client.get(url, headers={"Cookie": cookie, "Accept": "application/json"})
         logger.info("/.auth/refresh returned HTTP %s", response.status_code)
     except Exception as exc:  # noqa: BLE001
-        logger.warning("Failed to call /.auth/refresh: %s", exc)
+        logger.warning("Failed to call /.auth/refresh: %s", type(exc).__name__)
 
 
 async def _get_easyauth_refresh_token(request: Request) -> str:
@@ -476,6 +504,7 @@ def _get_foundry_obo_config() -> tuple[str, str, str, list[str]]:
     )
     client_secret = (
         os.environ.get("FOUNDRY_OBO_CLIENT_SECRET", "").strip()
+        or os.environ.get("ENTRA_CLIENT_SECRET", "").strip()
         or os.environ.get("WEBAPP_ENTRA_CLIENT_SECRET", "").strip()
         or os.environ.get("MICROSOFT_PROVIDER_AUTHENTICATION_SECRET", "").strip()
     )
@@ -515,7 +544,7 @@ def _acquire_foundry_token_by_refresh_token(refresh_token: str) -> str:
     )
     raise HTTPException(
         status_code=502,
-        detail=f"Failed to acquire Foundry token by refresh token: {result.get('error_description') or result.get('error')}",
+        detail="Failed to acquire Foundry delegated token by refresh token.",
     )
 
 
@@ -544,13 +573,13 @@ def _acquire_foundry_token_on_behalf_of(user_assertion: str) -> str:
     )
     raise HTTPException(
         status_code=502,
-        detail=f"Failed to acquire Foundry token via OBO: {result.get('error_description') or result.get('error')}",
+        detail="Failed to acquire Foundry delegated token via OBO.",
     )
 
 
 async def _get_token() -> str:
     """Acquire Azure access token for the Foundry scope (ai.azure.com)."""
-    credential = DefaultAzureCredential()
+    credential = ManagedIdentityCredential(client_id=os.getenv("AZURE_CLIENT_ID") or None)
     try:
         token = await credential.get_token("https://ai.azure.com/.default")
         return token.token
@@ -558,13 +587,8 @@ async def _get_token() -> str:
         await credential.close()
 
 
-async def _build_outbound_headers(request: Request) -> dict[str, str]:
-    """Build outbound headers for the Responses API call.
-
-    By default, calls Foundry/APIM with a user delegated token derived from
-    the current App Service EasyAuth user. This keeps Foundry OAuth Identity
-    Passthrough aligned with the signed-in App Service user.
-    """
+async def _build_outbound_headers(request: Request, auth_mode: str = "managed_identity") -> dict[str, str]:
+    """Use a request-local auth mode; procurement always explicitly selects MI."""
     headers = {
         "Content-Type": "application/json",
         "Accept": "text/event-stream",
@@ -574,25 +598,28 @@ async def _build_outbound_headers(request: Request) -> dict[str, str]:
     if apim_subscription_key:
         headers["Ocp-Apim-Subscription-Key"] = apim_subscription_key
 
-    auth_mode = os.environ.get("FOUNDRY_USER_AUTH_MODE", "obo").strip().lower()
+    auth_mode = auth_mode.strip().lower()
     if auth_mode in ("refresh_token", "refresh"):
         # EasyAuth's access token can be for Microsoft Graph depending on the
         # provider configuration. Use the EasyAuth refresh token to mint a
         # fresh user delegated token for Foundry instead.
         _get_easyauth_access_token(request)  # validates/logs current EasyAuth user claims
         refresh_token = await _get_easyauth_refresh_token(request)
-        foundry_token = _acquire_foundry_token_by_refresh_token(refresh_token)
+        foundry_token = await asyncio.to_thread(_acquire_foundry_token_by_refresh_token, refresh_token)
+        _validate_delegated_subject(foundry_token, request)
         headers["Authorization"] = f"Bearer {foundry_token}"
         return headers
 
     if auth_mode in ("obo", "on_behalf_of"):
         user_token = _get_easyauth_access_token(request)
-        foundry_token = _acquire_foundry_token_on_behalf_of(user_token)
+        foundry_token = await asyncio.to_thread(_acquire_foundry_token_on_behalf_of, user_token)
+        _validate_delegated_subject(foundry_token, request)
         headers["Authorization"] = f"Bearer {foundry_token}"
         return headers
 
     if auth_mode in ("forward", "easyauth"):
         user_token = _get_easyauth_access_token(request)
+        _validate_delegated_subject(user_token, request)
         logger.info(
             "Forwarding EasyAuth access token to Foundry/APIM: claims=%s",
             _sanitize_token_claims(_decode_jwt_payload(user_token)),
@@ -606,6 +633,17 @@ async def _build_outbound_headers(request: Request) -> dict[str, str]:
         return headers
 
     raise HTTPException(status_code=500, detail=f"Unsupported FOUNDRY_USER_AUTH_MODE: {auth_mode}")
+
+
+def _validate_delegated_subject(token: str, request: Request) -> None:
+    # JWT signatures are validated by Foundry/APIM. This is an additional
+    # account/audience check on a token obtained from the trusted EasyAuth/MSAL path.
+    claims, user = _decode_jwt_payload(token), _get_request_user(request)
+    if (not user["authenticated"] or not claims.get("scp")
+            or str(claims.get("aud", "")).rstrip("/") != "https://ai.azure.com"
+            or str(claims.get("oid", "")).lower() != user["id"].lower()
+            or str(claims.get("tid", "")).lower() != user["tenant_id"].lower()):
+        raise HTTPException(401, "Foundry delegated token does not match the signed-in user.")
 
 
 def _get_foundry_config() -> tuple[str, str]:
@@ -645,6 +683,10 @@ async def _stream_response(
     approval_inputs: Optional[list[dict[str, Any]]],
     conversation_id: str,
     outbound_headers: dict[str, str],
+    metadata: Optional[dict[str, str]] = None,
+    foundry_conversation_id: Optional[str] = None,
+    output_items: Optional[list[dict[str, Any]]] = None,
+    tool_choice: Optional[dict[str, str]] = None,
 ) -> AsyncIterator[str]:
     """
     Call the Foundry Responses API with streaming and translate the raw SSE
@@ -664,8 +706,14 @@ async def _stream_response(
     body: dict = {
         "stream": True,
     }
+    if metadata:
+        body["metadata"] = metadata
+    if foundry_conversation_id:
+        body["conversation"] = foundry_conversation_id
+    if tool_choice:
+        body["tool_choice"] = tool_choice
 
-    if previous_response_id:
+    if previous_response_id and not foundry_conversation_id:
         # Continue the previous response (after OAuth consent or multi-turn)
         # Reference: https://learn.microsoft.com/azure/ai-foundry/agents/how-to/mcp-authentication
         body["previous_response_id"] = previous_response_id
@@ -717,7 +765,7 @@ async def _stream_response(
         }
     emitted_text = False
     active_tool_calls: dict[str, str] = {}  # call_id → tool_name
-    async with httpx.AsyncClient(timeout=120.0) as client:
+    async with telemetry.http_client(timeout=210.0) as client:
         try:
             async with client.stream(
                 "POST",
@@ -754,7 +802,7 @@ async def _stream_response(
                     try:
                         data = json.loads(data_str)
                     except json.JSONDecodeError:
-                        logger.debug("Non-JSON SSE data (skipped): %s", data_str[:120])
+                        logger.debug("Non-JSON SSE data skipped")
                         continue
 
                     # Use the SSE event field, or fall back to the "type" key in data
@@ -876,6 +924,8 @@ async def _stream_response(
                     # ── Tool call completed ──────────────────────────────────
                     elif event_type == "response.output_item.done":
                         item = data.get("item", {})
+                        if output_items is not None and item.get("type") == "mcp_call":
+                            output_items.append(item)
                         tool_event = _tool_event_from_item(item)
                         if tool_event:
                             call_id = tool_event["callId"]
@@ -965,8 +1015,16 @@ async def _stream_response(
                         )
 
                     # ── Response completed → persist response_id ────────────
+                    elif event_type == "response.incomplete" and deferred_consent_event:
+                        # Hosted Toolbox consent is a paused response, with
+                        # incomplete as its native terminal event.
+                        response_completed = True
+                        response_id = data.get("response", {}).get("id") or response_id
                     elif event_type == "response.completed":
                         resp_obj = data.get("response", {})
+                        if output_items is not None:
+                            output_items.extend(item for item in resp_obj.get("output", [])
+                                                if isinstance(item, dict) and item.get("type") == "mcp_call")
                         if not emitted_text and isinstance(resp_obj, dict):
                             final_text = _extract_text_from_response(resp_obj)
                             if final_text:
@@ -981,13 +1039,8 @@ async def _stream_response(
 
                     # ── Error event ──────────────────────────────────────────
                     elif event_type == "error":
-                        err = data.get("error", data)
-                        msg = (
-                            err.get("message", str(err))
-                            if isinstance(err, dict)
-                            else str(err)
-                        )
-                        logger.error("Foundry error event: %s", msg)
+                        msg = "Foundry returned an error event."
+                        logger.error(msg)
                         yield _sse({"type": "error", "message": msg})
 
             # Only make continuation state actionable after the upstream stream
@@ -1099,11 +1152,7 @@ async def _stream_response(
             yield _sse({"type": "done", "responseId": response_id or ""})
 
         except httpx.HTTPStatusError as exc:
-            try:
-                body_preview = (await exc.response.aread()).decode("utf-8", "ignore")[:1000]
-            except Exception:
-                body_preview = ""
-            msg = f"Foundry API HTTP {exc.response.status_code}: {body_preview}"
+            msg = f"Foundry API HTTP {exc.response.status_code}"
             logger.error(msg)
             if exc.response.status_code == 400 and previous_response_id:
                 _reset_conversation_state(
@@ -1126,6 +1175,9 @@ async def _stream_response(
                         approval_inputs=None,
                         conversation_id=conversation_id,
                         outbound_headers=outbound_headers,
+                        metadata=metadata,
+                        output_items=output_items,
+                        tool_choice=tool_choice,
                     ):
                         yield retry_payload
                     return
@@ -1136,8 +1188,8 @@ async def _stream_response(
             yield _sse({"type": "error", "message": msg})
 
         except Exception as exc:
-            msg = f"Unexpected error: {exc}"
-            logger.exception(msg)
+            msg = f"Foundry request failed ({type(exc).__name__})."
+            logger.error(msg)
             yield _sse({"type": "error", "message": msg})
 
 
@@ -1177,6 +1229,8 @@ async def get_conversation_state(conversation_id: str, request: Request):
 async def delete_conversation_state(conversation_id: str, request: Request):
     user = _get_request_user(request)
     state_key = _conversation_state_key(conversation_id, user)
+    if _conversations.get(state_key, {}).get("active_job"):
+        raise HTTPException(409, "Cancel the running job before clearing history.")
     _reset_conversation_state(state_key, conversation_id, "client_clear_history")
     return {"conversationId": conversation_id, "cleared": True}
 
@@ -1204,7 +1258,7 @@ async def _append_job_event(job_id: str, event: dict[str, Any]) -> None:
         if event.get("responseId"):
             job["responseId"] = event["responseId"]
         next_status = _event_status(event)
-        if next_status:
+        if next_status and job["status"] not in {"failed", "cancelled"}:
             job["status"] = next_status
         elif job["status"] == "queued":
             job["status"] = "running"
@@ -1212,208 +1266,77 @@ async def _append_job_event(job_id: str, event: dict[str, Any]) -> None:
             job["error"] = event.get("message") or "Unknown error"
 
 
-async def _run_response_job(
-    job_id: str,
-    project_endpoint: str,
-    agent_name: str,
-    user_message: Optional[str],
-    previous_response_id: Optional[str],
-    approval_inputs: Optional[list[dict[str, Any]]],
-    conversation_id: str,
-    conversation_state_key: str,
-    outbound_headers: dict[str, str],
-) -> None:
-    async with _jobs_lock:
-        job = _jobs.get(job_id)
-        if job:
-            job["status"] = "running"
-            job["updatedAt"] = time.time()
-
-    try:
-        async for payload in _stream_response(
-            project_endpoint=project_endpoint,
-            agent_name=agent_name,
-            user_message=user_message,
-            previous_response_id=previous_response_id,
-            approval_inputs=approval_inputs,
-            conversation_id=conversation_state_key,
-            outbound_headers=outbound_headers,
-        ):
-            event = _parse_sse_payload(payload)
-            if not event:
-                continue
-            await _append_job_event(job_id, event)
-    except asyncio.CancelledError:
-        await _append_job_event(job_id, {"type": "error", "message": "Request was cancelled."})
-        async with _jobs_lock:
-            job = _jobs.get(job_id)
-            if job:
-                job["status"] = "cancelled"
-                job["updatedAt"] = time.time()
-        raise
-    except Exception as exc:
-        logger.exception("Chat job failed: job_id=%s", job_id)
-        await _append_job_event(job_id, {"type": "error", "message": str(exc)})
-
-
 async def _create_response_job(
-    conversation_id: str,
-    conversation_state_key: str,
-    user_message: Optional[str],
-    approval_inputs: Optional[list[dict[str, Any]]],
-    previous_response_id: Optional[str],
-    request: Request,
+    conversation_id: str, conversation_state_key: str, request: Request,
+    *, user_message: str | None = None, lookup_applicant: bool | None = None,
+    approval_inputs: list[dict[str, Any]] | None = None, skip_identity: bool = False,
 ) -> dict[str, Any]:
-    await _cleanup_old_jobs()
-    project_endpoint, agent_name = _get_foundry_config()
-    outbound_headers = await _build_outbound_headers(request)
-    job_id = uuid.uuid4().hex
-    now = time.time()
-    job: dict[str, Any] = {
-        "id": job_id,
-        "conversationId": conversation_id,
-        "ownerKey": conversation_state_key.split(":", 1)[0],
-        "status": "queued",
-        "events": [],
-        "responseId": None,
-        "error": None,
-        "createdAt": now,
-        "updatedAt": now,
-        "task": None,
-    }
-    async with _jobs_lock:
-        _jobs[job_id] = job
+    import sys
+    import procurement_flow
 
-    task = asyncio.create_task(
-        _run_response_job(
-            job_id=job_id,
-            project_endpoint=project_endpoint,
-            agent_name=agent_name,
-            user_message=user_message,
-            previous_response_id=previous_response_id,
-            approval_inputs=approval_inputs,
-            conversation_id=conversation_id,
-            conversation_state_key=conversation_state_key,
-            outbound_headers=outbound_headers,
-        )
-    )
+    await _cleanup_old_jobs()
+    job_id, now = uuid.uuid4().hex, time.time()
     async with _jobs_lock:
-        if job_id in _jobs:
-            _jobs[job_id]["task"] = task
-    return _public_job(job, 0)
+        state = _conversations.setdefault(conversation_state_key, {})
+        if state.get("active_job"):
+            raise HTTPException(409, "A job is already running for this conversation.")
+        if user_message is not None:
+            if state.get("flow"):
+                raise HTTPException(409, "Complete or skip the pending identity lookup first.")
+            state["turn"] = state.get("turn", 0) + 1
+            state["flow"] = {
+                "message": user_message, "turn": state["turn"],
+                "case_id": "WEB-" + job_id,
+                "lookup": lookup_applicant if lookup_applicant is not None else os.getenv("IDENTITY_LOOKUP_ENABLED", "false").lower() == "true",
+            }
+        else:
+            if not state.get("flow"):
+                raise HTTPException(409, "No pending identity lookup to continue.")
+            state["flow"].update(resuming=True, approval_inputs=approval_inputs)
+        state["active_job"] = job_id
+        job = {
+            "id": job_id, "conversationId": conversation_id,
+            "ownerKey": conversation_state_key.split(":", 1)[0],
+            "status": "queued", "events": [], "responseId": None, "error": None,
+            "createdAt": now, "updatedAt": now, "task": None,
+            "testCaseId": state["flow"]["case_id"], "turn": state["flow"]["turn"],
+        }
+        _jobs[job_id] = job
+        job["task"] = asyncio.create_task(procurement_flow.run(
+            sys.modules[__name__], job_id, request, conversation_state_key,
+            skip_identity=skip_identity,
+        ))
+    return _public_job(job)
 
 
 @app.post("/api/chat")
 async def chat(req: ChatRequest, request: Request):
-    """
-    Start a new conversation turn (or continue an existing one).
-
-    If the conversation already has a `previous_response_id` stored
-    (from a prior turn), it is included automatically so the agent
-    maintains context across turns.
-
-    Returns: JSON job metadata. Poll /api/jobs/{jobId} for events.
-    """
     user = _get_request_user(request)
-    conversation_state_key = _conversation_state_key(req.conversationId, user)
-    state = _conversations.get(conversation_state_key, {})
-    if state.get("pending_approvals"):
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "This conversation is waiting for MCP approval. "
-                "Use /api/continue to resume it."
-            ),
-        )
-    if state.get("awaiting_consent"):
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "This conversation is waiting for OAuth consent. "
-                "Complete consent and use /api/continue to resume it."
-            ),
-        )
-    previous_response_id = state.get("previous_response_id")
-
+    if not req.userMessage.strip():
+        raise HTTPException(422, "A non-empty message is required.")
     job = await _create_response_job(
-        conversation_id=req.conversationId,
-        conversation_state_key=conversation_state_key,
-        user_message=req.userMessage,
-        approval_inputs=None,
-        previous_response_id=previous_response_id,
-        request=request,
+        req.conversationId, _conversation_state_key(req.conversationId, user), request,
+        user_message=req.userMessage, lookup_applicant=req.lookupApplicant,
     )
     return JSONResponse(job, status_code=202)
 
 
 @app.post("/api/continue")
 async def continue_after_consent(req: ContinueRequest, request: Request):
-    """
-    Resume a paused conversation after the user has completed OAuth consent.
-
-    The stored `previous_response_id` is sent to Foundry so the agent can
-    pick up exactly where it left off before requesting consent.
-
-    Reference:
-      https://learn.microsoft.com/azure/ai-foundry/agents/how-to/mcp-authentication
-
-    Returns: JSON job metadata. Poll /api/jobs/{jobId} for events.
-    """
     user = _get_request_user(request)
-    conversation_state_key = _conversation_state_key(req.conversationId, user)
-    state = _conversations.get(conversation_state_key)
-    if not state:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No conversation found for conversationId={req.conversationId}",
-        )
-
-    previous_response_id = state.get("previous_response_id")
-    if not previous_response_id:
-        raise HTTPException(
-            status_code=400,
-            detail="No previous_response_id stored; cannot continue.",
-        )
-
-    approval_inputs: Optional[list[dict[str, Any]]] = None
-    pending_approvals = state.get("pending_approvals", [])
-    if pending_approvals:
-        selected_ids = req.approvalRequestIds or [
-            item.get("id") for item in pending_approvals if item.get("id")
-        ]
-        if not selected_ids:
-            raise HTTPException(
-                status_code=400,
-                detail="No approval_request_id available for pending MCP approval.",
-            )
-        approval_inputs = [
-            {
-                "type": "mcp_approval_response",
-                "approve": req.approve,
-                "approval_request_id": approval_id,
-            }
-            for approval_id in selected_ids
-        ]
-        logger.info(
-            "Sending MCP approval response(s): conversation=%s approve=%s count=%d",
-            req.conversationId,
-            req.approve,
-            len(approval_inputs),
-        )
-
-    logger.info(
-        "Continuing conversation %s with previous_response_id=%s",
-        req.conversationId,
-        previous_response_id,
-    )
-
+    state_key = _conversation_state_key(req.conversationId, user)
+    identity_state = _conversations.get(state_key, {})
+    pending = identity_state.get("pending_approvals", [])
+    if not identity_state.get("awaiting_consent") and not pending:
+        raise HTTPException(409, "No OAuth consent or MCP approval is pending.")
+    selected = req.approvalRequestIds or [p["id"] for p in pending]
+    if set(selected) - {p["id"] for p in pending}:
+        raise HTTPException(400, "Unknown approval request id.")
+    approval_inputs = ([{"type": "mcp_approval_response", "approve": req.approve,
+                        "approval_request_id": p} for p in selected] if pending else None)
     job = await _create_response_job(
-        conversation_id=req.conversationId,
-        conversation_state_key=conversation_state_key,
-        user_message=None,
-        approval_inputs=approval_inputs,
-        previous_response_id=previous_response_id,
-        request=request,
+        req.conversationId, state_key, request, approval_inputs=approval_inputs,
+        skip_identity=req.skipIdentity or not req.approve,
     )
     return JSONResponse(job, status_code=202)
 
@@ -1442,6 +1365,16 @@ async def cancel_job(job_id: str, request: Request):
         job["updatedAt"] = time.time()
     if task:
         task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        # A task cancelled before its first instruction cannot run its finally.
+        state_key = _conversation_state_key(job["conversationId"], _get_request_user(request))
+        state = _conversations.get(state_key, {})
+        if state.get("active_job") == job_id:
+            state.pop("active_job", None)
+            state.pop("flow", None)
     return {"jobId": job_id, "status": "cancelled"}
 
 

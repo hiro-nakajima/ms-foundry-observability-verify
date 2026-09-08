@@ -1,10 +1,12 @@
 from typing import Any, Dict
 from collections.abc import Mapping
 import base64
+import hashlib
 import json
 import logging
 import os
 import time
+import mcp_telemetry
 
 import msal
 import requests
@@ -270,7 +272,7 @@ def acquire_graph_token_via_obo(access_token: str) -> Dict[str, Any]:
             "OBO token exchange attempt %s/%s failed: %s",
             attempt + 1,
             attempts,
-            error_description,
+            error_code,
         )
         if not is_retryable or attempt == max_retries:
             break
@@ -280,7 +282,7 @@ def acquire_graph_token_via_obo(access_token: str) -> Dict[str, Any]:
             time.sleep(delay)
 
     error_description = last_result.get("error_description") or last_result.get("error")
-    logger.error("OBO token exchange failed after retries: %s", error_description)
+    logger.error("OBO token exchange failed after retries")
     return {
         "success": False,
         "error": error_description or "unknown_error",
@@ -331,10 +333,10 @@ def call_graph_api(access_token: str, endpoint: str = "me") -> Dict[str, Any]:
                 "Graph API call attempt %s/%s failed: %s",
                 attempt + 1,
                 attempts,
-                str(exc),
+                type(exc).__name__,
             )
             if not is_retryable or attempt == max_retries:
-                logger.error("Graph API call failed after retries: %s", str(exc))
+                logger.error("Graph API call failed after retries: %s", type(exc).__name__)
                 return {
                     "success": False,
                     "error": str(exc),
@@ -360,9 +362,7 @@ def build_whoami_response(access_token: str) -> Dict[str, Any]:
     log_inbound_token_summary(access_token, inbound_validation.get("claims"))
     if not inbound_validation.get("valid"):
         logger.warning(
-            "Inbound token validation failed: error=%s details=%s",
-            inbound_validation.get("error"),
-            inbound_validation.get("details"),
+            "Inbound token validation failed",
         )
         return {
             "error": inbound_validation.get("error"),
@@ -371,7 +371,9 @@ def build_whoami_response(access_token: str) -> Dict[str, Any]:
         }
 
     try:
-        obo_result = acquire_graph_token_via_obo(access_token)
+        with mcp_telemetry.step("auth.obo.exchange") as span:
+            obo_result = acquire_graph_token_via_obo(access_token)
+            span.set_attribute("app.obo.success", bool(obo_result.get("success")))
     except RuntimeError as exc:
         logger.error("OBO configuration error: %s", exc)
         return {
@@ -394,18 +396,20 @@ def build_whoami_response(access_token: str) -> Dict[str, Any]:
             "token_info": token_info,
         }
 
-    graph_result = call_graph_api(obo_result["access_token"], "me")
+    with mcp_telemetry.step("graph.me") as span:
+        graph_result = call_graph_api(obo_result["access_token"], "me")
+        span.set_attribute("app.graph.success", bool(graph_result.get("success")))
 
     if graph_result.get("success"):
         user_data = graph_result.get("data", {})
         inbound_claims = inbound_validation.get("claims", {})
         inbound_oid = str(inbound_claims.get("oid") or "").strip().lower()
         graph_user_id = str(user_data.get("id") or "").strip().lower()
-        if inbound_oid and graph_user_id and inbound_oid != graph_user_id:
+        if not inbound_oid or not graph_user_id or inbound_oid != graph_user_id:
             logger.error(
-                "Security check failed: inbound token oid does not match Graph /me id. inbound_claims=%s graph_user_id=%s",
+                "Security check failed: inbound token oid does not match Graph /me id. inbound_claims=%s graph_user_id_present=%s",
                 _sanitize_claims_for_log(inbound_claims),
-                graph_user_id,
+                bool(graph_user_id),
             )
             return {
                 "error": "Inbound token user does not match Microsoft Graph /me user",
@@ -428,6 +432,7 @@ def build_whoami_response(access_token: str) -> Dict[str, Any]:
             "tool": "whoami",
             "auth_mode": "obo",
             "user": {
+                "subjectHash": hashlib.sha256(f"{inbound_claims['tid'].lower()}:{graph_user_id}".encode()).hexdigest(),
                 "displayName": user_data.get("displayName"),
                 "userPrincipalName": user_data.get("userPrincipalName"),
                 "jobTitle": user_data.get("jobTitle"),
@@ -478,7 +483,15 @@ def create_mcp_server() -> FastMCP:
             }
 
         logger.info("whoami MCP tool called (python runtime, OBO)")
-        return build_whoami_response(access_token)
+        with mcp_telemetry.step("mcp.whoami", mcp_telemetry.carrier_from_mcp(ctx)) as span:
+            result = build_whoami_response(access_token)
+            mcp_telemetry.record_outcome(span, result)
+            # The procurement lookup needs only the verified subject and name.
+            # Do not send Graph profile fields or Entra error bodies to an Agent.
+            if result.get("error"):
+                return {"tool": "whoami", "error": "Graph OBO lookup failed"}
+            return {"tool": "whoami", "auth_mode": "obo", "user": {
+                key: result["user"].get(key) for key in ("subjectHash", "displayName")}}
 
     @mcp.tool()
     def greet(name: str = "World") -> str:

@@ -8,6 +8,7 @@ param skuName string = 'Developer'
 param publisherEmail string
 param projectEndpoint string
 param webAppPrincipalId string
+param webAppClientId string = ''
 param agentName string = 'procurement-parent-agent'
 @secure()
 param instrumentationKey string
@@ -58,21 +59,7 @@ resource policy 'Microsoft.ApiManagement/service/apis/policies@2024-05-01' = {
   name: 'policy'
   properties: {
     format: 'rawxml'
-    value: format('''
-<policies>
-  <inbound>
-    <base />
-    <validate-azure-ad-token tenant-id="{0}" header-name="Authorization" failed-validation-httpcode="401">
-      <audiences><audience>https://ai.azure.com</audience></audiences>
-      <required-claims><claim name="oid" match="all"><value>{1}</value></claim></required-claims>
-    </validate-azure-ad-token>
-    <set-header name="Ocp-Apim-Subscription-Key" exists-action="delete" />
-  </inbound>
-  <backend><forward-request timeout="210" buffer-response="false" fail-on-error-status-code="false" /></backend>
-  <outbound><base /></outbound>
-  <on-error><base /></on-error>
-</policies>
-''', tenant().tenantId, webAppPrincipalId)
+    value: replace(replace(replace(loadTextContent('apim-foundry-policy.xml'), '__TENANT__', tenant().tenantId), '__WEB_PRINCIPAL__', webAppPrincipalId), '__WEB_CLIENT__', webAppClientId)
   }
 }
 

@@ -265,14 +265,12 @@ def _missing_fields(state: Any, outer_business: BusinessStatus) -> list[str]:
     for field in ("quantity", "department_name", "memo"):
         if getattr(state.intake, field) is None:
             return [field]
-    if not state.applicant_name:
-        return ["authenticated_applicant_name"]
     return ["confirmation"]
 
 
 def _confirmation_preview(state: Any) -> ConfirmationPreview | None:
     if not all((
-        state.intake, state.applicant_name, state.selected_product_code,
+        state.intake, state.selected_product_code,
         state.catalog_result, state.code_result,
     )):
         return None
@@ -292,7 +290,7 @@ def _confirmation_preview(state: Any) -> ConfirmationPreview | None:
         return None
     subtotal = selected.unit_price * state.intake.quantity
     return ConfirmationPreview(
-        applicant_authenticated=True,
+        applicant_authenticated=bool(state.applicant_name and state.applicant_source in {"easyauth", "graph_obo"}),
         applicant_name=state.applicant_name,
         product_code=selected.product_code,
         product_name=selected.product_name,
@@ -316,7 +314,7 @@ def _saved_confirmation_context(
 ) -> tuple[CatalogSearchResult, CodeDeterminationResult, CatalogCandidate] | None:
     if not all((
         state.intake, state.catalog_result, state.code_result,
-        state.applicant_name, selected_product_code,
+        selected_product_code,
     )):
         return None
     intake = state.intake
@@ -758,7 +756,7 @@ class ProcurementController:
             and state.catalog_result is not None
             and all((
                 staged_intake.quantity, staged_intake.department_name,
-                staged_intake.memo, selected_product_code, state.applicant_name,
+                staged_intake.memo, selected_product_code,
             ))
         )
         if (staged_intake is not None and not stage_requires_code_validation
@@ -857,7 +855,7 @@ class ProcurementController:
                 and catalog_result_is_grounded(state.catalog_result)):
             ready = all((
                 request.quantity, request.department_name, request.memo,
-                selected_product_code, state.applicant_name,
+                selected_product_code,
             ))
             if not ready:
                 executor.wait_for_user("catalog", "reuse grounded candidates from AgentSession")

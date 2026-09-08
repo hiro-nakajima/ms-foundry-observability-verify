@@ -37,6 +37,7 @@ class ProcurementExecutionState(StrictModel):
     request: ProcurementRequest | None = None
     intake: ProcurementIntakeRequest | None = None
     applicant_name: str | None = None
+    applicant_source: Literal["easyauth", "graph_obo"] | None = None
     selected_product_code: str | None = None
     plan: ExecutionPlan | None = None
     current_step_id: str | None = None

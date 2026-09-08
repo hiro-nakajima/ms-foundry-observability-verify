@@ -1,76 +1,15 @@
-# ADR-0001: EasyAuth claims for the procurement path; OBO is a separate validation path
+# ADR-0001: 購買Hosted内の任意Graph OBO Agent Tool
 
-## Decision
+更新日: 2026-09-08。
 
-The App Service WebUI uses Microsoft Entra EasyAuth for browser authentication.
-It reads `tid`, `oid`, and the display-name `name` claim from
-`X-MS-CLIENT-PRINCIPAL`. `tid` and `oid` derive a stable SHA-256 pseudonymous
-`user.id`, which is placed on the App Service root span and W3C baggage. The
-validated display name is sent only as authenticated request context to the
-Hosted parent and stored in Framework `AgentSession.state` as the applicant.
-Raw claims, names, email addresses, tokens, and the complete `traceparent`
-value are not persisted as custom attributes or baggage.
+Webは旧OAuth画面・ジョブ・SSE・同意後の再開機能を維持し、ユーザー委任Tokenで既存APIMの購買経路を呼ぶ。追加のidentity用APIM経路は作らない。App Service MIの権限だけでは利用者OBOは成立しない。
 
-App Service invokes the Foundry Hosted parent using its system-assigned managed
-identity. The Hosted parent and Toolbox/Search runtime retain their separate
-identities and least-privilege roles. OBO is not used to obtain the procurement
-applicant name.
+OBO処理は既存Hosted OBO sampleと同じFoundryToolbox方式を、購買Hosted内の `obo_identity_agent.as_tool(propagate_session=False)` に組み込む。Graph /meを呼ぶだけなので、この専用Agentの実行は決定的な処理としLLMを使用しない。既存の遠隔OBO Agentインスタンスをそのまま呼ぶ方式ではない。
 
-The APIM gateway requested on 2026-09-03 validates the App Service managed
-identity's tenant, audience and object ID, then forwards its Bearer token to the
-fixed Foundry backend. It does not exchange that token for a user token or an
-APIM identity token. The reference application's refresh-token/OBO code remains
-as user-provided reference source, but is excluded from the deployment ZIP.
+FunctionsはOAuth connectionからMCP API用の委任Tokenを受け、MSAL OBOでGraph Tokenを取得する。Graph idと受信oidの一致を検証し、氏名とSHA-256(tid:oid)のみ返す。HostedはWeb由来の観測IDと照合し、成功した氏名のみControllerへ渡す。氏名を認可に使用しない。
 
-## Rationale
+OAuth同意要求は購買処理開始前にnative Responses itemとしてWebへ返す。Webは同じFoundry会話へ元の依頼を再送する。省略・失敗したturnでは氏名をnullにし、以前の氏名を持ち越さない。省略時もWebの認証主体は変更しない。
 
-EasyAuth already supplies the signed-in user's display-name claim at the trusted
-App Service boundary. OBO is not implicit: it would require a delegated user
-assertion, confidential-client exchange, Graph `User.Read`, and `/me`. None of
-those are needed merely to populate an applicant display name. Search
-queries are authorized by the Toolbox runtime identity, and no downstream
-Microsoft Graph or user-delegated API is in scope. EasyAuth plus managed
-identity keeps browser authentication, service authorization, and trace
-correlation separate.
+配備先は `rg-ms-foundry-observability-verify`。Entraアプリはtenantリソースのため既存App B/Cを再利用し、既存redirect URIを残したまま新connectionのURIを追加する。Functionsは既存client secret方式を維持し、FICは追加しない。
 
-OBO remains useful as a separate interoperability validation when a downstream
-API must enforce the authenticated user's delegated permissions. A later
-Functions + Entra confidential-client path may exchange the EasyAuth user token
-and call Microsoft Graph `/me`, following the reference environment. That path
-must have its own permissions and validation and must not become a dependency of
-the procurement applicant-name flow.
-
-Foundry Playground does not traverse the App Service EasyAuth boundary, so its
-signed-in display name is not available as `X-MS-CLIENT-PRINCIPAL` to the Hosted
-parent. Playground/default Responses therefore return natural language, but a
-real "who am I" lookup requires a separate Prompt/MCP identity path configured
-with Foundry OAuth Identity Passthrough and Graph OBO. The current Hosted parent
-reports that boundary instead of inventing an identity. The Web path continues
-to use the EasyAuth display name without Graph, while the optional OBO path is
-validated independently and does not authorize procurement or Search access.
-
-## Verification boundary
-
-On 2026-09-03, the actual EasyAuth authorization request used
-`response_type=code id_token`, while the dedicated registration had ID-token
-issuance disabled. The callback URI matched exactly and the configured secret
-was present and matched the deployment credential (values were not emitted).
-Enabled only `web.implicitGrantSettings.enableIdTokenIssuance`; implicit access
-token issuance remains disabled and no delegated API permissions were added.
-The user subsequently confirmed successful sign-in and the rendered chat UI.
-The original black callback page did not expose an error code, so no particular
-AADSTS code or exclusive root cause is claimed. Authenticated chat/trace
-propagation is a separate verification from successful sign-in.
-
-The WebUI has Local cookie/claim/CSRF-boundary tests and a real HTTP fixture that
-observes SDK/HTTPX automatic traceparent and pseudonymous baggage injection.
-The deployed HTTP transport also records only boolean observations of the
-actual outgoing traceparent/span match and allowlisted user.id baggage match.
-It does not manually inject headers or duplicate raw traceparent attributes.
-Browser success Trace `c876a5a2b4997bb2f44aaffb76829f7b` measured the
-outgoing `traceparent`/span match and the full observed Web -> Hosted -> Prompt
-children -> Toolboxes -> merge/response path under one Trace ID. The outgoing
-`user.id` baggage matched at the Web transport, but no downstream managed span
-recorded `user.id`; this is reported as `NOT_PROPAGATED` without assigning the
-loss to a specific unobservable hop. APIM/Search internal spans are
-`NOT_RECORDED_BY_PLATFORM`.
+ソース対応・設定・配備結果は [実装ガイド](observability-integration/oauth-wrapper-implementation.md) を正本とする。

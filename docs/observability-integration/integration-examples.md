@@ -1,20 +1,20 @@
 # Plan&Execute／Functionsへの組み込みコード例
 
-[ガイド本体](/home/hnakajima/work/foundry-procurement-agent/docs/observability-integration/README.md)の補足。以下は**移植先へ追加する設計例**であり、このリポジトリのアプリコードへ適用した変更ではない。移植先サンプルのAPIやFunctions runtimeでの動作は未検証である。コードブロック内の配置先は新設案、`planner`や`invoke`等は移植先の既存処理を渡す接続点を表す。
+更新日: 2026-09-08。[統合ガイド](README.md)の補足。以下のadapterや検索関数は**移植先への挿入例**であり、未提供サンプルのAPIを確認したものではない。現在のWeb／OBO Functionsの実装済み部分と、任意の追加案を分けて記載する。
 
-現行の`FoundryAgent.as_tool()`を採用する場合の登録・実呼出し・順序・再利用は、[HostedAgent補足資料](/home/hnakajima/work/foundry-procurement-agent/docs/observability-integration/hosted-agent-as-tool.md)を参照。購買Webの公開API／応答契約は[App Service補足資料](/home/hnakajima/work/foundry-procurement-agent/docs/observability-integration/appservice-procurement-changes.md)を参照。以下は移植用の提案例であり、最新ソースの全文ではない。
+現行HostedのAgent Tool呼び出しは[順序資料](hosted-agent-as-tool.md)、旧OAuth Webの購買向け変更は[App Service資料](appservice-procurement-changes.md)、正確な関数行番号は[ソース索引](source-map.md)を参照。
 
 ## 1. ソース内Toolを維持する場合
 
 ### 1.1 Hostedの初期化
 
-移植元: [hosted_app.py:84](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted_app.py:84)、[observability.py:66](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/observability.py:66)。同じ `ResponsesHostServer` を利用する場合、共通Recorderをサンプルのpackageへコピーし、既存の起動処理へ次の順で統合する。
+移植元: [hosted_app.py:150](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted_app.py:150)、[observability.py:94](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/observability.py:94)。同じ `ResponsesHostServer` を利用する場合、共通Recorderをサンプルのpackageへコピーし、既存の起動処理へ次の順で統合する。
 
 ```python
 import os
 
 from agent_framework_foundry_hosting import ResponsesHostServer
-from procurement_agent.observability import TelemetryRecorder
+from procurement_agent.observability import TelemetryRecorder, configure_host_observability
 
 
 def serve_existing_agent(agent):
@@ -22,7 +22,7 @@ def serve_existing_agent(agent):
     # 移植先ではプロセス起動の最初から同じ環境変数を設定する。
     os.environ["OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"] = "false"
     os.environ.setdefault("OTEL_PROPAGATORS", "tracecontext,baggage")
-    server = ResponsesHostServer(agent)
+    server = ResponsesHostServer(agent, configure_observability=configure_host_observability)
     return server
 
 
@@ -100,7 +100,7 @@ async def execute_observed_plan(
 
 この例にサンプルの業務制御を置換する意図はない。対応する`with`／eventを既存処理へ差し込む。retryがあるサンプルでは各attemptを別Spanにし、実際に次の呼出しを行う場合だけ`step.retry_scheduled`を記録する。Planner／mergeの例外・入力schema不正もサンプル側の既存例外処理で分類し、最終`response.status`まで記録する。
 
-相関ContextVarを移す場合は、[hosted_app.py:25](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted_app.py:25)の本文検証とfinally resetも含める。`user.id`を残したまま次の利用者の実行に入らない。
+相関ContextVarを移す場合は、[hosted_app.py:26](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted_app.py:26)の本文検証とfinally resetも含める。`user.id`を残したまま次の利用者の実行に入らない。
 
 ### 1.3 Tool自動Spanの有無による違い
 
@@ -170,7 +170,7 @@ Hostedでは `TelemetryRecorder.for_hosted_runtime().tracer` のように同じP
 
 ## 2. App Serviceへ通常ログも追加したい場合
 
-現行WebはTraceExporterのみである。[procurement.py:190](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement.py:190)のlifespanへ以下の初期化を統合すると、選択した業務loggerの記録をOTel Logsへ送る構成を作れる。
+現行WebはTraceExporterのみである。[telemetry.py:55](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/telemetry.py:55)のlifespanへ以下の初期化を統合すると、選択した業務loggerの記録をOTel Logsへ送る構成を作れる。
 
 これは追加案であり、通常ログが不要なら入れない。同じAzure Monitor ExporterパッケージのLogExporterを使う。OTel LoggingHandler等のAPIは採用バージョンで確認する。[Azure Monitor Python Exporterの公式例](https://github.com/Azure/azure-sdk-for-python/blob/main/sdk/monitor/azure-monitor-opentelemetry-exporter/README.md)
 
@@ -211,164 +211,67 @@ handlerがactive contextからTrace ID／Span IDを取り込む。業務status�
 
 終了時は `logger.removeHandler(handler)`、`handler.close()`、`provider.shutdown()` を既存lifespanのfinallyへ配置する。root loggerへhandlerを付けるとSDKや旧OAuthサンプルの診断文字列も対象になるため、この例は新しい業務loggerだけを対象にする。
 
-## 3. Functionsに新しい観測モジュールを作る場合
+## 3. 実装済みFunctions観測モジュールを再利用する
 
-### 3.1 依存と初期化方式の選択
+### 3.1 現在の初期化と依存
 
-次の追加依存は、このリポジトリで使用しているOTel系列に合わせた**手動計装案**。Functions独立環境での依存解決・実行確認は未実施である。既存のFunctions requirementsへ統合し、Functions用constraintsを作る場合はそのファイルもZIPへ入れる。
+`src/functions-mcp-selfhosted/mcp_telemetry.py` はすでに配布済みで、workerごとにProvider／Azure Monitor TraceExporterを生成する。`requirements.txt` の現行指定は次のとおり。これらを追加するだけで検索Toolが実装されるわけではない。
 
 ```text
-# src/functions-mcp-selfhosted/requirements.txtへの追加案
-opentelemetry-api==1.43.0
 opentelemetry-sdk==1.43.0
-opentelemetry-instrumentation-asgi==0.64b0
 azure-monitor-opentelemetry-exporter==1.0.0b56
 ```
 
-Functions HostとPython Workerの初期化担当を次のように選ぶ。
+サービス名はprocurement-obo-functions。送信先はAPPLICATIONINSIGHTS_CONNECTION_STRING。設定がないローカル実行ではAzure exporterが付かないため、Spanを作れたこととAzureへ届いたことを分けて確認する。
 
-| 方式 | Worker側の設定 | この節の手動Provider例 |
-| --- | --- | --- |
-| 手動のアプリ計装 | 独自Provider／Trace・LogExporterとASGIを構成 | 使用する |
-| Python Workerの自動Azure Monitor計装 | `azure-monitor-opentelemetry`と`PYTHON_APPLICATIONINSIGHTS_ENABLE_TELEMETRY=true`等、採用runtimeの公式設定 | 使用しない。既存Providerを利用する |
+現在は `whoami()` のMCP境界に `mcp.whoami`、その内側に `auth.obo.exchange` と `graph.me` を置く。OTel LogExporterや追加ASGI instrumentorをFunctionsへ一律に入れる実装ではない。Functions Host自体の診断とこのPython workerの手動Spanは別の観測層である。
 
-手動方式の例では、Workerが既に自動でProvider／LogExporterを作る設定を有効にしない。通常ログの対象を独立したloggerへ限定し`propagate=False`にすることで、この業務loggerの同一記録を通常root経路にも渡すことを避ける。Host自体の診断ログは別のままである。
+### 3.2 既存whoamiの組み込み方（要点）
 
-HostもOTelで観測する段階では、既存`host.json`の`extensions.http.routePrefix`を残して次を追加する。
-
-```json
-{
-  "version": "2.0",
-  "telemetryMode": "OpenTelemetry",
-  "extensions": {"http": {"routePrefix": ""}}
-}
-```
-
-送信先はFunctions App Settingsの`APPLICATIONINSIGHTS_CONNECTION_STRING`。HostとWorkerのSpanは異なる実行層として存在し得るため、単に2つあることを全て重複としない。同じASGI境界を2つのinstrumentorで囲っていないか、同じloggerを2つの経路で送っていないかを照合する。Host mode・Worker flagの意味は[Functions公式設定](https://learn.microsoft.com/en-us/azure/azure-functions/opentelemetry-howto?pivots=programming-language-python)と移植先runtimeで確認する。
-
-### 3.2 手動方式の新規モジュール例
-
-配置案: Functionsルートの新規 `procurement_observability.py`。Hostedのモジュールとは別processなので別のProviderでよい。ローカルで接続文字列がない場合を黙ってAzure送信成功としないため、この例は環境変数を必須とする。
+次は `mcp_server.py` にある処理の関係を示す抜粋であり、既存の戻り値・Token取得処理の代替ではない。
 
 ```python
-import atexit
-import logging
-import os
-
-from azure.monitor.opentelemetry.exporter import (
-    AzureMonitorLogExporter, AzureMonitorTraceExporter,
-)
-from opentelemetry import propagate
-from opentelemetry.baggage.propagation import W3CBaggagePropagator
-from opentelemetry.propagators.composite import CompositePropagator
-from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
-from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
-from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
-
-# module import時にprocessごとに1回。create_mcp_server()の中には置かない。
-connection_string = os.environ["APPLICATIONINSIGHTS_CONNECTION_STRING"]
-resource = Resource.create({"service.name": "procurement-functions-mcp"})
-provider = TracerProvider(resource=resource)
-provider.add_span_processor(BatchSpanProcessor(
-    AzureMonitorTraceExporter(connection_string=connection_string)
-))
-tracer = provider.get_tracer("procurement.functions")
-propagate.set_global_textmap(CompositePropagator([
-    TraceContextTextMapPropagator(), W3CBaggagePropagator(),
-]))
-
-log_provider = LoggerProvider(resource=resource)
-log_provider.add_log_record_processor(BatchLogRecordProcessor(
-    AzureMonitorLogExporter(connection_string=connection_string)
-))
-logger = logging.getLogger("procurement.functions.business")
-logger.setLevel(logging.INFO)
-logger.propagate = False
-log_handler = LoggingHandler(level=logging.INFO, logger_provider=log_provider)
-logger.addHandler(log_handler)
+from mcp_telemetry import carrier_from_mcp, step, record_outcome
 
 
-def shutdown_observability():
-    logger.removeHandler(log_handler)
-    log_handler.close()
-    log_provider.shutdown()
-    provider.shutdown()
-
-
-atexit.register(shutdown_observability)
+def observed_whoami(ctx, build_result):
+    # build_resultは既存のToken検証・OBO・Graph処理を束ねたcallable。
+    with step("mcp.whoami", carrier=carrier_from_mcp(ctx)) as span:
+        result = build_result()
+        record_outcome(span, result)
+        return result
 ```
 
-このProviderはglobalへ登録しないため、ASGI、Tool、追加のHTTP clientへ明示的に渡す。Workerの既存Providerを使う方式ではこのモジュールのProvider生成を採用しない。`atexit`は正常終了用であり、Functionsの強制終了時にbufferが必ず送られる保証ではない。cold start／停止時も含め実環境で確認する。
+`carrier_from_mcp()` はMCP request metadataのtraceparentを検査し、`step()` が親contextとして抽出する。HTTP headerのtraceparentとは異なるcarrierである。採用SDKが `_meta.traceparent` を送ることを実際のTraceで確認する。HTTP自動計装を別途導入する場合は、HTTP SpanとMCP metadataの親が異なる状況を調べ、二重Spanや誤った親子付けを避ける。
 
-### 3.3 Functions入口への組み込み
+`record_outcome()` はwhoamiのauth_mode／error／subjectHashに依存する。商品検索や部署検索へそのままコピーせず、それぞれの結果contractからstatus・件数等を付与する。
 
-変更位置: [mcp_handler/__init__.py:1](/home/hnakajima/work/foundry-procurement-agent/src/functions-mcp-selfhosted/mcp_handler/__init__.py:1)。既存`AsgiMiddleware`に渡すアプリをOTel ASGI wrapperで囲む例。
+### 3.3 検索ToolをFunctionsへ新設する場合の挿入例
 
-```python
-import azure.functions as func
-from opentelemetry.instrumentation.asgi import OpenTelemetryMiddleware
-
-from procurement_observability import provider
-from mcp_server import app as mcp_asgi_app
-
-instrumented_app = OpenTelemetryMiddleware(
-    mcp_asgi_app,
-    tracer_provider=provider,
-    exclude_spans=["receive", "send"],
-)
-main = func.AsgiMiddleware(instrumented_app).main
-```
-
-HTTP headerにある`traceparent`／`tracestate`／`baggage`を受信contextへ取り込み、Tool Spanの親に利用する。ブラウザ用 `_BrowserBoundary` はここへコピーしない。Functions APIの認証・認可は既存のAPI境界で行い、baggageを本人確認に使わない。
-
-### 3.4 商品検索Tool内部へ記録する例
-
-次の例は、ソース内の既存検索をasync callableとして渡して計装する。`whoami`とは別に追加する購買Tool用であり、検索API／DBの実装は含まない。`@mcp.tool()`関数からこのhelperを呼ぶ。
+現在のFunctionsには商品／部署検索は存在しない。次は既存同期検索関数を移す際のwrapper案。Tool自動Spanがない場合に使用する。
 
 ```python
-import re
-
-from opentelemetry import baggage, trace
-from procurement_observability import logger, tracer
+from opentelemetry.trace import StatusCode
+from mcp_telemetry import carrier_from_mcp, step
 
 
-async def run_search_tool(*, tool_name, search):
-    # tool_nameはアプリが定義した固定のcatalog_search/department_search等。
-    attrs = {
-        "gen_ai.operation.name": "execute_tool",
-        "gen_ai.tool.name": tool_name,
-        "mcp.method": "tools/call",
-    }
-    user = baggage.get_baggage("user.id")
-    if isinstance(user, str) and re.fullmatch(r"[a-f0-9]{64}", user):
-        attrs["user.id"] = user
-    with tracer.start_as_current_span(
-        f"execute_tool {tool_name}", attributes=attrs,
-        record_exception=False, set_status_on_exception=False,
-    ) as span:
-        span.add_event("tool.started")
+def run_search(ctx, *, registered_tool_name, search):
+    # registered_tool_nameはアプリ側の固定名。利用者入力をSpan名に使わない。
+    with step("mcp.search", carrier=carrier_from_mcp(ctx)) as span:
+        span.set_attribute("gen_ai.tool.name", registered_tool_name)
         try:
-            rows = await search()
+            rows = search()
             if not isinstance(rows, list):
                 span.set_attributes({
                     "technical.status": "SUCCESS", "parse.status": "SCHEMA_INVALID",
-                    "business.status": "BLOCKED", "reason.code": "invalid_search_result",
+                    "business.status": "BLOCKED",
                 })
-                span.add_event("tool.output_rejected")
                 return {"technical_status": "SUCCESS", "business_status": "BLOCKED"}
         except Exception as exc:
-            error_type = type(exc).__name__
-            span.set_status(trace.StatusCode.ERROR)
+            span.set_status(StatusCode.ERROR)
             span.set_attributes({
-                "error.type": error_type, "technical.status": "ERROR",
-                "business.status": "BLOCKED", "reason.code": "search_failed",
-            })
-            logger.warning("procurement.tool.failed", extra={
-                "gen_ai.tool.name": tool_name, "error.type": error_type,
-                "reason.code": "search_failed",
+                "error.type": type(exc).__name__, "technical.status": "ERROR",
+                "business.status": "BLOCKED",
             })
             return {"technical_status": "ERROR", "business_status": "BLOCKED"}
         business = "SUCCESS" if rows else "NOT_FOUND"
@@ -376,70 +279,41 @@ async def run_search_tool(*, tool_name, search):
             "technical.status": "SUCCESS", "business.status": business,
             "app.tool.result_count": len(rows),
         })
-        span.add_event("tool.completed")
-        logger.info("procurement.tool.completed", extra={
-            "gen_ai.tool.name": tool_name, "business.status": business,
-            "app.tool.result_count": len(rows),
-        })
         return {"technical_status": "SUCCESS", "business_status": business, "rows": rows}
 ```
 
-例えば既存のasync商品検索へつなぐ場合は、Tool関数内で `await run_search_tool(tool_name="catalog_search", search=lambda: existing_search(query))` を呼ぶ。同期検索をasync関数内でそのまま実行するとevent loopを塞ぐため、既存の同期Toolを維持するか、サンプルの実行方式に合わせてadapterを作る。
+検索結果のrowsは業務へ返すがSpanに保存しない。既存async Toolへつなぐ場合は元のasync処理方式を維持する。同期検索を無条件にasync関数へ入れない。戻り値のtechnical_statusがMCP protocolのisErrorへ自動変換されるわけではないため、移植先のTool契約へ合わせる。
 
-結果JSON内の技術エラーがMCP protocolの `isError=true`へ自動変換されるわけではない。移植先のMCPクライアントが読む契約に合わせて、Tool戻り値／エラー形式を設計する。HTTP requestを受信しただけでMCP成功statusを記録しない。
+新しいMCP Toolを追加する場合はserver登録、Toolboxのallowed_tools、Agent側のTool一覧選択、戻り値schema、配布ZIPをまとめて変更する。whoamiだけの現在のToolboxを指したままでは新規検索Toolを呼べない。
 
-### 3.5 MCP本文の_metaで伝播する場合
+外部HTTP/検索SDKを計装するときは実際に使用するclientを同じProviderへ接続する。標準dependencyと同じHTTP通信を手動Spanでも囲まない。ローカルファイル検索にAI Search dependencyを作らない。
 
-上のHTTP ASGI wrapperだけではJSON-RPCの `params._meta` は読まない。HTTP carrierで親Spanが取得できず、採用MCPクライアントが `_meta.traceparent` を送る構成では、Tool dispatchでそのcarrierを抽出する処理が必要になる。
+## 4. Webへの最小統合単位
 
-以下は受信carrierを取り出す接続例。**HTTP contextを優先し、HTTPの親がない場合だけ `_meta` を利用する方式**を示す。両方が異なるTraceを示す場合は、親を二重に設定せず必要に応じてSpan Linkで別相関を保持する。
+旧OAuth Webには `telemetry.py` を組み込み、FastAPI生成で `lifespan=telemetry.lifespan` を指定する。middlewareはBrowserBoundaryがInstrumentationの外側になるよう構成する。`telemetry.http_client()` を会話作成／Responses等の実際のHTTPX client生成に使う。
 
 ```python
-from opentelemetry import context, propagate, trace
+import telemetry
 
 
-def incoming_tool_context(ctx):
-    # HTTP Spanがあればそのcontextを継続。
-    # HTTP headerなしでもASGIは新しいSpanを作るため、この条件だけで
-    # _meta fallbackは選択しない。実際のHTTP traceparentの有無を確認する。
-    request = getattr(ctx.request_context, "request", None)
-    headers = getattr(request, "headers", {})
-    http_carrier = {
-        key: headers[key] for key in ("traceparent", "tracestate") if key in headers
-    }
-    extracted_http = propagate.extract(http_carrier, context=context.Context())
-    if trace.get_current_span(extracted_http).get_span_context().is_valid:
-        return context.get_current()
-
-    meta = ctx.request_context.meta
-    values = meta.model_dump() if hasattr(meta, "model_dump") else (meta or {})
-    carrier = {
-        key: values[key] for key in ("traceparent", "tracestate", "baggage")
-        if isinstance(values, dict) and isinstance(values.get(key), str)
-    }
-    parent = propagate.extract(carrier, context=context.Context())
-    if trace.get_current_span(parent).get_span_context().is_valid:
-        return parent
-    return context.get_current()
+async def run_existing_job(*, user_hash, case_id, turn, acquire_headers, invoke):
+    with telemetry.job_context(user_hash, case_id, turn):
+        with telemetry.observe("web.chat.job"):
+            with telemetry.observe("auth.foundry.token"):
+                headers = await acquire_headers()
+            with telemetry.observe("procurement.agent.invoke"):
+                return await invoke(headers)
 ```
 
-この関数が返したcontextを、Tool helperを呼ぶ前に `context.attach()`し、finallyで`context.detach()`する。HTTPの親がないときに `_meta` を親に採用すると、ASGIが生成したローカルrootとToolのTraceが別になることがある。必要ならそのHTTP spanをLinkで関連付ける。これは不明なTraceを同一Traceとして扱うものではない。
+これはSpan境界の挿入例。実際には認証・owner検査・Foundry会話管理・metadata・同意再開を `server.py`／`procurement_flow.py` に従って統合する。user_hashはBrowserが自己申告した値ではなく、EasyAuthのtid/oidから作る。氏名をWeb metadataに追加しない。
 
-`ctx.request_context.request`／`meta`はローカルのMCP 1.29.1の型で確認した。Functions側requirementsは `mcp>=1.28,<2` の範囲なので、移植時には実際の解決バージョン、HTTP／stdio等のtransport、元の相関形式で照合する。プロバイダー管理MCPが `_meta` を送る保証はない。[Agent Frameworkの伝播範囲](https://learn.microsoft.com/en-us/agent-framework/agents/observability#mcp-trace-propagation)
+## 5. 適用前後の確認
 
-### 3.6 Search／外部HTTPの計装
+1. HostedはSDK Providerを再利用し、Web／Functionsは各processのProviderを一度構成する。
+2. SDK標準Tool Spanと手動Tool Span、HTTP dependencyの重複を確認する。
+3. retry、replan、入力不足、業務失敗を既存の意味で記録し、計装のために業務順序を変えない。
+4. user.id、case、turn、会話／応答IDを検査し、request終了でContextVarを解除する。
+5. 新規モジュールと依存が配布ZIPに入り、送信先設定が存在することを確認する。
+6. Azureで実際のTrace、本文非記録、本人一致／不一致、同意／省略／null消去を検証する。
 
-新しい検索ToolがHTTPを呼ぶ場合は、実際に使用するclientだけを同じ`provider`で計装する。例えばHTTPXなら `opentelemetry-instrumentation-httpx` を追加して `HTTPXClientInstrumentor.instrument_client(http, tracer_provider=provider)` を使う。requestsなら対応するinstrumentorを採用する。自動dependency Spanを作る場合は同じHTTP通信をmanual CLIENT Spanで重ねない。
-
-検索文、Authorization、返却document本文のキャプチャは必要ない。Tool Spanには件数・検索対象・statusを記録し、HTTP dependencyにはstatus／duration／相関を任せる。Functionsへ移した検索がローカルファイルだけを読むなら、実在しないAI Search dependencyを作らない。
-
-## 4. この例を適用する前後で確認するもの
-
-1. processごとにProvider／Exporterが1つの設計で初期化されること。HostedとFunctionsは別processなので各自のProviderが必要。
-2. 自動Tool計装の有無を確認し、manual Tool Spanを重ねていないこと。
-3. 使用するHTTP client、ASGI、Toolで同じProviderとactive contextを使うこと。
-4. 元サンプルのretry／replan／会話state／認証契約を維持し、観測のために成功条件を変えていないこと。
-5. 新規FunctionsモジュールとrequirementsがZIPに入っていること。
-6. ローカルExporterでSpanとeventを確認後、Azure上で受信、保存、本文非記録、重複の有無を照合すること。
-
-本資料のPythonコード例9ブロックはcompileによる構文確認を行った。接続文字列を必要とするProvider初期化、Functions Hostの起動、Search／Graph／Foundry呼出し、Azureへの送信は実行していない。
+本書のPython例は構文確認を行った。移植先サンプルへの適用実行や例のAzure送信は未検証。現リポジトリの配布済み実装・実Web OBOの検証は[検証記録](../report/validation-results-2026-09-08-obo.md)で扱う。

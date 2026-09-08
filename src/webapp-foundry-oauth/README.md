@@ -1,308 +1,41 @@
-# webapp-foundry-oauth — 購買PoCのApp Service配置元
+# webapp-foundry-oauth — OAuth画面を使う購買支援Web
 
-**このRepositoryの稼働入口は `backend/procurement.py:app` です。**
-EasyAuth → App Service Managed Identity → APIM → Foundryの購買PoCとして配置します。
-配備手順・検証境界は末尾の「このRepositoryでの購買PoC用入口」を参照してください。
-以下のOAuth/Graph説明は提供された参考実装についての記録で、購買PoCには配備しません。
+2026-09-08更新。起動入口は **`backend/server.py:app`**。旧OAuth版のHTML/JavaScript・ジョブ・SSE・同意／承認画面を再利用します。
 
-## 提供されたOAuth参考実装（非配備）
+ユーザー委任Tokenで購買Hosted Agentだけを呼びます。名前取得が有効ならHosted内のOBO Agent ToolがFoundryToolbox経由でGraph /meを呼び、本人照合した名前をControllerへ渡します。省略・失敗時は名前をnullとして購買を継続します。
 
-`webapp-foundry-oauth` は、Azure App Service 上で動く Foundry Agent チャット Web アプリです。FastAPI backend と静的 HTML/CSS/JavaScript UI で構成し、App Service EasyAuth で認証した現在ユーザーを起点に、APIM 経由で Azure AI Foundry Agent endpoint Responses API を呼び出します。
+詳細なソース対応、API・metadata契約、OTel、配備先、必要設定と検証境界は [OAuth Web復帰・任意OBO連携ガイド](/home/hnakajima/work/foundry-procurement-agent/docs/observability-integration/oauth-wrapper-implementation.md) にまとめています。
 
-元サンプルの本線は **案A: EasyAuth ユーザー委任 -> APIM -> Foundry Agent -> OAuth Identity Passthrough -> Functions MCP Server -> OBO -> Microsoft Graph** です。
+## 設定
 
-## この Web アプリの役割
+[.env.example](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/.env.example) を参照してください。`PROJECT_ENDPOINT`／`AGENT_NAME` は購買向け、`IDENTITY_PROJECT_ENDPOINT`／`IDENTITY_AGENT_NAME` は名前取得向けです。購買認証は常にMI、名前取得は `IDENTITY_USER_AUTH_MODE`（既定refresh_token）です。旧 `FOUNDRY_USER_AUTH_MODE` による全呼び先一括切替は使用しません。
 
-- App Service EasyAuth で Web UI へのサインインを制御する。
-- EasyAuth token store / refresh token を使い、Foundry 向け user delegated token を取得する。
-- `Ocp-Apim-Subscription-Key` と `Authorization: Bearer <Foundry user delegated token>` を付けて APIM を呼び出す。
-- APIM 経由で Foundry Agent endpoint Responses API を stream 実行する。
-- Foundry の MCP approval / OAuth consent request を UI に表示し、ユーザー操作後に `/api/continue` で再開する。
-- 通常チャットは SSE でジョブイベントを受信し、SSE が失敗した場合はポーリングに fallback する。
-- 会話継続は現時点では Foundry `conversation` ではなく `previous_response_id` を使う。
-- Foundry が stale な `previous_response_id` を `400` で拒否した場合、通常チャットに限り state reset + 1 回 retry する。
+旧画面の既定動作は `IDENTITY_LOOKUP_ENABLED=true/false` で切り替えます。省略時はfalse。`POST /api/chat` の `lookupApplicant` でturnごとに上書き可能です。元UIへ切替ボタンは追加していません。名前取得の承認拒否、または `/api/continue` の `skipIdentity:true` で名前なしの購買へ進めます。
 
-## 全体構成での位置づけ
+EasyAuth token store・Foundry委任permission・利用者のFoundry権限・APIMの新しい委任経路が未設定だと、名前取得はFAILEDになります。詳細は上記ガイドを参照してください。Web MIの既存購買経路と権限はそのまま使います。
 
-```text
-Browser
-  ↓ HTTPS / EasyAuth session
-webapp-foundry-oauth (App Service / FastAPI)
-  ↓ Ocp-Apim-Subscription-Key
-  ↓ Authorization: Bearer <Foundry user delegated token>
-Azure API Management
-  ↓ Authorization を上書きせず転送
-Azure AI Foundry Agent endpoint Responses API
-  ↓ OAuth Identity Passthrough
-Azure Functions MCP Server
-  ↓ OBO
-Microsoft Graph API (/me)
-```
-
-このアプリは Foundry に直接ブラウザからアクセスさせず、backend 側で endpoint、subscription key、token 取得、ジョブ状態、approval / consent 再開を管理します。
-
-## 主な機能
-
-| 機能 | 内容 |
-| --- | --- |
-| EasyAuth 連携 | App Service の現在ユーザーを信頼源として扱う |
-| Foundry user delegated 呼び出し | EasyAuth refresh token から Foundry 向け token を取得し APIM へ転送 |
-| Agent endpoint Responses API | `/agents/{agent}/endpoint/protocols/openai/responses?api-version=v1` を呼び出す |
-| ジョブ管理 | `/api/chat` / `/api/continue` が `jobId` を返し、backend task で Foundry stream を処理 |
-| SSE | `/api/jobs/{jobId}/events` で job events を stream 配信 |
-| ポーリング fallback | SSE が使えない場合に `/api/jobs/{jobId}` で状態取得 |
-| MCP approval UI | `mcp_approval_request` をカード表示し approve / reject を送信 |
-| OAuth consent UI | `oauth_consent_request` をカード表示し consent page を開く |
-| 安全な承認継続 | approval / consent 検出後も `response.completed` まで Foundry stream を読み切り、応答ID確定後に UI を操作可能にする |
-| 会話継続 | `previous_response_id` を保存し次回 request に利用 |
-| stale state retry | `previous_response_id` 起因の Foundry 400 を通常チャットで自動復旧 |
-
-## アーキテクチャ
-
-```text
-Browser (Static UI served by FastAPI)
-  │
-  │ POST /api/chat
-  │ POST /api/continue
-  │ GET  /api/jobs/{jobId}/events   # SSE
-  │ GET  /api/jobs/{jobId}          # polling fallback
-  ▼
-FastAPI backend (server.py)
-  │
-  │ acquire Foundry user delegated token from EasyAuth refresh token
-  │
-  │ POST <PROJECT_ENDPOINT>/agents/<AGENT_NAME>/endpoint/protocols/openai/responses?api-version=v1
-  │   stream=true
-  │   headers:
-  │     Ocp-Apim-Subscription-Key: <APIM_SUBSCRIPTION_KEY>
-  │     Authorization: Bearer <Foundry user delegated token>
-  ▼
-API Management
-  │
-  │ forward Authorization
-  │ remove Ocp-Apim-Subscription-Key before backend
-  ▼
-Azure AI Foundry Agent
-```
-
-## OAuth Consent / MCP Approval フロー
-
-### OAuth Consent
-
-```text
-User sends message
-  ↓
-FastAPI -> APIM -> Foundry Responses API (stream)
-  ↓ event: oauth_consent_request
-FastAPI drains the stream through response.completed
-  ↓
-UI shows ConsentCard
-  ├─ Open Consent Page -> popup -> user grants permission
-  └─ I've Consented — Continue
-       ↓
-     POST /api/continue
-       ↓
-     FastAPI resumes with previous_response_id
-```
-
-### MCP Approval
-
-```text
-User sends message
-  ↓
-FastAPI -> APIM -> Foundry Responses API (stream)
-  ↓ output item: mcp_approval_request
-FastAPI drains the stream through response.completed
-  ↓
-UI shows ApprovalCard
-  ├─ Approve and Continue
-  └─ Reject
-       ↓
-     POST /api/continue
-       ↓
-     FastAPI sends mcp_approval_response with previous_response_id
-```
-
-## ディレクトリ構成
-
-```text
-webapp-foundry-oauth/
-├── backend/
-│   ├── server.py          # FastAPI backend / job / SSE / Foundry 呼び出し
-│   ├── requirements.txt
-│   ├── .env.template
-│   └── static/
-│       ├── index.html     # チャット UI
-│       ├── app.js         # SSE / polling / approval / consent UI 制御
-│       └── styles.css
-├── scripts/
-│   ├── deploy-web.sh
-│   └── deploy-web.ps1
-└── startup.sh
-```
-
-## 前提条件
-
-- Azure App Service が作成済みであること。
-- App Service Authentication / EasyAuth が有効であること。
-- EasyAuth token store が有効であること。
-- EasyAuth 用 App Registration に Foundry / Azure AI の delegated permission が設定されていること。
-- App Service で `/.auth/me` から refresh token を取得できるセッションであること。
-- APIM に Foundry Agent endpoint Responses API proxy が作成済みであること。
-- APIM policy が案A用、つまり `Authorization` を managed identity で上書きせず転送する構成であること。
-- Foundry Agent に OAuth Identity Passthrough 付き MCP tool が設定済みであること。
-- Foundry API を呼ぶユーザーまたはグループに `Azure AI User` / `Foundry User` 相当の RBAC があること。
-
-購買E2Eのidentity判断は[EasyAuth/OBO ADR](../../docs/adr-0001-easyauth-and-obo.md)、現在のAzure構成は[validation report](../../docs/report/validation-results-2026-09-06.md)を参照してください。
-
-## ローカル実行
-
-ローカル実行は UI / API の開発確認用です。EasyAuth は App Service の機能であるため、案Aの user delegated token 取得を完全に再現するには Azure 上の App Service で確認してください。
+## 配布
 
 ```bash
-cd webapp-foundry-oauth/backend
-python -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-cp .env.template .env
-uvicorn server:app --reload --port 8000
+python scripts/package-procurement.py /tmp/procurement-oauth-web.zip
 ```
 
-ブラウザで `http://localhost:8000` を開きます。
+ZIPは8ファイルのallowlistで生成し、既存ファイルを上書きしません。Oryxはルートrequirementsを読み、startup.shがserver:appを1workerで起動します。元の提供ZIPを上書きするdeploy-web.sh／.ps1は引き続き停止しています。
 
-## 主な App Service app settings
+`backend/procurement.py` と `static/procurement.*` は2026-09-07までの購買専用UI実装としてソースに残りますが、今回のZIPには入りません。以前の実装・配布方法はGit履歴の `e7fd85c` を参照してください。
 
-| 設定名 | 必須 | 用途 |
-| --- | --- | --- |
-| `PROJECT_ENDPOINT` | 必須 | APIM 経由の Foundry Agent endpoint ベース URL。例: `https://<apim>.azure-api.net/foundry/<project>` |
-| `AGENT_NAME` | 必須 | URL path で指定する Foundry Agent 名 |
-| `APIM_SUBSCRIPTION_KEY` | 必須 | App Service -> APIM の subscription key |
-| `WEBAPP_ENTRA_CLIENT_ID` | 必須 | EasyAuth 用 App Registration の client ID |
-| `FOUNDRY_USER_AUTH_MODE` | 必須 | 案Aでは `refresh_token` |
-| `FOUNDRY_TOKEN_SCOPES` | 必須 | Foundry token 取得 scope。例: `https://ai.azure.com/.default` |
-| `CORS_ORIGINS` | 任意 | Web UI の公開 URL。デプロイスクリプトでは `WEB_APP_URL` が既定値 |
-| `WEBSITES_PORT` | 必須 | App Service での Uvicorn 待ち受けポート。通常 `8080` |
-| `SCM_DO_BUILD_DURING_DEPLOYMENT` | 推奨 | Oryx build automation 有効化 |
-| `ENABLE_ORYX_BUILD` | 推奨 | App Service remote build 有効化 |
+## 観測と状態
 
-`FOUNDRY_USER_AUTH_MODE=refresh_token` では、EasyAuth の access token そのものではなく、EasyAuth token store の refresh token を使って Foundry 向け delegated token を取り直します。これにより、App Service の現在ユーザーと Foundry 呼び出しユーザーを合わせます。
+Provider／Azure Monitor Trace Exporterは `backend/telemetry.py` のlifespanで初期化し、実際のHTTPX clientへ計装します。氏名やTokenをログ・Spanへ記録しません。`user.id` はEasyAuthのtid/oidのSHA-256です。
 
-## デプロイ
+購買・OAuth同意後の再実行は同じFoundry Conversationを使用し、元の依頼を再送します。ジョブ・Webの再開情報は1インスタンスのメモリ内です。再起動・配布後は新しい会話から再開してください。旧画面は利用者別localStorageに会話を保存します。
 
-現在は UI も `backend/static` に統合されているため、App Service からは Python アプリ 1 つとして扱います。ZIP デプロイ時は `scripts/deploy-web.*` が `backend/`、`startup.sh`、ルートの `requirements.txt` をまとめて配置します。
+## ローカル検証
 
-Bash:
+リポジトリrootから、Azureに接続しないHTTPX/SSE fixtureで検証できます。
 
 ```bash
-export RESOURCE_GROUP=sample-rg-foundry-mcp
-export WEB_APP=sample-webapp-foundry-oauth
-export WEB_APP_URL=https://sample-webapp-foundry-oauth-a1b2c3d4e5f6g7h8.canadaeast-01.azurewebsites.net
-export PROJECT_ENDPOINT=https://sample-apim.azure-api.net/foundry/sample-project
-export AGENT_NAME=sample-mcp-oauth-agent
-read -rsp "APIM Subscription Key: " APIM_SUBSCRIPTION_KEY && echo
-export APIM_SUBSCRIPTION_KEY
-bash ./scripts/deploy-web.sh
+TMPDIR=/tmp PYTHONPATH=src:scripts .venv/bin/python -m pytest -q tests/unit/test_oauth_procurement.py src/webapp-foundry-oauth/tests/test_stream_response.py
 ```
 
-PowerShell:
-
-```powershell
-$env:RESOURCE_GROUP = "sample-rg-foundry-mcp"
-$env:WEB_APP = "sample-webapp-foundry-oauth"
-$env:WEB_APP_URL = "https://sample-webapp-foundry-oauth-a1b2c3d4e5f6g7h8.canadaeast-01.azurewebsites.net"
-$env:PROJECT_ENDPOINT = "https://sample-apim.azure-api.net/foundry/sample-project"
-$env:AGENT_NAME = "sample-mcp-oauth-agent"
-$env:APIM_SUBSCRIPTION_KEY = Read-Host "APIM Subscription Key"
-.\scripts\deploy-web.ps1
-```
-
-`WEB_APP` は Azure リソース名、`WEB_APP_URL` は実際の公開 HTTPS origin です。secure unique default hostname を使う環境では両者が一致しないため、公開 URL をリソース名から組み立てないでください。PowerShell は同名の引数でも指定できますが、環境変数形式にそろえると Bash と同じ入力名で管理できます。
-
-デプロイスクリプトは基本的な App Service 設定とコード配置を行います。案Aで必要な EasyAuth / Foundry user delegated 関連のapp settingsは、対象環境のEntra構成に合わせて追加してください。購買PoCの配備入口にはこの参考scriptを使用しません。
-
-Startup command は `bash startup.sh` です。
-
-## 動作確認
-
-1. App Service URL にアクセスし、EasyAuth でサインインする。
-2. チャット欄に `Who am I?` または `自分は誰？` と入力する。
-3. 初回は MCP approval / OAuth consent が表示される場合がある。
-4. Continue 後、`whoami` tool が実行される。
-5. Graph `/me` のユーザー情報が、App Service でサインインしているユーザーと一致することを確認する。
-6. 別ユーザーで再ログインして実行し、前ユーザーの情報が返らないことを確認する。
-
-## SSE イベント仕様
-
-| `type` | 内容 |
-| --- | --- |
-| `text.delta` | テキスト差分 |
-| `tool.start` | ツール呼び出し開始 |
-| `tool.end` | ツール呼び出し完了 |
-| `tool.error` | ツール呼び出しエラー |
-| `mcp_approval_required` | MCP 実行承認が必要 |
-| `oauth_consent_required` | OAuth 同意が必要 |
-| `done` | ストリーム完了 |
-| `error` | エラー |
-
-## 会話継続について
-
-現在は Foundry `conversation` リソースではなく、前回の `response.id` を `previous_response_id` として次回 request に渡します。
-
-- 小規模サンプルとして実装がシンプルです。
-- App Service の in-memory state に依存します。
-- App Service 再起動や Foundry 側 state の失効で stale になることがあります。
-- stale な `previous_response_id` による `400` は、通常チャットに限り state reset + 1 回 retry します。
-
-購買PoCの`procurement.py`はこの参考方式ではなく、Foundry Conversation IDを署名cookieへowner-boundで保持します。
-
-## セキュリティ上の注意
-
-- Foundry / Graph access token や refresh token をブラウザ、tool arguments、ログへ出さないでください。
-- `APIM_SUBSCRIPTION_KEY` や EasyAuth provider secret は Key Vault 管理を検討してください。
-- App Service 複数インスタンス運用では、job / conversation state の永続化を検討してください。
-- 本番運用では Application Insights、Private Endpoint、Front Door Premium なども検討してください。
-
-## 関連ドキュメント
-
-- [Repository README](../../README.md)
-- [EasyAuth/OBO ADR](../../docs/adr-0001-easyauth-and-obo.md)
-- [Foundry deployment guide](../../docs/deployment/README.md)
-- [Current validation report](../../docs/report/validation-results-2026-09-06.md)
-# このRepositoryでの購買PoC用入口（2026-09-03）
-
-App Serviceには `startup.sh` → `backend/procurement.py:app` を配置する。
-既存の `backend/server.py` / `static/app.js` はOAuth/Graph参考実装として保存するが、購買PoCでは公開・packageしない。
-Hallmark skillは利用不可だったため、既存CSSを使った最小の購買入力・結果・status・相関表示だけを追加した。
-
-経路は Browser → EasyAuth → App Service system MI → APIM → Foundry Hosted親 → Prompt子 → Toolbox → Search。
-元サンプルのrefresh token/OBOは使用しない。APIMはApp Service MIのtenant/audience/oidを検証し、そのBearerをFoundryへ転送する。
-参照APIMのResponses経路に加え、Foundry Conversationsの作成・取得・metadata更新経路が必要。
-
-## Packaging / deployment
-
-`scripts/package-procurement.py /tmp/procurement-webapp-unique.zip` で6ファイルだけをZIP化する。
-既存ZIP、`.env`、OAuth server、user claim/token、Agent商品データは含めない。既存出力名への上書きは拒否する。
-元の `deploy-web.sh` / `.ps1` は古いpackageと設定を適用するため、誤実行を停止するguardを置いた。
-
-Repository rootの `infra/webui.bicep` がApp Service/EasyAuth/APIM/Search/Insightsを定義する。
-what-ifと必要な確認が完了した後、生成ZIPを対象Web Appへ `az webapp deploy --type zip --src-path ... --output none` で配置する。
-実配置、EasyAuthログイン、APIM越しのFoundryアクセスはまだ未検証。
-
-必要な設定: `PROJECT_ENDPOINT`（APIM URL）、`AGENT_NAME`、`WEB_APP_URL`（HTTPS origin）、
-`WEBUI_SESSION_SIGNING_KEY`（32 bytes以上、安定したsecret）、`APPLICATIONINSIGHTS_CONNECTION_STRING`。
-認証secret/署名keyはsecure deployment parametersで渡し、RepositoryやCLI出力に含めない。
-
-## 会話・Traceの境界
-
-- Foundry Conversationを作成し、Responses bodyの `conversation` にIDを設定する。`previous_response_id`方式は使わない。
-- owner hash、turn、case IDはFoundry Conversation metadataに保持する。cookieは署名済み・HttpOnly/Secure/SameSite、owner-bound。
-- 他ユーザーcookie、任意Conversation body、CSRF、未認証アクセスを拒否する。AzureではEasyAuthを必須にし、backendへ直接公開する認証迂回経路を設けない。
-- browser traceparent/tracestate/baggageは破棄。ASGI server rootとHTTPXの自動注入を使う。手動traceparent注入なし。
-- Local実HTTP fixtureでroot → client Span → outgoing traceparent、user.id baggage、2 turn会話を確認済み。
-- Managed Foundry/APIM越しの伝播、Framework Session mapping、親のcase/turn相関、Azure traceは `AZURE_PENDING`。
-- Foundryに履歴を置くが、UIで過去全メッセージを一覧表示する機能は未実装。同じ会話への次turn送信はcookieから再開する。
-- 表示は業務結果の限定projectionのみ。raw result.trace、tool arguments、reasoning、token、claimsは返さない。
-
-上記のOAuthサンプルの元の説明は、このPoCの稼働設定ではない。
-
----
+配備済みバージョンと実Azure検証の結果は実装ガイドを参照してください。

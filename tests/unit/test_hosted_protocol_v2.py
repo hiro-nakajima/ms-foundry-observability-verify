@@ -8,7 +8,7 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from procurement_agent.framework import DeterministicChatClient, local_parent_handler
-from procurement_agent.hosted import authenticated_applicant_name, FoundryRuntimeSettings, build_hosted_bundle
+from procurement_agent.hosted import authenticated_applicant_name, applicant_lookup_status, FoundryRuntimeSettings, build_hosted_bundle
 from procurement_agent.hosted_app import _RequestCorrelationMiddleware
 from procurement_agent.observability import current_request_attributes, request_correlation
 
@@ -59,6 +59,30 @@ async def test_hosted_request_metadata_is_allowlisted_and_request_scoped():
         assert (await client.post("/responses", json={})).json() == {"attributes": {}, "applicant": None}
     assert request_correlation.get() == {}
     assert authenticated_applicant_name.get() is None
+
+
+@pytest.mark.anyio
+async def test_nullable_identity_metadata_and_user_correlation():
+    async def endpoint(request):
+        return JSONResponse({"name": authenticated_applicant_name.get(),
+            "lookup": applicant_lookup_status.get(), "attributes": current_request_attributes()})
+
+    app = Starlette(routes=[Route("/responses", endpoint, methods=["POST"])])
+    app.add_middleware(_RequestCorrelationMiddleware)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://testserver") as client:
+        metadata = {"app.authenticated.display_name": "架空 OBO", "app.identity.source": "graph_obo",
+                    "app.identity.lookup.status": "SUCCESS", "app.user.id": "c" * 64,
+                    "app.web.trace_id": "d" * 32}
+        success = (await client.post("/responses", json={"metadata": metadata})).json()
+        assert success["name"] == "架空 OBO" and success["lookup"] == "SUCCESS"
+        assert success["attributes"]["user.id"] == "c" * 64
+        assert "架空 OBO" not in str(success["attributes"])
+        for status in ("SKIPPED", "FAILED"):
+            cleared = (await client.post("/responses", json={"metadata": {**metadata, "app.identity.lookup.status": status}})).json()
+            assert cleared["name"] is None and cleared["lookup"] == status
+        invalid = (await client.post("/responses", json={"metadata": {**metadata, "app.identity.source": "browser"}})).json()
+        assert invalid["name"] is None and invalid["lookup"] == "FAILED"
+    assert applicant_lookup_status.get() is None
 
 
 @pytest.mark.anyio
