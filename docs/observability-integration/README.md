@@ -17,6 +17,7 @@ App Service／Functionsをそのまま配布し、別のContext Provider型Execu
 | [Agent Toolの呼び出し順](hosted-agent-as-tool.md) | OBOとCatalog/Codeの登録・実行位置・再利用 |
 | [App Service変更点](appservice-procurement-changes.md) | 旧OAuth版の再利用と今回追加した部分 |
 | [OAuth/OBO実装詳細](oauth-wrapper-implementation.md) | 同意bridge、本人照合、SDKのTool名、配布方法 |
+| [HostedのOBO・user.id移植用抜粋](hosted-obo-userid-porting.md) | Bundle不要の抽出コード、既存Executorへの接続、未設定時の挙動 |
 | [Azure設定資料](../deployment/configuration.md) | App Service／APIM／Hostedの実設定・認証・RBAC |
 | [ソース索引](source-map.md) | 実ファイル・関数・行番号、Span/event/logging呼び出し、hash |
 

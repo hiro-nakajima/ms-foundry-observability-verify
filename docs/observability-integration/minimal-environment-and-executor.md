@@ -199,6 +199,8 @@ async def invoke_agent_tool(tool, payload, session):
 
 ## 6. OBOを組み込む場合の追加部分
 
+[OBO・user.idの移植用抜粋](hosted-obo-userid-porting.md)に、Bundle依存を外したPythonファイル、接続方法、Tool未設定時の分岐をまとめた。
+
 OBOも含めた今回の挙動を維持する場合、先に **Host入口で名前取得→必要なら同意待ち→既存Executor** の順にする。現在のSDKではnested Agent Toolの同意を旧Webへそのまま届けるためにprotocol adapterを実装している。ToolをContext Providerへ追加するだけで同意カードまで完成するとは扱わない。
 
 ```text
