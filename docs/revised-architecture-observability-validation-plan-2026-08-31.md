@@ -114,7 +114,7 @@ catalog_tool = catalog_agent.as_tool(
 
 会話、Session、Context Provider、Agent Tool、Middleware、serialization、Observabilityについて、Microsoft Agent Frameworkに同等機能がある場合はFramework標準機能を使用する。独自実装は購買Domain Model、Planの業務状態、検証規則、EvaluatorなどFrameworkが購買仕様を知り得ない部分に限定する。
 
-現行checkoutの`src/procurement_agent/memory.py`には独自`AgentSession`と`InMemoryContextProvider`があり、独自`AgentSession.conversation`へ会話を二重保存している。独自`InMemoryHistoryProvider`というclassは現行ファイルにはないが、会話履歴の責務を独自Sessionで実装している点が置換対象である。また`src/procurement_agent/framework.py`の`SerializedProcurementContextProvider`は、Framework `AgentSession.state`へ独自Session全体をJSON文字列として格納しており、Sessionが二重になっている。
+現行checkoutの`src/hosted-agent/procurement_agent/memory.py`には独自`AgentSession`と`InMemoryContextProvider`があり、独自`AgentSession.conversation`へ会話を二重保存している。独自`InMemoryHistoryProvider`というclassは現行ファイルにはないが、会話履歴の責務を独自Sessionで実装している点が置換対象である。また`src/hosted-agent/procurement_agent/framework.py`の`SerializedProcurementContextProvider`は、Framework `AgentSession.state`へ独自Session全体をJSON文字列として格納しており、Sessionが二重になっている。
 
 移行後は次を正本とする。
 
@@ -507,7 +507,7 @@ T2を実施する場合のSampling反復はprofileごとに20回以上を機能�
 6. `memory.py`の独自`AgentSession`、`ConversationMessage`、`InMemoryContextProvider`を廃止し、Framework `AgentSession`と`InMemoryHistoryProvider`へ置換する。
 7. `SerializedProcurementContextProvider`によるnested独自Session保存を廃止する。業務状態だけをPydantic `ProcurementExecutionState`としてFramework `AgentSession.state`のnamespaced keyへ保存する。
 8. Repository全体について、Agent Framework標準機能と重複するadapter、middleware、session/history、serialization、tool wrapper、telemetryを棚卸しする。独自実装を残す場合は「対応するFramework機能がない理由」とcontract testを設計資料へ記録する。
-9. `src/procurement_agent/session_state.py`には`ProcurementExecutionState`とFramework Sessionのnamespaced stateをvalidateして読み書きする薄いhelperだけを置く。Session lifecycle、会話履歴、serializationは実装しない。移行完了後に`memory.py`を削除し、参照元をFramework `AgentSession`または`session_state.py`へ切り替える。
+9. `src/hosted-agent/procurement_agent/session_state.py`には`ProcurementExecutionState`とFramework Sessionのnamespaced stateをvalidateして読み書きする薄いhelperだけを置く。Session lifecycle、会話履歴、serializationは実装しない。移行完了後に`memory.py`を削除し、参照元をFramework `AgentSession`または`session_state.py`へ切り替える。
 
 ### Phase 2: Synthetic Data / Azure AI Search / Toolbox MCP
 
@@ -617,7 +617,7 @@ Localで先に次を完了する。
 
 ## 10. 現行Repositoryとの差分と影響
 
-現行mainはHA-S/HA-MのLocal実装を中心にしており、`src/procurement_agent/models.py`と`src/trace_pipeline/envelope.py`は4つの`logical_pattern`を列挙している。`src/procurement_agent/hosted.py`は同一プロセスの`procurement_specialist.as_tool()`と`drafting_specialist.as_tool()`を作る。
+現行mainはHA-S/HA-MのLocal実装を中心にしており、`src/hosted-agent/procurement_agent/models.py`と`src/hosted-agent/trace_pipeline/envelope.py`は4つの`logical_pattern`を列挙している。`src/hosted-agent/procurement_agent/hosted.py`は同一プロセスの`procurement_specialist.as_tool()`と`drafting_specialist.as_tool()`を作る。
 
 新構成への移行では次が置換対象になる。
 

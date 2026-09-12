@@ -1,6 +1,8 @@
 # HostedAgent 設定内容
 
-更新・実設定照会: 2026-09-08。購買親 `procurement-parent-agent` **v33 / active** をFoundry SDKで読み戻した。[共通構成](configuration.md)／[Tool呼出し順](../observability-integration/hosted-agent-as-tool.md)／[source ZIP配備](hosted-agent-source-zip.md)。
+以下の基盤設定表は2026-09-08の読み戻し記録であり、最新稼働値の再照会ではない。現行コードの説明は2026-09-12の改善に合わせて更新した。最新のv35配備確認は[改善検証記録](../observability-integration/hosted-refactor-validation-20260912.md)を参照。
+
+実設定照会: 2026-09-08。購買親 `procurement-parent-agent` **v33 / active** をFoundry SDKで読み戻した。[共通構成](configuration.md)／[Tool呼出し順](../observability-integration/hosted-agent-as-tool.md)／[source ZIP配備](hosted-agent-source-zip.md)。
 
 ## 1. Agent versionと実行定義
 
@@ -50,7 +52,7 @@ Toolbox endpointは同一projectのversion付きURL。`scripts/deploy_foundry.py
 | catalog_search_agent | Foundry登録済みcatalog-search-agent v4、model gpt-5-mini | FoundryAgent.as_tool、propagate_session=false |
 | code_determination_agent | Foundry登録済みcode-determination-agent v2、model gpt-5-mini | FoundryAgent.as_tool、propagate_session=false |
 
-OBOはLLMを使用しないDeterministicChatClient。購買intakeのPlannerはgpt-5-mini、親の最終応答clientはController結果を返す決定的な処理。Tool登録と実行順を分け、OBOはController前、Catalog→Code→mergeはController内で制御する。
+OBOはLLMを使用しないDeterministicChatClient。購買intakeのPlannerはgpt-5-mini、親の最終応答clientはController結果を返す決定的な処理。Tool登録と実行順を分け、明示的なOBO依頼はHostから独立経路へ分岐し、通常購買のCatalog→Code→mergeはController内で制御する。
 
 Catalog v4はcatalog-search-toolbox v1、Code v2はcode-master-toolbox v1へMCP接続する。各Toolboxの接続定義は[検索MCP設定](toolboxes-and-search-mcp.md)を参照。Portalの見た目だけでTool未設定と判断せず、version定義のToolbox間接参照を読み戻す。
 
@@ -96,24 +98,19 @@ Foundry project identity `70c395fd-1d99-4849-a283-9344ee8c9cd6` にはSearch Ind
 
 Role名はAzureで読取った現在名を採用した。異なる環境や時期ではrole GUIDと権限を確認する。[Foundry RBAC公式資料](https://learn.microsoft.com/en-us/azure/foundry/concepts/rbac-foundry?view=foundry-classic)
 
-## 6. 同意・氏名・会話の設定契約
+## 6. 現行のOBO・会話の動作
 
-lookupの有効/無効はWebがResponses metadataの `app.identity.lookup` で送る。HostedのToolbox endpointを設定しただけで毎回無条件に名前を取るわけではない。
+2026-09-12の改善で `app.identity.lookup` と `app.user.id` の独自契約を廃止した。通常の購買依頼ではOBOを呼ばない。「私は誰ですか」等の明示的な依頼をHostが判定し、Plan & Executeとは独立したidentity Toolへ分岐する。取得した名前は応答に使い、購買状態へ保存しない。
 
-| 状態 | Hostedの挙動 |
-| --- | --- |
-| SUCCESS | Graph結果とWeb hashを本人照合し、申請者名／source=graph_oboを設定 |
-| WAITING_USER | Controller前にoauth_consent_requestとresponse.incompleteを返す |
-| SKIPPED / FAILED | 氏名/sourceをnullへ消去し、購買処理へ進む |
-| 本人不一致 | 検証失敗。別利用者の氏名を採用しない |
+OAuth同意が必要な場合はSDKの同意要求をWebへ返し、既存の同意UIで再開する。Toolbox未設定時は名前を取得できない旨を返す。本人照合はFunctionsが委任TokenのoidとGraph /meのidで行う。Webのhashとの照合は行わない。
 
-氏名はnullableで、購買準備完了の必須条件から外している。同じ会話で以前取得した氏名も、省略turnでは消去する。`x-agent-foundry-call-id` はHost platformからSDKへ供給される値で、静的app settingとして手入力するものではない。
+購買状態はFramework AgentSession.stateで管理する。独立OBOは購買Sessionを作成しないため、OBO後の購買継続には標準のconversationを使う。previous_response_idだけによるOBOから購買への継続は対応しない。
 
-購買状態はFramework AgentSession.state["procurement.execution.v2"]。Foundry ConversationとFramework Sessionを同一IDとして扱わず、Host SDKが会話／stateの読み書きを管理する。Webの同意再開jobはこれと別のメモリ内状態である。
+現行のソースと呼出し順は[Hosted README](../../src/hosted-agent/README.md)と[Tool呼出し順](../observability-integration/hosted-agent-as-tool.md)を参照。
 
 ## 7. OTel設定
 
-[main](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted_app.py:150) から `ProcurementResponsesHostServer(..., configure_observability=configure_host_observability)` を作る。SDKがProvider/exporterを構成し、`TelemetryRecorder.for_hosted_runtime()` とidentity tracerが同じglobal Providerを使う。
+[main](../../src/hosted-agent/procurement_agent/hosted_app.py) から `ProcurementResponsesHostServer(..., configure_observability=configure_host_observability)` を作る。SDKがProvider/exporterを構成し、`TelemetryRecorder.for_hosted_runtime()` とidentity tracerが同じglobal Providerを使う。
 
 | 対象 | 設定／観測 |
 | --- | --- |

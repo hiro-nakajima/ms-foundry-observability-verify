@@ -31,8 +31,7 @@ class _Tool:
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("status", ["SKIPPED", "FAILED"])
-async def test_explicit_lookup_outcome_clears_saved_identity(status):
+async def test_missing_business_applicant_clears_saved_identity():
     def unused(*_):
         raise AssertionError("identity text must not call the planner")
     session = AgentSession()
@@ -40,14 +39,13 @@ async def test_explicit_lookup_outcome_clears_saved_identity(status):
                 catalog_tool=_Tool('catalog_search_agent', RecordedCatalogAgent()),
                 code_tool=_Tool('code_determination_agent', RecordedCodeAgent()),
                 session=session, test_case_id='IDENTITY-CLEAR', telemetry=TelemetryRecorder(),
-                natural_request='私は誰？')
-    result = await _execute_hosted_components(**args, applicant_name='架空 OBO', applicant_status='SUCCESS')
-    assert 'Graph OBO' in result.response_text
-    assert load_execution_state(session).applicant_source == 'graph_obo'
-    cleared = await _execute_hosted_components(**args, applicant_status=status)
+                natural_request='こんにちは')
+    await _execute_hosted_components(**args, applicant_name='架空 名前')
+    assert load_execution_state(session).applicant_name == '架空 名前'
+    cleared = await _execute_hosted_components(**args)
     assert load_execution_state(session).applicant_name is None
     assert load_execution_state(session).applicant_source is None
-    assert '架空 OBO' not in cleared.response_text and '未設定' in cleared.response_text
+    assert '架空 名前' not in cleared.response_text
 
 
 def test_missing_memo_guidance_accepts_explicit_none_answer():
@@ -510,7 +508,7 @@ async def test_unseen_selection_is_rejected_without_tool_call():
 
 
 @pytest.mark.anyio
-async def test_general_and_identity_turns_do_not_enter_procurement_plan():
+async def test_general_turns_do_not_enter_procurement_plan():
     calls = 0
     def planner(*_):
         nonlocal calls
@@ -523,11 +521,11 @@ async def test_general_and_identity_turns_do_not_enter_procurement_plan():
                 code_tool=codes, session=session, telemetry=TelemetryRecorder(),
                 test_case_id='CHAT-ROUTING', applicant_name='架空 太郎')
     greeting = await _execute_hosted_components(**args, natural_request='こんにちは')
-    identity = await _execute_hosted_components(**args, natural_request='私は誰？')
+    identity = await _execute_hosted_components(**args, natural_request='こんにちは')
     state = load_execution_state(session)
     assert greeting.scenario_id == 'CHAT' and greeting.interaction_type == 'general'
-    assert identity.scenario_id == 'IDENTITY' and identity.interaction_type == 'identity'
-    assert '架空 太郎' in identity.response_text and 'EasyAuth' in identity.response_text
+    assert identity.scenario_id == 'CHAT' and identity.interaction_type == 'general'
+    assert '架空 太郎' not in identity.response_text
     assert state.plan is None and state.turn_number == 2
     assert state.last_machine_response['outer_business_status'] == 'SUCCESS'
     assert state.last_machine_response['mcp_status'] == 'NOT_RUN'

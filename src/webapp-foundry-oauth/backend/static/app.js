@@ -44,6 +44,7 @@
     return {
       conversationId: uid(),
       messages: [],
+      diagnostics: null,
       toolLogs: [],
       approvalInfo: null,
       consentInfo: null,
@@ -111,6 +112,7 @@
   }
 
   function renderMessages() {
+    renderDiagnostics();
     elements.emptyState.classList.toggle("hidden", state.messages.length > 0);
     elements.messages.querySelectorAll(".message-row").forEach((node) => node.remove());
 
@@ -130,6 +132,46 @@
 
     elements.messages.scrollTop = elements.messages.scrollHeight;
   }
+
+  // 表示専用。診断値をチャット要求・認証・同意の判断に使わない。
+  function renderDiagnostics() {
+    const target = document.getElementById("diagnostics-values");
+    target.replaceChildren();
+    const data = state.diagnostics || {};
+    const fields = [
+      ["Trace ID", data.traceId], ["Response ID", data.responseId],
+      ["Web Conversation ID", data.webConversationId],
+      ["Foundry Conversation ID", data.foundryConversationId],
+      ["Test Case ID", data.testCaseId], ["Turn", data.turn], ["Status", data.status],
+      ["送信 traceparent（直近のResponses要求）", data.sentHeaders?.traceparent],
+      ["送信 baggage（user.idのみ）", data.sentHeaders?.baggage],
+      ["baggage user.id（メール）", data.sentHeaders?.userId],
+    ];
+    for (const [label, value] of fields) {
+      const term = document.createElement("dt");
+      const detail = document.createElement("dd");
+      term.textContent = label;
+      // innerHTMLを使わず、受信値を必ず文字列として表示する。
+      detail.textContent = value == null || value === "" ? "未取得" : String(value);
+      target.append(term, detail);
+    }
+  }
+
+  function updateDiagnostics(data) {
+    state.diagnostics = data || null;
+    renderDiagnostics();
+    saveState();
+  }
+
+  document.getElementById("copy-diagnostics").addEventListener("click", async () => {
+    const status = document.getElementById("diagnostics-copy-status");
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(state.diagnostics || {}, null, 2));
+      status.textContent = "コピーしました";
+    } catch (_error) {
+      status.textContent = "コピーできませんでした。表示値を選択してコピーしてください。";
+    }
+  });
 
   function renderCards() {
     elements.cards.innerHTML = "";
@@ -398,6 +440,7 @@
       throw new ApiError(response.status, await response.text());
     }
     const job = await response.json();
+    updateDiagnostics(job.diagnostics);
     state.currentJobId = job.jobId;
     state.currentCursor = job.nextCursor || 0;
     setStreaming(true);
@@ -537,6 +580,10 @@
             return;
           }
 
+          if (event.type === "diagnostics") {
+            updateDiagnostics(event.diagnostics);
+            continue; // 診断イベントは保存済み業務イベントのcursorを進めない。
+          }
           applyJobEvent(event);
           state.currentCursor += 1;
 
@@ -587,6 +634,7 @@
       }
 
       const job = await response.json();
+      updateDiagnostics(job.diagnostics);
       for (const event of job.events || []) {
         applyJobEvent(event);
       }
@@ -627,6 +675,7 @@
     const oldConversationId = state.conversationId;
     state.conversationId = uid();
     state.messages = [];
+    updateDiagnostics(null);
     state.toolLogs = [];
     state.approvalInfo = null;
     state.consentInfo = null;

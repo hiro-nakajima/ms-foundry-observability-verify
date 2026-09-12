@@ -8,7 +8,7 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from procurement_agent.framework import DeterministicChatClient, local_parent_handler
-from procurement_agent.hosted import authenticated_applicant_name, applicant_lookup_status, FoundryRuntimeSettings, build_hosted_bundle
+from procurement_agent.hosted import FoundryRuntimeSettings, build_hosted_bundle
 from procurement_agent.hosted_app import _RequestCorrelationMiddleware
 from procurement_agent.observability import current_request_attributes, request_correlation
 
@@ -43,7 +43,7 @@ async def test_hosted_request_metadata_is_allowlisted_and_request_scoped():
     async def endpoint(request: Request):
         await request.json()  # Middleware must leave the protocol body readable.
         return JSONResponse({"attributes": current_request_attributes(),
-                             "applicant": authenticated_applicant_name.get()})
+                             "applicant": None})
 
     app = Starlette(routes=[Route("/responses", endpoint, methods=["POST"])])
     app.add_middleware(_RequestCorrelationMiddleware)
@@ -55,34 +55,24 @@ async def test_hosted_request_metadata_is_allowlisted_and_request_scoped():
         result = response.json()
         assert result == {"attributes": {"gen_ai.conversation.id": "conv_synthetic",
             "test.case.id": "S1-synthetic", "app.web.turn.number": 2,
-            "app.client.contract": "web-json-v1"}, "applicant": "架空 利用者"}
+            "app.client.contract": "web-json-v1"}, "applicant": None}
         assert (await client.post("/responses", json={})).json() == {"attributes": {}, "applicant": None}
     assert request_correlation.get() == {}
-    assert authenticated_applicant_name.get() is None
 
 
 @pytest.mark.anyio
-async def test_nullable_identity_metadata_and_user_correlation():
+async def test_identity_metadata_is_ignored():
     async def endpoint(request):
-        return JSONResponse({"name": authenticated_applicant_name.get(),
-            "lookup": applicant_lookup_status.get(), "attributes": current_request_attributes()})
-
+        return JSONResponse(current_request_attributes())
     app = Starlette(routes=[Route("/responses", endpoint, methods=["POST"])])
     app.add_middleware(_RequestCorrelationMiddleware)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://testserver") as client:
-        metadata = {"app.authenticated.display_name": "架空 OBO", "app.identity.source": "graph_obo",
-                    "app.identity.lookup.status": "SUCCESS", "app.user.id": "c" * 64,
-                    "app.web.trace_id": "d" * 32}
-        success = (await client.post("/responses", json={"metadata": metadata})).json()
-        assert success["name"] == "架空 OBO" and success["lookup"] == "SUCCESS"
-        assert success["attributes"]["user.id"] == "c" * 64
-        assert "架空 OBO" not in str(success["attributes"])
-        for status in ("SKIPPED", "FAILED"):
-            cleared = (await client.post("/responses", json={"metadata": {**metadata, "app.identity.lookup.status": status}})).json()
-            assert cleared["name"] is None and cleared["lookup"] == status
-        invalid = (await client.post("/responses", json={"metadata": {**metadata, "app.identity.source": "browser"}})).json()
-        assert invalid["name"] is None and invalid["lookup"] == "FAILED"
-    assert applicant_lookup_status.get() is None
+        response = await client.post("/responses", json={"metadata": {
+            "app.authenticated.display_name": "架空 OBO", "app.identity.source": "graph_obo",
+            "app.identity.lookup.status": "SUCCESS", "app.identity.lookup": "true",
+            "app.user.id": "c" * 64, "app.web.trace_id": "d" * 32}})
+        assert response.json() == {"app.web.trace_id": "d" * 32}
+        assert (await client.post("/responses", json={})).json() == {}
 
 
 @pytest.mark.anyio
@@ -145,9 +135,22 @@ async def test_sdk_incoming_baggage_reaches_allowlisted_application_attributes()
     try:
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-            result = (await client.post("/responses", json={}, headers={"baggage": "user.id=" + "a" * 64 + ",email=withheld"})).json()
-            assert result == {"user.id": "a" * 64}
+            result = (await client.post("/responses", json={}, headers={"baggage": "user.id=tester%40example.invalid,email=withheld"})).json()
+            assert result == {"user.id": "tester@example.invalid"}
             assert (await client.post("/responses", json={}, headers={"baggage": "user.id=raw-oid"})).json() == {}
             assert (await client.post("/responses", json={})).json() == {}
     finally:
         propagate.set_global_textmap(previous)
+
+
+def test_application_span_exception_does_not_export_message():
+    from procurement_agent.observability import TelemetryRecorder
+    recorder = TelemetryRecorder()
+    with pytest.raises(ValueError):
+        with recorder.span("plan.create"):
+            raise ValueError("SECRET consent-url payload")
+    span, = recorder.finished_spans()
+    assert span.status.status_code.name == "ERROR"
+    assert span.attributes["error.type"] == "ValueError"
+    assert "SECRET" not in span.to_json()
+    assert not span.events

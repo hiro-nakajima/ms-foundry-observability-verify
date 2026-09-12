@@ -1,6 +1,8 @@
 # App Service 設定内容
 
-更新・実設定照会: 2026-09-08。[共通リソース・認証](configuration.md)／[購買向けソース変更](../observability-integration/appservice-procurement-changes.md)。以下はAzureの現在値であり、Bicepの既定値だけを転記したものではない。
+以下の配備値は過去の読み戻し記録。現行のファイル構成・配布方法・設定の要否は[Web README](../../src/webapp-foundry-oauth/README.md)、最新配備の確認は[改善検証記録](../observability-integration/webapp-refactor-validation-20260912.md)を参照。
+
+更新・実設定照会: 2026-09-08。[共通リソース・認証](configuration.md)／[購買向けソース変更](../trash/observability-integration/appservice-procurement-changes.md)。以下はAzureの現在値であり、Bicepの既定値だけを転記したものではない。
 
 ## 1. リソースと起動
 
@@ -20,7 +22,7 @@
 | healthCheckPath | 未設定（null） | 専用health check設定なし |
 | publicNetworkAccess | ARM値null | 明示値なし。現Web URLのアクセスは確認済み |
 
-ソース: [startup.sh](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/startup.sh)、[webui.bicep](/home/hnakajima/work/foundry-procurement-agent/infra/webui.bicep)。起動時にはZIP内 `.python_packages/lib/site-packages` をPYTHONPATHへ追加する。
+ソース: [startup.sh](../../src/webapp-foundry-oauth/startup.sh)、[webui.bicep](../../infra/webui.bicep)。起動時にはZIP内 `.python_packages/lib/site-packages` をPYTHONPATHへ追加する。
 
 ## 2. App settingsの現在値
 
@@ -99,13 +101,13 @@ Web system-assigned MI principal: `529d921e-f06b-4edf-af2e-f1ef256315d1`。
 | Foundry Project Runtime User | `142bfaed-a13f-4c2d-bed2-6db62c4a1009` | Foundry project |
 | Foundry Agent Consumer | `eed3b665-ab3a-47b6-8f48-c9382fb1dad6` | 購買Agent |
 
-現在の `refresh_token` 経路では利用者のTokenを使う。MIを用いる設定も残っているが、OBOを実行する場合にWeb MI権限だけを付ける構成にはしない。OBOを省略しMIで呼ぶ場合は `FOUNDRY_USER_AUTH_MODE=managed_identity`、`IDENTITY_LOOKUP_ENABLED=false` と新規会話を組み合わせる。モード変更後に既存会話を流用するとコードが拒否する。
+現在の `refresh_token` 経路では利用者のTokenを使う。MIを用いる設定も残っているが、OBOを実行する場合にWeb MI権限だけを付ける構成にはしない。OBOを省略しMIで呼ぶ場合は `FOUNDRY_USER_AUTH_MODE=managed_identity` と新規会話を組み合わせる。モード変更後に既存会話を流用するとコードが拒否する。
 
 ## 6. 観測設定と情報の受け渡し
 
-Providerは [lifespan](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/telemetry.py:55) がworkerごとに一度生成する。service.name=`procurement-webapp`、Azure Monitor TraceExporter＋BatchSpanProcessor。ASGIと各HTTPX clientを計装する。明示的なOTel LogExporterは設定していない。
+Providerは [lifespan](../../src/webapp-foundry-oauth/backend/telemetry.py) がworkerごとに一度生成する。service.name=`procurement-webapp`、Azure Monitor TraceExporter＋BatchSpanProcessor。ASGIと各HTTPX clientを計装する。明示的なOTel LogExporterは設定していない。
 
-`web.chat.job`、`auth.foundry.token`、`procurement.agent.invoke` にuser.id hash、case、turnを付け、会話／応答IDを記録する。Browserからのtrace/baggageは受信Span作成前に破棄する。Hostedへは検証した相関metadataを渡し、氏名・Token・生claimは入れない。
+`web.chat.job`、`auth.foundry.token`、`procurement.agent.invoke` にuser.id hash、case、turnを付け、会話／応答IDを記録する。Browserからのtrace/baggageは受信Span作成前に破棄する。Hostedへは相関metadataとtraceparent/baggageを渡す。送信baggageのuser.idはEasyAuthから取得したメールアドレス。独自のapp.identity.lookup／app.user.idは送らない。認証Token・生claimを診断情報へ表示しない。
 
 接続先App Insightsは共通の `web-procurement-observe-nkjm-insights`。connection string値はApp settingで管理し資料へ記載しない。
 
@@ -118,9 +120,9 @@ Providerは [lifespan](/home/hnakajima/work/foundry-procurement-agent/src/webapp
 | ZIP方式 | 8 source files＋Linux/Python 3.13のvendor依存 |
 | build flags | SCM_DO_BUILD_DURING_DEPLOYMENT=false、ENABLE_ORYX_BUILD=false |
 
-[package-procurement.py](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/scripts/package-procurement.py) が配布対象を制限する。vendorなしZIPをbuild無効の環境へ配ると依存を導入できないため、ZIPとbuild設定を組み合わせる。既存ZIPを上書きしない生成例は[OAuth実装ガイド](../observability-integration/oauth-wrapper-implementation.md)を参照。
+[package-procurement.py](../../src/webapp-foundry-oauth/scripts/package-procurement.py) が配布対象を制限する。vendorなしZIPをbuild無効の環境へ配ると依存を導入できないため、ZIPとbuild設定を組み合わせる。既存ZIPを上書きしない生成例は[Web README](../../src/webapp-foundry-oauth/README.md)を参照。
 
-基盤Bicepの `IDENTITY_LOOKUP_ENABLED` 既定はfalse、現在値trueはdeploy_identity.py webによる。`WEBUI_SESSION_SIGNING_KEY` 等の残存設定を今回削除していない。job/同意再開情報は再起動で失われるので再配布後は新規会話で確認する。
+`IDENTITY_LOOKUP_ENABLED` が古い配備設定に残っていても、現行Webコードは参照しない。`WEBUI_SESSION_SIGNING_KEY` 等の残存設定を今回削除していない。job/同意再開情報は再起動で失われるので再配布後は新規会話で確認する。
 
 ## 8. 読取りで確認する項目
 

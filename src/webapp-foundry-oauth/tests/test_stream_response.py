@@ -11,6 +11,8 @@ BACKEND_DIR = Path(__file__).resolve().parents[1] / "backend"
 sys.path.insert(0, str(BACKEND_DIR))
 
 import server  # noqa: E402
+import auth
+import foundry_client
 
 
 def _stream_lines(*events: dict) -> list[str]:
@@ -73,7 +75,7 @@ class StreamResponseTests(unittest.IsolatedAsyncioTestCase):
             "exp": 1234567890,
         }
 
-        projected = server._sanitize_token_claims(claims)
+        projected = auth._sanitize_token_claims(claims)
 
         self.assertTrue(projected["audience_present"])
         self.assertTrue(projected["tenant_present"])
@@ -86,8 +88,9 @@ class StreamResponseTests(unittest.IsolatedAsyncioTestCase):
 
     async def _first_event(self, response: _FakeResponse, conversation_id: str):
         client = _FakeAsyncClient(response)
-        with patch.object(server.httpx, "AsyncClient", return_value=client):
-            stream = server._stream_response(
+        with patch.object(foundry_client.httpx, "AsyncClient", return_value=client):
+            stream = foundry_client._stream_response(
+                conversations=server._conversations, reset_conversation=server._reset_conversation_state,
                 project_endpoint="https://example.test/api/projects/project",
                 agent_name="agent",
                 user_message="whoami",
@@ -99,7 +102,7 @@ class StreamResponseTests(unittest.IsolatedAsyncioTestCase):
             first_payload = await anext(stream)
             with self.assertRaises(StopAsyncIteration):
                 await anext(stream)
-        parsed = server._parse_sse_payload(first_payload)
+        parsed = foundry_client._parse_sse_payload(first_payload)
         self.assertIsNotNone(parsed)
         return parsed
 
@@ -367,8 +370,9 @@ class StreamResponseTests(unittest.IsolatedAsyncioTestCase):
             )
         )
         client = _FakeAsyncClient(response)
-        with patch.object(server.httpx, "AsyncClient", return_value=client):
-            stream = server._stream_response(
+        with patch.object(foundry_client.httpx, "AsyncClient", return_value=client):
+            stream = foundry_client._stream_response(
+                conversations=server._conversations, reset_conversation=server._reset_conversation_state,
                 project_endpoint="https://example.test/api/projects/project",
                 agent_name="agent",
                 user_message=None,
@@ -387,7 +391,7 @@ class StreamResponseTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(StopAsyncIteration):
                 await anext(stream)
 
-        event = server._parse_sse_payload(first_payload)
+        event = foundry_client._parse_sse_payload(first_payload)
         self.assertEqual(
             event,
             {

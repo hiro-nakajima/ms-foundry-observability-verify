@@ -9,7 +9,7 @@ environments:
     dependencyResolution: remote_build
     azureContainerRegistry: null # User requires ZIP deploy; ACR is not used.
     deploymentStatus: ACTIVE
-    agentVersion: '33'
+    agentVersion: '35'
     searchIngestion:
       mode: blob_indexer
       apiVersion: 2026-08-01-preview
@@ -18,7 +18,7 @@ environments:
       indexers:
         - procurement-catalog-blob-indexer
         - procurement-code-master-blob-indexer
-    zipSha256: 8978c3512b3a7bce02654b3af46c7daebd6c8ecd5e2228476558fce88f96e1a3
+    zipSha256: e2ad58342f53b2e6d8a05d7295fa61a5f9d2e319844c61b90a05afc76d78fd9f
     identityAgentTool:
       name: obo_identity_agent
       implementation: hosted_local_agent_as_tool
@@ -27,11 +27,16 @@ environments:
       connection: procurement-whoami
       functionApp: func-procurement-obo-nkjm
       functionDeploymentId: a5a45d82-30b8-4bfb-bdd2-23843f846d36
-      identityResultContract: displayName_and_subjectHash
+      identityResultContract: authenticated_obo_displayName
+      requestRouting: explicit_user_input
+      namePersistence: response_only
+      validationCase: OBO-ROUTE-65466af2bea7
+      validationTraceId: 90235856a25d4550bacfb68e2b36b5d5
+      emailBaggagePropagation: NOT_RECORDED_IN_DIRECT_TEST
       exposedMcpToolName: whoami_func___whoami
-      azureStatus: PASS_WEB_HOSTED_OBO_GRAPH
-      applicantAcquisitionStatus: PASS_NAME_AND_CLEAR_ON_SKIP
-      traceId: ac05d5d0796bca9975933c1647ace37f
+      azureStatus: PASS_V35_WEB_OBO_NAME_USER_CONFIRMED
+      applicantAcquisitionStatus: NOT_USED_FOR_PROCUREMENT
+      previousV34TraceId: dd01e985bfb0b03fcef270fac0795ee1
       runtimePrincipalId: 80a1bbc5-c4b4-49da-b78e-b817696fe464
       runtimeRole: Foundry User
     childAgents:
@@ -50,10 +55,10 @@ environments:
       appGenAIContentRetentionDays: 90
     webApp:
       name: web-procurement-observe-nkjm
-      deploymentId: eb3dc567-dec1-4e45-a175-3284d7f88e09
-      packageSha256: 67b37f892c4f92d9b32496f8bad98307892db7e399483a823b73cf6b1740ab20
+      deploymentId: cbc85fab-895e-4378-99e6-f11fcbe10255
+      packageSha256: 85117f954dc08173ff60d9eaaf3ed37d0c5ae6f272e643c6c0f477215367ba63
       dependencyResolution: vendored_linux_python_3_13
-      browserValidation: PASS_OBO_NAME_DISPLAY_USER_CONFIRMED
+      browserValidation: PASS_LOCAL_DIAGNOSTICS_AND_WEB_OBO_V35_USER_CONFIRMED
       delegatedFoundryInvocation: PASS
       webHostedTracePropagation: PASS
       validationTraceId: ac05d5d0796bca9975933c1647ace37f
@@ -66,7 +71,7 @@ environments:
       - id: WEB-988629d69c414fe58a1974c8c9a29cfb
         scope: hosted-v33-web-delegated-obo-name-and-trace
         azureStatus: PASS
-        traceId: ac05d5d0796bca9975933c1647ace37f
+        traceId: dd01e985bfb0b03fcef270fac0795ee1
       - id: OBO-CHAIN-20260908042318
         scope: hosted-v33-name-then-clear-on-skip-in-same-conversation
         azureStatus: PASS

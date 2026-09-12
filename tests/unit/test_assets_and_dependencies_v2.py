@@ -100,13 +100,13 @@ def test_azure_yaml_uses_official_split_service_hosts_and_reserved_env_rules():
     assert not any(name.startswith("FOUNDRY_") for name in env)
     assert env["OTEL_PROPAGATORS"] == "tracecontext,baggage"
     assert env["OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"] == "false"
-    assert "force-include" not in (ROOT / "pyproject.toml").read_text()
+    assert "force-include" not in (ROOT / "src/hosted-agent/pyproject.toml").read_text()
 
 
 def test_runtime_dependency_pins_are_consistent():
-    project = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
-    lock = (ROOT / "requirements-lock.txt").read_text(encoding="utf-8")
+    project = (ROOT / "src/hosted-agent/pyproject.toml").read_text(encoding="utf-8")
+    requirements = (ROOT / "src/hosted-agent/requirements.txt").read_text(encoding="utf-8")
+    lock = (ROOT / "src/hosted-agent/requirements-lock.txt").read_text(encoding="utf-8")
     for pin in ("agent-framework-core==1.16.0", "agent-framework-foundry==1.11.0", "agent-framework-foundry-hosting==1.0.0b260827"):
         assert pin in project and pin in requirements and pin in lock
     for pin in ("azure-ai-inference==1.0.0b9", "azure-ai-projects==2.3.0", "azure-storage-blob==12.30.1"):

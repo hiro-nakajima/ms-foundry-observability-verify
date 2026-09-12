@@ -26,16 +26,16 @@ Agent YAMLは`infra/foundry/agents/*-agent.yaml`。商品、価格、勘定科�
 初回はlocal manifestに同名Agent/Toolboxの所有記録がない場合、Azure側にも同名が存在しないことをread-onlyで確認する。既存同名定義を無断で取り込んだり置換したりしない。
 
 ```bash
-PYTHONPATH=src:scripts .venv/bin/python scripts/deploy_foundry.py children
+PYTHONPATH=src/hosted-agent:scripts .venv/bin/python scripts/deploy_foundry.py children
 ```
 
 Instructionsまたはschemaを変えた場合は新versionを作る。
 
 ```bash
-PYTHONPATH=src:scripts .venv/bin/python scripts/deploy_foundry.py \
+PYTHONPATH=src/hosted-agent:scripts .venv/bin/python scripts/deploy_foundry.py \
   children --new-version --agent-name catalog-search-agent
 
-PYTHONPATH=src:scripts .venv/bin/python scripts/deploy_foundry.py \
+PYTHONPATH=src/hosted-agent:scripts .venv/bin/python scripts/deploy_foundry.py \
   children --new-version --agent-name code-determination-agent
 ```
 
@@ -47,7 +47,7 @@ scriptは各Agentへ対応Toolboxのversioned MCP endpointを`MCPTool`として�
 2. 上表のAgent名と既存model deploymentを設定する。
 3. 対応するInstructionsファイルを全文設定する。
 4. 対応するToolboxだけを1つ接続する。Catalog AgentへCode Toolbox、Code AgentへCatalog Toolboxを付けない。
-5. Response formatを上表のPydantic schemaと同じJSON schemaにする。schemaは`src/procurement_agent/models.py`から生成できる。
+5. Response formatを上表のPydantic schemaと同じJSON schemaにする。schemaは`src/hosted-agent/procurement_agent/models.py`から生成できる。
 6. publish後にversion、instructions SHA-256、instance identityを記録する。
 7. Agent identityのRBACを確認してからSynthetic invokeする。
 

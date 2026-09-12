@@ -3,7 +3,7 @@
 状態: 基盤deployment `procurement-foundation-20260903021112` はSucceeded。Search 2 index、Blob indexer、Prompt子、Hosted親v9、新Developer APIM、App Serviceを配備済み。EasyAuth Browser 5 turnのCore flow成功とTrace照合まで完了。S2〜S4のAzure semantic injection、commit/push、最終Review、mergeは未実施。
 本書は改訂Architecture資料の実装状況補足。Stage A全14、Stage B 6、S1/S5 Healthy、S1〜S5、V1〜V21は削減しない。
 
-現行Web deploymentは`efebcca8-3807-410a-b04f-dd9ed6ea8f0d`（ZIP SHA256 `96a5b9f68f16e61ceb45f8a47f701af6e4242e465d54cb0a07383e5dc978b9d5`）。status 4/complete/active、Running、匿名401。UIのManaged境界表示は、実測に基づきTrace Context伝播/user.id非伝播へ更新した。詳細とexact Trace evidenceは[Azure検証記録](azure-observability-validation-2026-09-03.md)を正とする。
+現行Web deploymentは`efebcca8-3807-410a-b04f-dd9ed6ea8f0d`（ZIP SHA256 `96a5b9f68f16e61ceb45f8a47f701af6e4242e465d54cb0a07383e5dc978b9d5`）。status 4/complete/active、Running、匿名401。UIのManaged境界表示は、実測に基づきTrace Context伝播/user.id非伝播へ更新した。詳細とexact Trace evidenceは[Azure検証記録](../azure-observability-validation-2026-09-03.md)を正とする。
 
 ## 現在の実測状況
 
@@ -11,7 +11,7 @@ Foundry Prompt子作成の実APIが`400 invalid_parameters`を返した。Agent�
 ユーザーの名称変更承認を受け、論理role名は維持し、Azure実名を`catalog-search-agent` / `code-determination-agent` / `procurement-parent-agent`にした。
 作成成功: Search project-MI connection、AppInsights connection、2 Toolbox version 1、各RemoteTool connection、Prompt子2つ version 1。Hosted親はsource ZIPでversion 1を作成し、3 Agentともactiveを確認した。
 最初の直接呼出しは`404 not_found`。Project Conversationをnamed Agent endpointへ渡したことが原因で、同じAgent endpointのConversations APIへ揃えると解消した。case `S1-DIRECT-20260903062750`はHTTP成功、構造化result/Conversation/Framework Session hashを取得したが、`planner_intake_failed`でtechnical ERROR/business BLOCKED。これはS1正常PASSではない。
-同じplannerの実モデル呼出しで`400 invalid_json_schema`を再現。任意キーのspecifications dictとstrict schema制約の不一致であり、Pydantic生成schemaをstrict=falseで送り、同じmodelで結果検証する方式は単発実測成功。修正版Hosted version 2はactive。S1直接実行ではplannerを通過したが、Toolbox→SearchのAccess deniedで停止。旧version/ZIPは保持。詳細なCore/V1〜V21の実測状態は[Azure検証記録](azure-observability-validation-2026-09-03.md)を参照。query identityへの更新権限は追加していない。
+同じplannerの実モデル呼出しで`400 invalid_json_schema`を再現。任意キーのspecifications dictとstrict schema制約の不一致であり、Pydantic生成schemaをstrict=falseで送り、同じmodelで結果検証する方式は単発実測成功。修正版Hosted version 2はactive。S1直接実行ではplannerを通過したが、Toolbox→SearchのAccess deniedで停止。旧version/ZIPは保持。詳細なCore/V1〜V21の実測状態は[Azure検証記録](../azure-observability-validation-2026-09-03.md)を参照。query identityへの更新権限は追加していない。
 Web App packageはビルド成功。最初の起動失敗はhttpx依存欠落を確認し、httpx/aiohttp/openaiを明示固定した。現行ZIPは依存修正とnamed Conversation経路を含み、deployment ID `8e37eae7-e693-4c5b-9912-cae214ea9729`でsite起動成功を確認。ZIP SHA256 `305a8ad00d868ab8dd91b86d185b7accacce896f9d5e2ed470096322dd28154d`。
 未認証curlは401、`/.auth/login/aad`はEntraへ302を実測。ARM設定はrequireAuthentication=true / RedirectToLoginPage。その後、実EasyAuth要求がcode + id_tokenなのに専用Entra登録がID-token発行無効という不一致を修正。ユーザーが再ログイン後のチャットUI表示成功を確認。元の黒画面にはエラー番号なし。callback URIは一致し、secretも値を出さず存在/一致確認。OBO/delegated API権限は追加していない。Web/EasyAuth経由の実チャットは別途未検証。
 実送信header観測版Web ZIPはdeployment `ffaa00ef-ad28-459e-ba80-333666e1277f`、status 4で成功。SDK自動計装後のtransportでtraceparent/現在span一致・user.id baggage一致のbooleanのみ記録し、raw headerやtokenは記録しない。Local実HTTP検証成功、Azure相関待ち。

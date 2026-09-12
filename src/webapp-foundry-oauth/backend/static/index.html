@@ -45,6 +45,14 @@
 
         <section id="cards" class="cards"></section>
 
+        <details id="diagnostics-panel" class="diagnostics-panel">
+          <summary>診断情報（直近の実行）</summary>
+          <p class="diagnostics-note">Webから送信した値です。下流での受信・記録はAzure Traceで確認してください。baggageは許可したuser.idのみ表示します。</p>
+          <dl id="diagnostics-values"></dl>
+          <button id="copy-diagnostics" class="secondary-button" type="button">診断JSONをコピー</button>
+          <span id="diagnostics-copy-status" role="status"></span>
+        </details>
+
         <form id="chat-form" class="input-bar">
           <input
             id="chat-input"

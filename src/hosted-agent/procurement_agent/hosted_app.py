@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import aclosing
 import json
 import os
 import re
@@ -11,9 +12,9 @@ from pathlib import Path
 from agent_framework_foundry_hosting import ResponsesHostServer
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from .hosted import FoundryRuntimeSettings, authenticated_applicant_name, applicant_lookup_status, build_hosted_bundle
+from .hosted import FoundryRuntimeSettings, build_hosted_bundle
 from .observability import request_correlation, configure_host_observability
-from .identity import IdentityResult, invoke_identity, lookup_requested, identity_result
+from .identity import build_identity_tool, invoke_identity, is_identity_request, identity_response_text
 
 
 _VALIDATION_PROFILES = {
@@ -26,14 +27,10 @@ _VALIDATION_PROFILES = {
 class _RequestCorrelationMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
         attributes = {}
-        applicant_name = None
-        lookup_status = None
-        lookup_enabled = False
         if request.method == "POST" and request.url.path.endswith("/responses"):
             try:
                 body = await request.json()
                 metadata = body.get("metadata") or {}
-                lookup_enabled = metadata.get("app.identity.lookup") == "true"
                 conversation = body.get("conversation")
                 if isinstance(conversation, dict):
                     conversation = conversation.get("id")
@@ -43,7 +40,6 @@ class _RequestCorrelationMiddleware(BaseHTTPMiddleware):
                 if isinstance(case, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,128}", case):
                     attributes["test.case.id"] = case
                 for key, target, pattern in (
-                    ("app.user.id", "user.id", r"[a-f0-9]{64}"),
                     ("app.web.trace_id", "app.web.trace_id", r"[a-f0-9]{32}"),
                 ):
                     value = metadata.get(key)
@@ -52,19 +48,6 @@ class _RequestCorrelationMiddleware(BaseHTTPMiddleware):
                 turn = str(metadata.get("app.turn.number", ""))
                 if turn.isascii() and turn.isdigit() and 0 < int(turn) < 1_000_000:
                     attributes["app.web.turn.number"] = int(turn)
-                supplied_name = metadata.get("app.authenticated.display_name")
-                normalized_name = supplied_name.strip() if isinstance(supplied_name, str) else ""
-                if (0 < len(normalized_name) <= 120
-                        and not any(ord(char) < 32 or ord(char) == 127 for char in normalized_name)):
-                    applicant_name = normalized_name
-                supplied_status = metadata.get("app.identity.lookup.status")
-                if supplied_status in {"SUCCESS", "SKIPPED", "FAILED"}:
-                    lookup_status = supplied_status
-                    if lookup_status != "SUCCESS":
-                        applicant_name = None
-                    elif not applicant_name or metadata.get("app.identity.source") != "graph_obo":
-                        lookup_status, applicant_name = "FAILED", None
-                    attributes["app.identity.lookup.status"] = lookup_status
                 contract = metadata.get("app.client.contract")
                 if contract == "web-json-v1":
                     attributes["app.client.contract"] = contract
@@ -84,59 +67,79 @@ class _RequestCorrelationMiddleware(BaseHTTPMiddleware):
             except (ValueError, AttributeError, TypeError):
                 pass  # Protocol handler owns rejection; never log the raw body.
         token = request_correlation.set(attributes)
-        identity_token = authenticated_applicant_name.set(applicant_name)
-        lookup_token = applicant_lookup_status.set(lookup_status)
-        requested_token = lookup_requested.set(lookup_enabled)
         try:
             return await call_next(request)
         finally:
-            authenticated_applicant_name.reset(identity_token)
-            applicant_lookup_status.reset(lookup_token)
-            lookup_requested.reset(requested_token)
             request_correlation.reset(token)
 
 
-class ProcurementResponsesHostServer(ResponsesHostServer):
-    """Resolve identity before procurement; emit native OAuth items when paused.
+def _latest_input_text(request) -> str:
+    """今回の標準Responses入力だけを見る。metadataや会話履歴を起動指示にしない。"""
+    value = request.get("input", [])
+    if isinstance(value, str):
+        return value
+    for item in reversed(value or []):
+        if item.get("role") == "user":
+            content = item.get("content", "")
+            if isinstance(content, str):
+                return content
+            return "".join(part.get("text", "") for part in content if part.get("type") == "input_text")
+    return ""
 
-    The pinned hosting SDK only bridges connect-time consent on the parent
-    Agent. This small protocol adapter also covers the nested identity Tool.
-    A paused request has not mutated procurement state. The Web wrapper resends
-    the original message on the same conversation after consent.
-    """
-    def __init__(self, bundle, **kwargs):
-        self.identity_tool = bundle.identity_tool
+
+class ProcurementResponsesHostServer(ResponsesHostServer):
+    """通常購買と明示的OBO検証を分離し、既存Webへ標準同意イベントを返す。"""
+
+    def __init__(self, bundle, *, identity_tool=None, **kwargs):
+        # OBO Toolを購買親Agentへ登録しないため、購買中には実行されない。
+        self.identity_tool = identity_tool
         super().__init__(bundle.parent, **kwargs)
 
     async def _handle_response(self, request, context, cancellation_signal):
-        from agent_framework_foundry_hosting._responses import _create_response_event_stream, IdGenerator
+        from agent_framework_foundry_hosting._responses import _create_response_event_stream, IdGenerator, _SignalledIterator
 
-        name_token = authenticated_applicant_name.set(None)
-        status_token = applicant_lookup_status.set("SKIPPED")
-        result_token = identity_result.set(IdentityResult())
-        try:
-            result = await invoke_identity(self.identity_tool)
-            authenticated_applicant_name.set(result.name)
-            applicant_lookup_status.set(result.status)
-            if result.consent:
-                stream = _create_response_event_stream(context)
-                yield stream.emit_created()
-                yield stream.emit_in_progress()
-                for consent in result.consent:
-                    item = {"type": "oauth_consent_request", "id": IdGenerator.new_id("oacr"),
-                            "response_id": context.response_id, "server_label": consent.name,
-                            "consent_link": consent.consent_url}
-                    builder = stream.add_output_item(item["id"])
-                    yield builder.emit_added(item)
-                    yield builder.emit_done(item)
-                yield stream.emit_incomplete(reason="OAuth consent required")
-                return
+        if not is_identity_request(_latest_input_text(request)):
             async for event in super()._handle_response(request, context, cancellation_signal):
                 yield event
-        finally:
-            identity_result.reset(result_token)
-            authenticated_applicant_name.reset(name_token)
-            applicant_lookup_status.reset(status_token)
+            return
+
+        # 検証経路は購買Controllerや購買状態へ触れない。同意後はWebが元の質問を再送する。
+        stream = _create_response_event_stream(context)
+        yield stream.emit_created()
+        yield stream.emit_in_progress()
+        # SDKと同じ停止シグナルを監視し、遅いGraph呼出し中でもキャンセルできる。
+        if cancellation_signal.is_set() or context.shutdown.is_set():
+            return
+        async def lookup():
+            yield await invoke_identity(self.identity_tool)
+        result = None
+        async with aclosing(_SignalledIterator(lookup(), context.shutdown, cancellation_signal)) as pending:
+            async for result in pending:
+                pass
+        if result is None:
+            return
+        if result.consent:
+            for consent in result.consent:
+                item = {"type": "oauth_consent_request", "id": IdGenerator.new_id("oacr"),
+                        "response_id": context.response_id, "server_label": consent.name,
+                        "consent_link": consent.consent_url}
+                builder = stream.add_output_item(item["id"])
+                yield builder.emit_added(item)
+                yield builder.emit_done(item)
+            yield stream.emit_incomplete(reason="OAuth consent required")
+            return
+
+        # 氏名は応答本文だけへ出し、Span・ログ・購買セッションには保存しない。
+        message = stream.add_output_item_message()
+        content = message.add_text_content()
+        yield message.emit_added()
+        yield content.emit_added()
+        text = identity_response_text(result)
+        yield content.emit_delta(text)
+        yield content.emit_text_done(text)
+        yield content.emit_done()
+        yield message.emit_done()
+        yield stream.emit_completed()
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -161,11 +164,15 @@ def main(argv: list[str] | None = None) -> int:
             "azure_apply": False,
         }, sort_keys=True))
         return 0
-    bundle = build_hosted_bundle(FoundryRuntimeSettings.from_env())
+    from azure.identity import DefaultAzureCredential
+    credential = DefaultAzureCredential()
+    bundle = build_hosted_bundle(FoundryRuntimeSettings.from_env(), credential=credential)
+    # 未設定環境でも購買は起動できる。OBO質問には設定不足を明示する。
+    identity_tool = build_identity_tool(credential) if os.getenv("PROCUREMENT_IDENTITY_TOOLBOX_ENDPOINT") else None
     # ResponsesHostServer supplies the transcript. Keep Framework history for
     # serialization/inspection, but never inject the same transcript twice.
     bundle.history_provider.load_messages = False
-    server = ProcurementResponsesHostServer(bundle, configure_observability=configure_host_observability)
+    server = ProcurementResponsesHostServer(bundle, identity_tool=identity_tool, configure_observability=configure_host_observability)
     server.add_middleware(_RequestCorrelationMiddleware)
     server.run(host=args.host, port=args.port)
     return 0

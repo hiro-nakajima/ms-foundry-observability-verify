@@ -518,6 +518,7 @@ class ProcurementController:
         )
         state.child_correlations.append(catalog_input.correlation)
         save_execution_state(session, state)
+        # SDKのTool Spanに加え、業務上の1ステップ（再試行・検証を含む）を観測する。
         with self.telemetry.span("plan.step.execute", {
             **correlation_attributes(catalog_input.correlation),
             "agent.role": "catalog_search",
@@ -598,6 +599,7 @@ class ProcurementController:
         )
         state.child_correlations.append(code_input.correlation)
         save_execution_state(session, state)
+        # SDKのTool Spanに加え、業務上の1ステップ（再試行・検証を含む）を観測する。
         with self.telemetry.span("plan.step.execute", {
             **correlation_attributes(code_input.correlation),
             "agent.role": "code_determination",
@@ -775,6 +777,7 @@ class ProcurementController:
         state.evidence_refs = []
         state.child_correlations = []
         state.last_machine_response = None
+        # Planを実際に作る処理を囲む。ヘルパーの定義だけではSpanは発生しない。
         with self.telemetry.span("plan.create", {"test.case.id": test_case_id, "app.session.id": session.session_id, "app.turn.number": state.turn_number}) as span:
             state.plan = StructuredPlanBuilder().build(raw_plan)
             state.plan.version = previous_version + 1

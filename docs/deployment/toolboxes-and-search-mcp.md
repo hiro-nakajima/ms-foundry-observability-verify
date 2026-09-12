@@ -41,7 +41,7 @@ Search admin keyは使わない。Foundry project system MIへ各index scopeの`
 4. 対応Prompt Agent versionを作成
 
 ```bash
-PYTHONPATH=src:scripts .venv/bin/python scripts/deploy_foundry.py children
+PYTHONPATH=src/hosted-agent:scripts .venv/bin/python scripts/deploy_foundry.py children
 ```
 
 ToolboxだけをPortalで作る場合は、上表とYAMLの値を設定してpublishし、versioned endpointを取得する。endpoint形式は次のとおり。

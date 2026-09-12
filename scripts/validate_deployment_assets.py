@@ -36,7 +36,9 @@ def validate() -> dict[str, object]:
             "version": definition["version"],
             "sha256": digest(instruction_path),
         }
-    source_text = "\n".join(path.read_text(encoding="utf-8") for path in (ROOT / "src/procurement_agent").glob("*.py"))
+    source_text = "\n".join(path.read_text(encoding="utf-8") for path in (ROOT / "src/hosted-agent/procurement_agent").glob("*.py"))
+    if not source_text:
+        raise ValueError("Hosted source directory is empty or missing")
     forbidden = ("class CatalogSearchAgent", "class CodeDeterminationAgent", "SerializedProcurementContextProvider", "class AgentSession")
     matches = [token for token in forbidden if token in source_text]
     if matches:

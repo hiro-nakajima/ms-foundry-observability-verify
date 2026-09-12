@@ -1,14 +1,14 @@
 # Plan&Execute／Functionsへの組み込みコード例
 
-更新日: 2026-09-08。[統合ガイド](README.md)の補足。以下のadapterや検索関数は**移植先への挿入例**であり、未提供サンプルのAPIを確認したものではない。現在のWeb／OBO Functionsの実装済み部分と、任意の追加案を分けて記載する。
+更新日: 2026-09-08。[統合ガイド](../../observability-integration/README.md)の補足。以下のadapterや検索関数は**移植先への挿入例**であり、未提供サンプルのAPIを確認したものではない。現在のWeb／OBO Functionsの実装済み部分と、任意の追加案を分けて記載する。
 
-現行HostedのAgent Tool呼び出しは[順序資料](hosted-agent-as-tool.md)、旧OAuth Webの購買向け変更は[App Service資料](appservice-procurement-changes.md)、正確な関数行番号は[ソース索引](source-map.md)を参照。
+現行HostedのAgent Tool呼び出しは[順序資料](../../observability-integration/hosted-agent-as-tool.md)、旧OAuth Webの購買向け変更は[App Service資料](appservice-procurement-changes.md)、正確な関数行番号は[ソース索引](source-map.md)を参照。
 
 ## 1. ソース内Toolを維持する場合
 
 ### 1.1 Hostedの初期化
 
-移植元: [hosted_app.py:150](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted_app.py:150)、[observability.py:94](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/observability.py:94)。同じ `ResponsesHostServer` を利用する場合、共通Recorderをサンプルのpackageへコピーし、既存の起動処理へ次の順で統合する。
+移植元: [hosted_app.py:150](../../../src/hosted-agent/procurement_agent/hosted_app.py)、[observability.py:94](../../../src/hosted-agent/procurement_agent/observability.py)。同じ `ResponsesHostServer` を利用する場合、共通Recorderをサンプルのpackageへコピーし、既存の起動処理へ次の順で統合する。
 
 ```python
 import os
@@ -100,7 +100,7 @@ async def execute_observed_plan(
 
 この例にサンプルの業務制御を置換する意図はない。対応する`with`／eventを既存処理へ差し込む。retryがあるサンプルでは各attemptを別Spanにし、実際に次の呼出しを行う場合だけ`step.retry_scheduled`を記録する。Planner／mergeの例外・入力schema不正もサンプル側の既存例外処理で分類し、最終`response.status`まで記録する。
 
-相関ContextVarを移す場合は、[hosted_app.py:26](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted_app.py:26)の本文検証とfinally resetも含める。`user.id`を残したまま次の利用者の実行に入らない。
+相関ContextVarを移す場合は、[hosted_app.py:26](../../../src/hosted-agent/procurement_agent/hosted_app.py)の本文検証とfinally resetも含める。`user.id`を残したまま次の利用者の実行に入らない。
 
 ### 1.3 Tool自動Spanの有無による違い
 
@@ -170,7 +170,7 @@ Hostedでは `TelemetryRecorder.for_hosted_runtime().tracer` のように同じP
 
 ## 2. App Serviceへ通常ログも追加したい場合
 
-現行WebはTraceExporterのみである。[telemetry.py:55](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/telemetry.py:55)のlifespanへ以下の初期化を統合すると、選択した業務loggerの記録をOTel Logsへ送る構成を作れる。
+現行WebはTraceExporterのみである。[telemetry.py:55](../../../src/webapp-foundry-oauth/backend/telemetry.py)のlifespanへ以下の初期化を統合すると、選択した業務loggerの記録をOTel Logsへ送る構成を作れる。
 
 これは追加案であり、通常ログが不要なら入れない。同じAzure Monitor ExporterパッケージのLogExporterを使う。OTel LoggingHandler等のAPIは採用バージョンで確認する。[Azure Monitor Python Exporterの公式例](https://github.com/Azure/azure-sdk-for-python/blob/main/sdk/monitor/azure-monitor-opentelemetry-exporter/README.md)
 
@@ -316,4 +316,4 @@ async def run_existing_job(*, user_hash, case_id, turn, acquire_headers, invoke)
 5. 新規モジュールと依存が配布ZIPに入り、送信先設定が存在することを確認する。
 6. Azureで実際のTrace、本文非記録、本人一致／不一致、同意／省略／null消去を検証する。
 
-本書のPython例は構文確認を行った。移植先サンプルへの適用実行や例のAzure送信は未検証。現リポジトリの配布済み実装・実Web OBOの検証は[検証記録](../report/validation-results-2026-09-08-obo.md)で扱う。
+本書のPython例は構文確認を行った。移植先サンプルへの適用実行や例のAzure送信は未検証。現リポジトリの配布済み実装・実Web OBOの検証は[検証記録](../../report/validation-results-2026-09-08-obo.md)で扱う。

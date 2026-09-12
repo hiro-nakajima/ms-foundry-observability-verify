@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 import json
 import re
-from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any
 
@@ -37,7 +36,6 @@ from .session_state import (
 )
 from .progress import ProgressMiddleware, publish
 from .azure_validation import run_azure_validation
-from .identity import build_identity_tool
 
 
 PARENT_INSTRUCTIONS = """You are the single Hosted procurement coordinator.
@@ -67,16 +65,6 @@ Treat the JSON payload supplied by the controller as the source of truth for the
 current procurement. When previous_intake is null, do not reuse fields from an
 older completed procurement found in conversation history.
 """
-
-
-# Request-scoped identity supplied by the authenticated App Service boundary.
-# It is deliberately not an OpenTelemetry attribute or baggage item.
-authenticated_applicant_name: ContextVar[str | None] = ContextVar(
-    "procurement_authenticated_applicant_name", default=None,
-)
-applicant_lookup_status: ContextVar[str | None] = ContextVar(
-    "procurement_applicant_lookup_status", default=None,
-)
 
 
 @dataclass(frozen=True)
@@ -115,11 +103,10 @@ class HostedAgentBundle:
     code_tool: Any
     history_provider: InMemoryHistoryProvider
     telemetry: TelemetryRecorder
-    identity_tool: Any = None
 
 
 class ControllerContextProvider(ContextProvider):
-    """Route each exposed parent invocation through the ordered domain Controller.
+    """ContextProviderから既存Controllerを呼び、検証済み結果だけを応答へ注入する。
 
     Framework history remains owned by ``InMemoryHistoryProvider``. This provider
     stores no parallel conversation or session object; it only injects the current
@@ -181,8 +168,7 @@ class ControllerContextProvider(ContextProvider):
                     planner=self.planner, catalog_tool=self.catalog_tool, code_tool=self.code_tool,
                     natural_request=self._latest_user_text(context), session=session,
                     test_case_id=test_case_id, telemetry=self.telemetry,
-                    applicant_name=authenticated_applicant_name.get(),
-                    applicant_status=applicant_lookup_status.get(),
+                    # 通常購買へOBO結果や旧セッションの本人名を持ち込まない。
                 )
         finally:
             request_correlation.reset(token)
@@ -220,6 +206,8 @@ def build_hosted_bundle(
         name=settings.code_agent_name,
         description="Remote registered Prompt Agent for account and department code lookup.",
     )
+    # 子Agentへ購買セッションを渡さず、検証済みのtask JSONだけを渡す。
+    # 実行順は登録順ではなくControllerのPlanExecutorが制御する。
     catalog_tool = catalog_proxy.as_tool(
         name="catalog_search_agent",
         description="Run the registered catalog Prompt Agent with CatalogSearchInput JSON.",
@@ -244,8 +232,8 @@ def build_hosted_bundle(
         instructions=PARENT_INSTRUCTIONS,
         additional_properties={"architecture_id": "procurement_application_v2"},
     )
+    # Hostが初期化するglobal providerを共有し、独自Exporterは作らない。
     telemetry = TelemetryRecorder.for_hosted_runtime()
-    identity_tool = build_identity_tool(credential)
     controller_provider = ControllerContextProvider(
         planner, catalog_tool, code_tool, telemetry,
     )
@@ -255,7 +243,7 @@ def build_hosted_bundle(
         name=settings.parent_name,
         description="Single Hosted parent for the revised procurement E2E.",
         instructions=PARENT_INSTRUCTIONS,
-        tools=[identity_tool, catalog_tool, code_tool],
+        tools=[catalog_tool, code_tool],
         context_providers=[history, controller_provider],
         middleware=[
             ProgressMiddleware(),
@@ -278,7 +266,6 @@ def build_hosted_bundle(
         code_tool=code_tool,
         history_provider=history,
         telemetry=telemetry,
-        identity_tool=identity_tool,
     )
 
 
@@ -367,8 +354,6 @@ def _with_response_text(result: ScenarioResult) -> ScenarioResult:
 
 def _intent(text: str, *, procurement_active: bool) -> str:
     normalized = re.sub(r"[\s、。！？!?]+", "", text).lower()
-    if normalized in {"私は誰", "私は誰ですか", "わたしは誰", "whoami"}:
-        return "identity"
     if procurement_active:
         return "procurement"
     if _is_explicit_purchase_request(normalized):
@@ -387,26 +372,13 @@ def _is_explicit_purchase_request(text: str) -> bool:
 
 def _conversation_result(
     *, session: AgentSession, state: Any, test_case_id: str,
-    interaction_type: str, applicant_name: str | None,
+    interaction_type: str,
     telemetry: TelemetryRecorder,
 ) -> ScenarioResult:
     state.turn_number += 1
     state.test_case_id = test_case_id
-    if interaction_type == "identity":
-        if applicant_name:
-            source = "Graph OBO" if state.applicant_source == "graph_obo" else "EasyAuth"
-            text = (
-                f"今回連携された表示名は「{applicant_name}」です。"
-                f"この名前は{source}の取得結果です。"
-            )
-        else:
-            text = (
-                "今回は名前を取得していません。申請者名は未設定のまま購買支援を利用できます。"
-            )
-        scenario_id = "IDENTITY"
-    else:
-        text = "こんにちは。何をお手伝いしましょうか。購入したい商品があれば、その内容を教えてください。"
-        scenario_id = "CHAT"
+    text = "こんにちは。何をお手伝いしましょうか。購入したい商品があれば、その内容を教えてください。"
+    scenario_id = "CHAT"
     status = OperationStatus(
         business_status=BusinessStatus.SUCCESS,
         parse_status=ParseStatus.SUCCESS,
@@ -468,7 +440,6 @@ async def _execute_hosted_components(
     *, planner: Agent, catalog_tool: Any, code_tool: Any, natural_request: str,
     session: AgentSession | None, test_case_id: str, telemetry: TelemetryRecorder,
     applicant_name: str | None = None,
-    applicant_status: str | None = None,
 ) -> ScenarioResult:
     if session is None:
         raise ValueError("Framework AgentSession is required; implicit sessions are forbidden")
@@ -487,24 +458,16 @@ async def _execute_hosted_components(
     # then its Plan & Execute state is cleared at the start of the next turn.
     if state.plan is not None and state.plan.status.name == "COMPLETED":
         previous_turn = state.turn_number
-        previous_applicant = state.applicant_name
-        previous_source = state.applicant_source
         state = initialize_execution_state(session, test_case_id=test_case_id)
         state.turn_number = previous_turn
-        state.applicant_name = previous_applicant
-        state.applicant_source = previous_source
         save_execution_state(session, state)
-    if applicant_status is not None:
-        # Explicit SKIPPED/FAILED also clears a previously successful lookup.
-        state.applicant_name = applicant_name if applicant_status == "SUCCESS" else None
-        state.applicant_source = "graph_obo" if state.applicant_name else None
-        if state.request is not None:
-            state.request = state.request.model_copy(update={"applicant_name": state.applicant_name})
-        save_execution_state(session, state)
-    elif applicant_name:
-        state.applicant_name = applicant_name
-        state.applicant_source = "easyauth"
-        save_execution_state(session, state)
+    # 申請者名は内部業務APIの引数だけで受ける。OBO・metadata・baggageから補完しない。
+    # 未指定なら旧セッションの名前も消し、検証経路から購買への持ち越しを防ぐ。
+    state.applicant_name = applicant_name
+    state.applicant_source = "easyauth" if applicant_name else None
+    if state.request is not None:
+        state.request = state.request.model_copy(update={"applicant_name": applicant_name})
+    save_execution_state(session, state)
     interaction_type = _intent(
         natural_request,
         procurement_active=bool(state.intake or state.request or state.catalog_result),
@@ -512,7 +475,7 @@ async def _execute_hosted_components(
     if interaction_type != "procurement":
         return _conversation_result(
             session=session, state=state, test_case_id=test_case_id,
-            interaction_type=interaction_type, applicant_name=state.applicant_name,
+            interaction_type=interaction_type,
             telemetry=telemetry,
         )
     controller = ProcurementController(

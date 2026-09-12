@@ -1,6 +1,10 @@
 # OAuth Web復帰・Hosted内OBO Agent Tool 組み込みガイド
 
-更新日: 2026-09-08。対象は現在の作業ツリーと配布済みHosted v33／OAuth Web／OBO Functions。本書はOAuth/OBO連携の実装詳細です。コンポーネント別の全体対応は[統合ガイド](README.md)、最新行番号とhashは[ソース索引](source-map.md)、Azureの実設定は[設定資料](../deployment/configuration.md)を参照してください。
+> 2026-09-12追加: Webの名前取得用metadataを削除し、メールのuser.id baggageと診断UIを追加しました。現行仕様とHostedの実装結果は[整理案](hosted-simplification-proposal-20260912.md)を参照してください。以下の旧OBO有効化契約は過去の記録です。
+
+> 2026-09-12: WebAppの認証・通信を分割し、旧購買専用UIを削除しました。Webの最新のファイル構成・OTel仕様・配布手順は[WebApp README](../../../src/webapp-foundry-oauth/README.md)を参照してください。以下に残る旧Webパス・行番号・過去の検証件数は当時の記録です。
+
+更新日: 2026-09-08。対象は現在の作業ツリーと配布済みHosted v33／OAuth Web／OBO Functions。本書はOAuth/OBO連携の実装詳細です。コンポーネント別の全体対応は[統合ガイド](../../observability-integration/README.md)、最新行番号とhashは[ソース索引](source-map.md)、Azureの実設定は[設定資料](../../deployment/configuration.md)を参照してください。
 
 ## 1. 今回の構成
 
@@ -181,7 +185,7 @@ Webの `SCM_DO_BUILD_DURING_DEPLOYMENT=false`、`ENABLE_ORYX_BUILD=false` と組
 
 Webのjobと再開情報は1workerのメモリ内です。再起動・再配布後は新しい会話を使います。永続化や複数workerへの拡張は今回の範囲に含めません。OAuth同意の実行は利用者のサインインが必要です。リソースの配備成功だけでは利用者の同意・Graph結果の取得成功を確認したことになりません。
 
-配備バージョン・パッケージhash・Azure実行結果は `.foundry/agent-metadata.yaml` と `.local_state/deployment/identity-deployment.json`、[2026-09-08検証記録](../report/validation-results-2026-09-08-obo.md) に記録します。
+配備バージョン・パッケージhash・Azure実行結果は `.foundry/agent-metadata.yaml` と `.local_state/deployment/identity-deployment.json`、[2026-09-08検証記録](../../report/validation-results-2026-09-08-obo.md) に記録します。
 
 ## 8. 公式仕様
 
@@ -193,17 +197,17 @@ Webのjobと再開情報は1workerのメモリ内です。再起動・再配布�
 
 ## 9. 実装ソースへのリンク
 
-- [Hosted依存](/home/hnakajima/work/foundry-procurement-agent/requirements.txt)
-- [Hosted環境・Agent組立・Controller](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted.py)
-- [OBO Agent Tool・MCP結果・本人照合](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/identity.py)
-- [HostedのOAuth同意bridge・metadata](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted_app.py)
-- [Hosted OTel・機密例外除去](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/observability.py)
-- [Web依存](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/requirements.txt)
-- [Web認証・利用者ID・SSE・API](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/server.py)
-- [Web単一接続先への実行](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement_flow.py)
-- [Web OTel](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/telemetry.py)
-- [Functions依存](/home/hnakajima/work/foundry-procurement-agent/src/functions-mcp-selfhosted/requirements.txt)
-- [Functions MCP・OBO・Graph](/home/hnakajima/work/foundry-procurement-agent/src/functions-mcp-selfhosted/mcp_server.py)
-- [Functions OTel](/home/hnakajima/work/foundry-procurement-agent/src/functions-mcp-selfhosted/mcp_telemetry.py)
-- [既存APIM policy](/home/hnakajima/work/foundry-procurement-agent/infra/apim-foundry-policy.xml)
-- [OBO配備スクリプト](/home/hnakajima/work/foundry-procurement-agent/scripts/deploy_identity.py)
+- [Hosted依存](../../../requirements.txt)
+- [Hosted環境・Agent組立・Controller](../../../src/hosted-agent/procurement_agent/hosted.py)
+- [OBO Agent Tool・MCP結果・本人照合](../../../src/hosted-agent/procurement_agent/identity.py)
+- [HostedのOAuth同意bridge・metadata](../../../src/hosted-agent/procurement_agent/hosted_app.py)
+- [Hosted OTel・機密例外除去](../../../src/hosted-agent/procurement_agent/observability.py)
+- [Web依存](../../../src/webapp-foundry-oauth/requirements.txt)
+- [Web認証・利用者ID・SSE・API](../../../src/webapp-foundry-oauth/backend/server.py)
+- [Web単一接続先への実行](../../../src/webapp-foundry-oauth/backend/procurement_flow.py)
+- [Web OTel](../../../src/webapp-foundry-oauth/backend/telemetry.py)
+- [Functions依存](../../../src/functions-mcp-selfhosted/requirements.txt)
+- [Functions MCP・OBO・Graph](../../../src/functions-mcp-selfhosted/mcp_server.py)
+- [Functions OTel](../../../src/functions-mcp-selfhosted/mcp_telemetry.py)
+- [既存APIM policy](../../../infra/apim-foundry-policy.xml)
+- [OBO配備スクリプト](../../../scripts/deploy_identity.py)
