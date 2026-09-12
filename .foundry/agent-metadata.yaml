@@ -9,7 +9,7 @@ environments:
     dependencyResolution: remote_build
     azureContainerRegistry: null # User requires ZIP deploy; ACR is not used.
     deploymentStatus: ACTIVE
-    agentVersion: '35'
+    agentVersion: '36'
     searchIngestion:
       mode: blob_indexer
       apiVersion: 2026-08-01-preview
@@ -18,7 +18,7 @@ environments:
       indexers:
         - procurement-catalog-blob-indexer
         - procurement-code-master-blob-indexer
-    zipSha256: e2ad58342f53b2e6d8a05d7295fa61a5f9d2e319844c61b90a05afc76d78fd9f
+    zipSha256: 668bdda9c721ca684278d413e3f6c47391236b4c637f7e44bd18e29ed0b8616a
     identityAgentTool:
       name: obo_identity_agent
       implementation: hosted_local_agent_as_tool
@@ -55,10 +55,10 @@ environments:
       appGenAIContentRetentionDays: 90
     webApp:
       name: web-procurement-observe-nkjm
-      deploymentId: cbc85fab-895e-4378-99e6-f11fcbe10255
-      packageSha256: 85117f954dc08173ff60d9eaaf3ed37d0c5ae6f272e643c6c0f477215367ba63
+      deploymentId: 869aca8b-159c-4937-b344-aef0b74b663c
+      packageSha256: 20ebf1c263a88a12380c80f3f46765f53910bdec229ab632ed473406188000d0
       dependencyResolution: vendored_linux_python_3_13
-      browserValidation: PASS_LOCAL_DIAGNOSTICS_AND_WEB_OBO_V35_USER_CONFIRMED
+      browserValidation: PASS_V36_WEB_OBO_NAME_USER_CONFIRMED # 診断表示の再確認は未報告
       delegatedFoundryInvocation: PASS
       webHostedTracePropagation: PASS
       validationTraceId: ac05d5d0796bca9975933c1647ace37f
