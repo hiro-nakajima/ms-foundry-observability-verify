@@ -1,5 +1,7 @@
 # App Service／APIM／HostedAgent 設定内容
 
+この資料のリソースIDとv33の値は2026-09-08の読み戻し記録。最新のソース構成・配布方法は[資料一覧](../README.md)を参照。以降のHosted v35とWeb更新は各改善検証記録に記載している。
+
 確認日: **2026-09-08 13:38 JST**（Azure設定の読取り開始時点）。設定値はARM、Microsoft Graphのアプリ登録、Foundry SDKで照会したもの。今回の資料更新でAzure設定・ソースの実装・配布物は変更していない。
 
 実装・配備・実ユーザーの同意／名前表示とOBOのTrace確認は完了した。未検証のWeb購買全シナリオ等は[検証記録](../report/validation-results-2026-09-08-obo.md)で区別する。
@@ -12,7 +14,7 @@
 | [統合ガイド](../observability-integration/README.md) | 別のPlan&Executeサンプルへ組み込むソースの対応 |
 | [配備手順](README.md) | Search／Toolbox／Prompt／Hostedの再配置 |
 
-別環境への移植では、この一覧の全設定をコピーせず、[必要な環境差分の抽出](../observability-integration/minimal-environment-and-executor.md)を参照する。
+別環境への移植では、この一覧の全設定をコピーせず、[必要な環境差分の抽出](../trash/observability-integration/minimal-environment-and-executor.md)を参照する。
 
 ## 1. 共通リソース
 

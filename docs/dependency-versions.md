@@ -14,3 +14,5 @@ Local検証環境はPython 3.13.13を使用した。runtimeの主要pinは次の
 | `pydantic` | 2.13.4 | ExecutionPlanとStructured I/O |
 
 採用signatureはLocal installed packageで確認し、`tests/unit/test_hosted_factory_v2.py`と`tests/unit/test_session_state_v2.py`をcontract testとして固定した。特に`AgentSession.to_dict/from_dict`、`InMemoryHistoryProvider(..., load_messages=True)`、`FunctionInvocationContext.session`、`FoundryAgent.as_tool(propagate_session=False)`を検証対象とする。
+
+依存の正本は[Hosted requirements](../src/hosted-agent/requirements.txt)と[lock](../src/hosted-agent/requirements-lock.txt)。開発用の導入手順は[リポジトリREADME](../README.md)を参照。

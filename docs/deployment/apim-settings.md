@@ -18,7 +18,7 @@
 | protocols / subscriptionRequired | https / false |
 | backend serviceUrl | https://observability-verify.services.ai.azure.com/api/projects/proj-default |
 
-ソース: [apim.bicep](/home/hnakajima/work/foundry-procurement-agent/infra/apim.bicep)、[apim-foundry-policy.xml](/home/hnakajima/work/foundry-procurement-agent/infra/apim-foundry-policy.xml)、[configure_web](/home/hnakajima/work/foundry-procurement-agent/scripts/deploy_identity.py:96)。PortalではAPIM → APIs → `foundry-proj-default` のSettings／Design／Diagnosticsで確認する。
+ソース: [apim.bicep](../../infra/apim.bicep)、[apim-foundry-policy.xml](../../infra/apim-foundry-policy.xml)、[configure_web](../../scripts/deploy_identity.py)。PortalではAPIM → APIs → `foundry-proj-default` のSettings／Design／Diagnosticsで確認する。
 
 ## 2. 公開する4操作
 

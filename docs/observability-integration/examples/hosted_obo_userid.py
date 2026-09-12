@@ -1,54 +1,34 @@
-"""OBO/user-id extraction from main 781db92, 2026-09-10.
+"""2026-09-12: 独自identity metadata不要のOBO検証経路。import時にAzureへ接続しない。
 
-Copy this module into the destination package, then wire the host and the
-existing Executor as described in ../hosted-obo-userid-porting.md.
-This is not an executable app and makes no Azure calls on import.
-
-Pinned source SDKs: agent-framework-core 1.16.0,
-agent-framework-foundry-hosting 1.0.0b260827, opentelemetry-sdk 1.43.0.
-Source functions are retained; imports are consolidated, the middleware only
-accepts current Web metadata, and the Host constructor takes parent + tool
-instead of HostedAgentBundle. No procurement Controller is included.
+既存の親AgentをIdentityResponsesHostServer(parent_agent, identity_tool=...)へ渡す。
+通常購買は親へ、明示的な本人確認はOBO Toolへ分岐する。名前は購買へ保存しない。
+固定SDK: agent-framework-core 1.16.0 / foundry-hosting 1.0.0b260827 / OTel 1.43.0。
 """
 from __future__ import annotations
-
 import inspect
 import json
 import os
 import re
 from collections.abc import AsyncIterable, Callable, Mapping, Sequence
 from contextvars import ContextVar
+from contextlib import aclosing
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlsplit
 from uuid import uuid4
-
-from agent_framework import (
-    Agent, BaseChatClient, ChatResponse, ChatResponseUpdate,
-    FunctionInvocationContext, Message,
-)
+from agent_framework import Agent, BaseChatClient, ChatResponse, ChatResponseUpdate, FunctionInvocationContext, Message
 from agent_framework_foundry_hosting import FoundryToolbox, ResponsesHostServer
-from agent_framework_foundry_hosting._responses import consent_url_from_error
+from agent_framework_foundry_hosting._responses import ConsentError, consent_url_from_error
+from mcp.shared.exceptions import McpError
 from opentelemetry import baggage, trace
 from opentelemetry.sdk.trace import Event, SpanProcessor, TracerProvider
 from pydantic import BaseModel
-from starlette.middleware.base import BaseHTTPMiddleware
 
-
-
-# Extracted from src/procurement_agent/observability.py: request_correlation
+# 抜粋元: observability.py:request_correlation
 request_correlation: ContextVar[dict[str, Any]] = ContextVar("procurement_request_correlation", default={})
 
 
-# Extracted from src/procurement_agent/observability.py: current_request_attributes
-def current_request_attributes() -> dict[str, Any]:
-    attributes = dict(request_correlation.get())
-    user = baggage.get_baggage("user.id")
-    if "user.id" not in attributes and isinstance(user, str) and re.fullmatch(r"[a-f0-9]{64}", user):
-        attributes["user.id"] = user
-    return attributes
-
-
-# Extracted from src/procurement_agent/observability.py: McpPrivacyProcessor
+# 抜粋元: observability.py:McpPrivacyProcessor
 class McpPrivacyProcessor(SpanProcessor):
     """Remove MCP exception content before every exporter sees an ended span.
 
@@ -57,6 +37,7 @@ class McpPrivacyProcessor(SpanProcessor):
     when GenAI message-content recording is disabled. Preserve exception types,
     method, IDs, timing and error status, but not messages or stack traces.
     """
+    # 固定SDKの終了前hookで、Exporterへ届く前にMCP例外本文を除去する。
     def _on_ending(self, span):
         if not (span.attributes or {}).get("mcp.method.name"):
             return
@@ -68,7 +49,7 @@ class McpPrivacyProcessor(SpanProcessor):
             span._status = trace.Status(span.status.status_code)
 
 
-# Extracted from src/procurement_agent/observability.py: configure_host_observability
+# 抜粋元: observability.py:configure_host_observability
 def configure_host_observability(**kwargs):
     from azure.ai.agentserver.core import configure_observability
     configure_observability(**kwargs)
@@ -78,11 +59,21 @@ def configure_host_observability(**kwargs):
         provider._procurement_mcp_privacy = True
 
 
-# Extracted from src/procurement_agent/framework.py: Handler
+# 抜粋元: observability.py:current_request_attributes
+def current_request_attributes() -> dict[str, Any]:
+    attributes = dict(request_correlation.get())
+    # メールは観測用。認証・認可やGraph本人照合には決して使用しない。
+    user = baggage.get_baggage("user.id")
+    if "user.id" not in attributes and isinstance(user, str) and re.fullmatch(r"[^\s@,;=]+@[^\s@,;=]+\.[^\s@,;=]+", user):
+        attributes["user.id"] = user
+    return attributes
+
+
+# 抜粋元: framework.py:Handler
 Handler = Callable[[Sequence[Message], Mapping[str, Any]], Any]
 
 
-# Extracted from src/procurement_agent/framework.py: DeterministicChatClient
+# 抜粋元: framework.py:DeterministicChatClient
 class DeterministicChatClient(BaseChatClient):
     """Framework-compatible client; it does not model a child Prompt Agent."""
 
@@ -124,23 +115,7 @@ class DeterministicChatClient(BaseChatClient):
         return self._build_response_stream(updates(), response_format=options.get("response_format"))
 
 
-# Extracted from src/procurement_agent/hosted.py: authenticated_applicant_name
-authenticated_applicant_name: ContextVar[str | None] = ContextVar(
-    "procurement_authenticated_applicant_name", default=None,
-)
-
-
-# Extracted from src/procurement_agent/hosted.py: applicant_lookup_status
-applicant_lookup_status: ContextVar[str | None] = ContextVar(
-    "procurement_applicant_lookup_status", default=None,
-)
-
-
-# Extracted from src/procurement_agent/identity.py: lookup_requested
-lookup_requested: ContextVar[bool] = ContextVar("obo_lookup_requested", default=False)
-
-
-# Extracted from src/procurement_agent/identity.py: IdentityResult
+# 抜粋元: identity.py:IdentityResult
 @dataclass(frozen=True)
 class IdentityResult:
     status: str = "SKIPPED"
@@ -148,11 +123,11 @@ class IdentityResult:
     consent: tuple = ()
 
 
-# Extracted from src/procurement_agent/identity.py: identity_result
+# 抜粋元: identity.py:identity_result
 identity_result: ContextVar[IdentityResult] = ContextVar("obo_result", default=IdentityResult())
 
 
-# Extracted from src/procurement_agent/identity.py: parse_whoami_result
+# 抜粋元: identity.py:parse_whoami_result
 def parse_whoami_result(result):
     """Prefer the structured MCP result over its duplicate text representation."""
     if result.isError:
@@ -169,8 +144,9 @@ def parse_whoami_result(result):
     return json.dumps(value, ensure_ascii=False)
 
 
-# Extracted from src/procurement_agent/identity.py: verified_name
-def verified_name(result, expected_user_hash: str) -> str:
+# 抜粋元: identity.py:verified_name
+def verified_name(result) -> str:
+    """信頼済みwhoamiのOBO結果を検査する。本人照合はFunctions側のtoken oidとGraph /me idで行う。"""
     if isinstance(result, list):
         texts = [item.text for item in result if item.type == "text"]
         if len(texts) != 1:
@@ -181,28 +157,49 @@ def verified_name(result, expected_user_hash: str) -> str:
     if not isinstance(result, dict) or result.get("tool") != "whoami" or result.get("auth_mode") != "obo" or result.get("error"):
         raise ValueError("invalid_whoami_result")
     user = result.get("user") or {}
-    subject_hash, name = user.get("subjectHash"), user.get("displayName")
-    if not isinstance(subject_hash, str) or len(subject_hash) != 64 or subject_hash != expected_user_hash:
-        raise ValueError("whoami_subject_mismatch")
+    if not isinstance(user, dict):
+        raise ValueError("invalid_whoami_user")
+    name = user.get("displayName")
+    # baggageや任意metadataは認証情報ではないため、本人照合に使用しない。
     if not isinstance(name, str) or not 0 < len(name.strip()) <= 120 or any(ord(c) < 32 or ord(c) == 127 for c in name):
         raise ValueError("invalid_display_name")
     return name.strip()
 
 
-# Extracted from src/procurement_agent/identity.py: _consent
+# 抜粋元: identity.py:_consent
 def _consent(exc):
-    # MCP failures may be wrapped at several SDK boundaries.
+    # tools/listはJSON形式、tools/callはURL単体の-32006を返す場合がある。
+    # SDKは前者だけを解析するため、後者を先に判定して同じ同意イベントへ変換する。
     seen = set()
     while exc is not None and id(exc) not in seen:
         seen.add(id(exc))
-        found = consent_url_from_error(exc)
-        if found:
-            return tuple(found)
+        rpc_error = exc if isinstance(exc, McpError) else next(
+            (arg for arg in exc.args if isinstance(arg, McpError)), None,
+        )
+        if rpc_error is not None and rpc_error.error.code == -32006 and "{" not in rpc_error.error.message:
+            # エラー本文を一般的なURLとして表示せず、Foundryの同意先に限定する。
+            # URLのdata値は認証情報を含み得るため、ログやSpanへ出さない。
+            url = rpc_error.error.message.strip()
+            try:
+                parsed = urlsplit(url)
+                valid = (parsed.scheme == "https" and parsed.hostname is not None
+                         and parsed.hostname.endswith(".consent.azure-apim.net")
+                         and parsed.path == "/login" and parsed.port in (None, 443)
+                         and parsed.username is None and parsed.password is None)
+            except ValueError:
+                valid = False
+            if valid:
+                return (ConsentError(name="whoami_func", consent_url=url),)
+            # SDKへ渡すと未対応形式の本文をwarningに出すので、この形式はここで終える。
+        else:
+            found = consent_url_from_error(exc)
+            if found:
+                return tuple(found)
         exc = exc.__cause__ or exc.__context__
     return ()
 
 
-# Extracted from src/procurement_agent/identity.py: build_identity_tool
+# 抜粋元: identity.py:build_identity_tool
 def build_identity_tool(credential, *, toolbox_factory=FoundryToolbox):
     async def lookup(messages, options):
         result = IdentityResult("FAILED")
@@ -236,7 +233,7 @@ def build_identity_tool(credential, *, toolbox_factory=FoundryToolbox):
                     raw = await function.invoke(arguments={}, context=FunctionInvocationContext(
                         function=function, arguments={}), skip_parsing=True)
                     stage = "verify"
-                    name = verified_name(raw, current_request_attributes().get("user.id", ""))
+                    name = verified_name(raw)
                     result = IdentityResult("SUCCESS", name)
             except Exception as exc:
                 consent = _consent(exc)
@@ -265,94 +262,108 @@ def build_identity_tool(credential, *, toolbox_factory=FoundryToolbox):
     return agent.as_tool(name="obo_identity_agent", propagate_session=False)
 
 
-# Extracted from src/procurement_agent/identity.py: invoke_identity
+# 抜粋元: identity.py:invoke_identity
 async def invoke_identity(tool) -> IdentityResult:
-    identity_result.set(IdentityResult())
-    if not lookup_requested.get():
-        return identity_result.get()
-    # The operation has no user-controlled arguments and no procurement history.
+    if tool is None:
+        return IdentityResult("UNAVAILABLE")
+    # 引数へTokenや利用者入力を渡さず、プラットフォームの呼出しコンテキストを使う。
     arguments = {"task": "lookup"}
-    await tool.invoke(arguments=arguments,
-                      context=FunctionInvocationContext(function=tool, arguments=arguments), skip_parsing=True)
-    return identity_result.get()
+    token = identity_result.set(IdentityResult())
+    try:
+        await tool.invoke(arguments=arguments,
+                          context=FunctionInvocationContext(function=tool, arguments=arguments), skip_parsing=True)
+        return identity_result.get()
+    finally:
+        identity_result.reset(token)  # 別の要求や通常購買へ名前を持ち越さない。
 
 
-class IdentityRequestMiddleware(BaseHTTPMiddleware):
-    """Current Web contract only; no browser-supplied display name is accepted."""
-
-    async def dispatch(self, request, call_next):
-        attributes, lookup_enabled = {}, False
-        if request.method == "POST" and request.url.path.endswith("/responses"):
-            try:
-                body = await request.json()
-                metadata = body.get("metadata") or {}
-                lookup_enabled = metadata.get("app.identity.lookup") == "true"
-                for key, target, pattern in (
-                    ("app.user.id", "user.id", r"[a-f0-9]{64}"),
-                    ("app.web.trace_id", "app.web.trace_id", r"[a-f0-9]{32}"),
-                    ("test.case.id", "test.case.id", r"[A-Za-z0-9_-]{1,128}"),
-                ):
-                    value = metadata.get(key)
-                    if isinstance(value, str) and re.fullmatch(pattern, value):
-                        attributes[target] = value
-                conversation = body.get("conversation")
-                if isinstance(conversation, dict):
-                    conversation = conversation.get("id")
-                if isinstance(conversation, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,200}", conversation):
-                    attributes["gen_ai.conversation.id"] = conversation
-                turn = str(metadata.get("app.turn.number", ""))
-                if turn.isascii() and turn.isdigit() and 0 < int(turn) < 1_000_000:
-                    attributes["app.web.turn.number"] = int(turn)
-            except (ValueError, AttributeError, TypeError):
-                pass  # The protocol handler validates the body; never log it.
-        correlation_token = request_correlation.set(attributes)
-        requested_token = lookup_requested.set(lookup_enabled)
-        try:
-            return await call_next(request)
-        finally:
-            lookup_requested.reset(requested_token)
-            request_correlation.reset(correlation_token)
+# 抜粋元: identity.py:is_identity_request
+def is_identity_request(text: str) -> bool:
+    """OBO検証への明示的な入口。購買文中の「名前」だけでは起動しない。"""
+    normalized = re.sub(r"[\s、。！？!?]+", "", text).casefold()
+    return normalized in {
+        "私は誰", "私は誰ですか", "わたしは誰", "whoami",
+        "私の名前を教えて", "私の名前を教えてください", "私の名前は", "私の名前は何ですか",
+        "obo", "oboフローを実行", "oboフローを実行して", "oboフローを実行してください",
+        "oboで名前を取得して", "oboで名前を取得してください",
+    }
 
 
-# Adapted from hosted_app.py: constructor accepts the existing parent Agent.
+# 抜粋元: identity.py:identity_response_text
+def identity_response_text(result: IdentityResult) -> str:
+    if result.status == "SUCCESS":
+        return f"Graph OBOで取得したあなたの表示名は「{result.name}」です。"
+    if result.status == "UNAVAILABLE":
+        return "この環境にはOBO検証用Toolboxが設定されていません。購買支援は利用できます。"
+    return "OBOによる名前取得に失敗しました。時間をおいて再試行してください。購買支援は利用できます。"
+
+
+# 抜粋元: hosted_app.py:_latest_input_text
+def _latest_input_text(request) -> str:
+    """今回の標準Responses入力だけを見る。metadataや会話履歴を起動指示にしない。"""
+    value = request.get("input", [])
+    if isinstance(value, str):
+        return value
+    for item in reversed(value or []):
+        if item.get("role") == "user":
+            content = item.get("content", "")
+            if isinstance(content, str):
+                return content
+            return "".join(part.get("text", "") for part in content if part.get("type") == "input_text")
+    return ""
+
+
+# 抜粋元: hosted_app.py:ProcurementResponsesHostServer
 class IdentityResponsesHostServer(ResponsesHostServer):
-    """Resolve identity before procurement; emit native OAuth items when paused.
+    """通常購買と明示的OBO検証を分離し、既存Webへ標準同意イベントを返す。"""
 
-    The pinned hosting SDK only bridges connect-time consent on the parent
-    Agent. This small protocol adapter also covers the nested identity Tool.
-    A paused request has not mutated procurement state. The Web wrapper resends
-    the original message on the same conversation after consent.
-    """
-    def __init__(self, parent_agent, identity_tool, **kwargs):
+    def __init__(self, parent_agent, *, identity_tool=None, **kwargs):
+        # OBO Toolを購買親Agentへ登録しないため、購買中には実行されない。
         self.identity_tool = identity_tool
         super().__init__(parent_agent, **kwargs)
 
     async def _handle_response(self, request, context, cancellation_signal):
-        from agent_framework_foundry_hosting._responses import _create_response_event_stream, IdGenerator
+        from agent_framework_foundry_hosting._responses import _create_response_event_stream, IdGenerator, _SignalledIterator
 
-        name_token = authenticated_applicant_name.set(None)
-        status_token = applicant_lookup_status.set("SKIPPED")
-        result_token = identity_result.set(IdentityResult())
-        try:
-            result = await invoke_identity(self.identity_tool)
-            authenticated_applicant_name.set(result.name)
-            applicant_lookup_status.set(result.status)
-            if result.consent:
-                stream = _create_response_event_stream(context)
-                yield stream.emit_created()
-                yield stream.emit_in_progress()
-                for consent in result.consent:
-                    item = {"type": "oauth_consent_request", "id": IdGenerator.new_id("oacr"),
-                            "response_id": context.response_id, "server_label": consent.name,
-                            "consent_link": consent.consent_url}
-                    builder = stream.add_output_item(item["id"])
-                    yield builder.emit_added(item)
-                    yield builder.emit_done(item)
-                yield stream.emit_incomplete(reason="OAuth consent required")
-                return
+        if not is_identity_request(_latest_input_text(request)):
             async for event in super()._handle_response(request, context, cancellation_signal):
                 yield event
-        finally:
-            identity_result.reset(result_token)
-            authenticated_applicant_name.reset(name_token)
-            applicant_lookup_status.reset(status_token)
+            return
+
+        # 検証経路は購買Controllerや購買状態へ触れない。同意後はWebが元の質問を再送する。
+        stream = _create_response_event_stream(context)
+        yield stream.emit_created()
+        yield stream.emit_in_progress()
+        # SDKと同じ停止シグナルを監視し、遅いGraph呼出し中でもキャンセルできる。
+        if cancellation_signal.is_set() or context.shutdown.is_set():
+            return
+        async def lookup():
+            yield await invoke_identity(self.identity_tool)
+        result = None
+        async with aclosing(_SignalledIterator(lookup(), context.shutdown, cancellation_signal)) as pending:
+            async for result in pending:
+                pass
+        if result is None:
+            return
+        if result.consent:
+            for consent in result.consent:
+                item = {"type": "oauth_consent_request", "id": IdGenerator.new_id("oacr"),
+                        "response_id": context.response_id, "server_label": consent.name,
+                        "consent_link": consent.consent_url}
+                builder = stream.add_output_item(item["id"])
+                yield builder.emit_added(item)
+                yield builder.emit_done(item)
+            yield stream.emit_incomplete(reason="OAuth consent required")
+            return
+
+        # 氏名は応答本文だけへ出し、Span・ログ・購買セッションには保存しない。
+        message = stream.add_output_item_message()
+        content = message.add_text_content()
+        yield message.emit_added()
+        yield content.emit_added()
+        text = identity_response_text(result)
+        yield content.emit_delta(text)
+        yield content.emit_text_done(text)
+        yield content.emit_done()
+        yield message.emit_done()
+        yield stream.emit_completed()

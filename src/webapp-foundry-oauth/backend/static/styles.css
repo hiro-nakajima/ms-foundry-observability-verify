@@ -38,7 +38,8 @@ input {
   font: inherit;
 }
 
-.hidden {
+.hidden,
+.empty-state.hidden {
   display: none;
 }
 
@@ -230,6 +231,7 @@ input {
 
 .input-bar input {
   flex: 1;
+  min-width: 0;
   padding: 0.92rem 1rem;
   border: 1px solid var(--line);
   border-radius: 0.95rem;
@@ -480,3 +482,14 @@ button:disabled {
     max-height: 12rem;
   }
 }
+
+/* 同意・承認カードとは独立した、表示専用の診断欄。 */
+.diagnostics-panel { margin: 8px 20px; padding: 10px 14px; border: 1px solid #d6dce5; border-radius: 8px; background: #f8fafc; font-size: 12px; max-height: 32vh; overflow: auto; }
+.diagnostics-panel summary { cursor: pointer; font-weight: 600; }
+.diagnostics-note { color: #526174; line-height: 1.5; }
+.diagnostics-panel dl { display: grid; grid-template-columns: minmax(130px, 1fr) minmax(0, 3fr); gap: 6px 12px; }
+.diagnostics-panel dt { color: #526174; }
+.diagnostics-panel dd { margin: 0; overflow-wrap: anywhere; user-select: text; font-family: monospace; }
+@media (max-width: 600px) { .diagnostics-panel { margin: 8px; } .diagnostics-panel dl { grid-template-columns: 1fr; } }
+
+@media (max-width: 900px) { .tool-panel-closed { display: none; } }

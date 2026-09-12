@@ -31,6 +31,7 @@ class McpPrivacyProcessor(SpanProcessor):
     when GenAI message-content recording is disabled. Preserve exception types,
     method, IDs, timing and error status, but not messages or stack traces.
     """
+    # 固定SDKの終了前hookで、Exporterへ届く前にMCP例外本文を除去する。
     def _on_ending(self, span):
         if not (span.attributes or {}).get("mcp.method.name"):
             return
@@ -53,8 +54,9 @@ def configure_host_observability(**kwargs):
 
 def current_request_attributes() -> dict[str, Any]:
     attributes = dict(request_correlation.get())
+    # メールは観測用。認証・認可やGraph本人照合には決して使用しない。
     user = baggage.get_baggage("user.id")
-    if "user.id" not in attributes and isinstance(user, str) and re.fullmatch(r"[a-f0-9]{64}", user):
+    if "user.id" not in attributes and isinstance(user, str) and re.fullmatch(r"[^\s@,;=]+@[^\s@,;=]+\.[^\s@,;=]+", user):
         attributes["user.id"] = user
     return attributes
 FORBIDDEN_STANDARD_DUPLICATES = {"agent.invoke", "chat", "function", "tool.invoke", "agent_as_tool"}
@@ -114,7 +116,7 @@ class TelemetryRecorder:
 
     @classmethod
     def for_hosted_runtime(cls) -> "TelemetryRecorder":
-        """Emit through the host-configured global OTel provider/App Insights exporter."""
+        """HostedではHost設定済みProviderを共有する。引数なしの通常生成はローカル検証用。"""
         return cls(tracer_provider=trace.get_tracer_provider())
 
     @property
@@ -125,8 +127,17 @@ class TelemetryRecorder:
     def span(self, name: str, attributes: dict[str, Any] | None = None) -> Iterator[trace.Span]:
         if name not in CUSTOM_SPAN_BOUNDARIES:
             raise ValueError(f"custom span would duplicate Framework or is not approved: {name}")
-        with self.tracer.start_as_current_span(name, attributes=sanitize_attributes({**current_request_attributes(), **(attributes or {})})) as span:
-            yield span
+        # 自動例外eventは本文や同意URLを含み得るため、型とERROR状態だけを記録する。
+        with self.tracer.start_as_current_span(
+            name, attributes=sanitize_attributes({**current_request_attributes(), **(attributes or {})}),
+            record_exception=False, set_status_on_exception=False,
+        ) as span:
+            try:
+                yield span
+            except Exception as exc:
+                span.set_attribute("error.type", type(exc).__name__)
+                span.set_status(trace.StatusCode.ERROR)
+                raise
 
     @staticmethod
     def event(span: trace.Span, name: str, attributes: dict[str, Any] | None = None) -> None:

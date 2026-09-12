@@ -2,7 +2,7 @@
 
 更新日: 2026-09-08。基準ソース: main `79bdb0e`。App Service／Functionsはこのリポジトリのコードをそのまま配布し、別の購買Plan&Execute Hostedへ統合する前提。
 
-移植先のソース・Azure設定は未提供なので、「差分あり」と断定する一覧ではなく、**一致していれば変更不要な照合条件**を示す。具体的な配布先のID・秘密値をこの検証環境の値に置き換えない。詳細な検証環境の値は[設定資料](../deployment/configuration.md)にある。
+移植先のソース・Azure設定は未提供なので、「差分あり」と断定する一覧ではなく、**一致していれば変更不要な照合条件**を示す。具体的な配布先のID・秘密値をこの検証環境の値に置き換えない。詳細な検証環境の値は[設定資料](../../deployment/configuration.md)にある。
 
 ## 1. 結論と必要な範囲
 
@@ -199,7 +199,7 @@ async def invoke_agent_tool(tool, payload, session):
 
 ## 6. OBOを組み込む場合の追加部分
 
-[OBO・user.idの移植用抜粋](hosted-obo-userid-porting.md)に、Bundle依存を外したPythonファイル、接続方法、Tool未設定時の分岐をまとめた。
+[OBO・user.idの移植用抜粋](../../observability-integration/hosted-obo-userid-porting.md)に、Bundle依存を外したPythonファイル、接続方法、Tool未設定時の分岐をまとめた。
 
 OBOも含めた今回の挙動を維持する場合、先に **Host入口で名前取得→必要なら同意待ち→既存Executor** の順にする。現在のSDKではnested Agent Toolの同意を旧Webへそのまま届けるためにprotocol adapterを実装している。ToolをContext Providerへ追加するだけで同意カードまで完成するとは扱わない。
 
@@ -275,7 +275,7 @@ OBOを採用する場合は、既存 `configure_host_observability` のMCP例外
 
 ### 7.2 Plan／Stepの最小挿入例
 
-[最小コード例](examples/minimal_agent_tool_otel.py)は、Exporterを作らずglobal tracerを使う。既存Executorへ次の境界を差し込む。plan／execute／apply_resultはサンプル側の既存処理を束ねた接続点である。
+[最小コード例](../../observability-integration/examples/minimal_agent_tool_otel.py)は、Exporterを作らずglobal tracerを使う。既存Executorへ次の境界を差し込む。plan／execute／apply_resultはサンプル側の既存処理を束ねた接続点である。
 
 ```python
 async def before_run(self, *, agent, session, context, state):
@@ -314,11 +314,11 @@ TelemetryRecorder、HostedAgentBundle、購買Controller、Synthetic評価機能
 
 ## 9. 確認した移植元
 
-- [Web認証設定変更](/home/hnakajima/work/foundry-procurement-agent/scripts/deploy_identity.py:96)
-- [WebのMSAL設定alias](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/server.py:494)
-- [FunctionsのOBO設定](/home/hnakajima/work/foundry-procurement-agent/src/functions-mcp-selfhosted/mcp_server.py:239)
-- [Functions基盤](/home/hnakajima/work/foundry-procurement-agent/infra/identity-functions.bicep)
-- [Context Providerとしての購買実行](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted.py:121)
-- [Agent Toolの実invoke](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted.py:443)
-- [OBO Tool](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/identity.py:83)
-- [同意bridge](/home/hnakajima/work/foundry-procurement-agent/src/procurement_agent/hosted_app.py:99)
+- [Web認証設定変更](../../../scripts/deploy_identity.py)
+- [WebのMSAL設定alias](../../../src/webapp-foundry-oauth/backend/server.py)
+- [FunctionsのOBO設定](../../../src/functions-mcp-selfhosted/mcp_server.py)
+- [Functions基盤](../../../infra/identity-functions.bicep)
+- [Context Providerとしての購買実行](../../../src/hosted-agent/procurement_agent/hosted.py)
+- [Agent Toolの実invoke](../../../src/hosted-agent/procurement_agent/hosted.py)
+- [OBO Tool](../../../src/hosted-agent/procurement_agent/identity.py)
+- [同意bridge](../../../src/hosted-agent/procurement_agent/hosted_app.py)

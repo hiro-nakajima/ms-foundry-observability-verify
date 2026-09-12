@@ -1,7 +1,7 @@
 # OAuth Web・Hosted内OBO Agent Tool 検証記録
 
 対象日: 2026-09-08。指定RG `rg-ms-foundry-observability-verify` に配備。
-実装の対応箇所は [統合ガイド](../observability-integration/README.md)／[OAuth連携詳細](../observability-integration/oauth-wrapper-implementation.md)、実設定の再照会結果は[設定資料](../deployment/configuration.md)を参照。
+実装の対応箇所は [統合ガイド](../observability-integration/README.md)／[OAuth連携詳細](../trash/observability-integration/oauth-wrapper-implementation.md)、実設定の再照会結果は[設定資料](../deployment/configuration.md)を参照。
 
 ## 配備済み構成
 

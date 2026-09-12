@@ -1,26 +1,22 @@
-"""Request-scoped OBO Agent Tool using the existing Hosted Toolbox pattern.
-
-The platform call ID carries caller context; bearer tokens never become agent
-arguments. Only a status is returned by the agent. The verified name remains
-in request-local application state until the procurement controller uses it.
-"""
+"""明示的な本人確認で使うOBO検証用Agent Tool。購買の前処理には使わない。"""
 from __future__ import annotations
 
 import json
 import os
+import re
 from contextvars import ContextVar
 from dataclasses import dataclass
+from urllib.parse import urlsplit
+
+from mcp.shared.exceptions import McpError
 
 from agent_framework import Agent, FunctionInvocationContext
 from agent_framework_foundry_hosting import FoundryToolbox
-from agent_framework_foundry_hosting._responses import consent_url_from_error
+from agent_framework_foundry_hosting._responses import ConsentError, consent_url_from_error
 from opentelemetry import trace
 
 from .framework import DeterministicChatClient
-from .observability import current_request_attributes, sha256
-
-
-lookup_requested: ContextVar[bool] = ContextVar("obo_lookup_requested", default=False)
+from .observability import current_request_attributes
 
 
 @dataclass(frozen=True)
@@ -49,7 +45,8 @@ def parse_whoami_result(result):
     return json.dumps(value, ensure_ascii=False)
 
 
-def verified_name(result, expected_user_hash: str) -> str:
+def verified_name(result) -> str:
+    """信頼済みwhoamiのOBO結果を検査する。本人照合はFunctions側のtoken oidとGraph /me idで行う。"""
     if isinstance(result, list):
         texts = [item.text for item in result if item.type == "text"]
         if len(texts) != 1:
@@ -60,22 +57,43 @@ def verified_name(result, expected_user_hash: str) -> str:
     if not isinstance(result, dict) or result.get("tool") != "whoami" or result.get("auth_mode") != "obo" or result.get("error"):
         raise ValueError("invalid_whoami_result")
     user = result.get("user") or {}
-    subject_hash, name = user.get("subjectHash"), user.get("displayName")
-    if not isinstance(subject_hash, str) or len(subject_hash) != 64 or subject_hash != expected_user_hash:
-        raise ValueError("whoami_subject_mismatch")
+    if not isinstance(user, dict):
+        raise ValueError("invalid_whoami_user")
+    name = user.get("displayName")
+    # baggageや任意metadataは認証情報ではないため、本人照合に使用しない。
     if not isinstance(name, str) or not 0 < len(name.strip()) <= 120 or any(ord(c) < 32 or ord(c) == 127 for c in name):
         raise ValueError("invalid_display_name")
     return name.strip()
 
 
 def _consent(exc):
-    # MCP failures may be wrapped at several SDK boundaries.
+    # tools/listはJSON形式、tools/callはURL単体の-32006を返す場合がある。
+    # SDKは前者だけを解析するため、後者を先に判定して同じ同意イベントへ変換する。
     seen = set()
     while exc is not None and id(exc) not in seen:
         seen.add(id(exc))
-        found = consent_url_from_error(exc)
-        if found:
-            return tuple(found)
+        rpc_error = exc if isinstance(exc, McpError) else next(
+            (arg for arg in exc.args if isinstance(arg, McpError)), None,
+        )
+        if rpc_error is not None and rpc_error.error.code == -32006 and "{" not in rpc_error.error.message:
+            # エラー本文を一般的なURLとして表示せず、Foundryの同意先に限定する。
+            # URLのdata値は認証情報を含み得るため、ログやSpanへ出さない。
+            url = rpc_error.error.message.strip()
+            try:
+                parsed = urlsplit(url)
+                valid = (parsed.scheme == "https" and parsed.hostname is not None
+                         and parsed.hostname.endswith(".consent.azure-apim.net")
+                         and parsed.path == "/login" and parsed.port in (None, 443)
+                         and parsed.username is None and parsed.password is None)
+            except ValueError:
+                valid = False
+            if valid:
+                return (ConsentError(name="whoami_func", consent_url=url),)
+            # SDKへ渡すと未対応形式の本文をwarningに出すので、この形式はここで終える。
+        else:
+            found = consent_url_from_error(exc)
+            if found:
+                return tuple(found)
         exc = exc.__cause__ or exc.__context__
     return ()
 
@@ -113,7 +131,7 @@ def build_identity_tool(credential, *, toolbox_factory=FoundryToolbox):
                     raw = await function.invoke(arguments={}, context=FunctionInvocationContext(
                         function=function, arguments={}), skip_parsing=True)
                     stage = "verify"
-                    name = verified_name(raw, current_request_attributes().get("user.id", ""))
+                    name = verified_name(raw)
                     result = IdentityResult("SUCCESS", name)
             except Exception as exc:
                 consent = _consent(exc)
@@ -143,11 +161,33 @@ def build_identity_tool(credential, *, toolbox_factory=FoundryToolbox):
 
 
 async def invoke_identity(tool) -> IdentityResult:
-    identity_result.set(IdentityResult())
-    if not lookup_requested.get():
-        return identity_result.get()
-    # The operation has no user-controlled arguments and no procurement history.
+    if tool is None:
+        return IdentityResult("UNAVAILABLE")
+    # 引数へTokenや利用者入力を渡さず、プラットフォームの呼出しコンテキストを使う。
     arguments = {"task": "lookup"}
-    await tool.invoke(arguments=arguments,
-                      context=FunctionInvocationContext(function=tool, arguments=arguments), skip_parsing=True)
-    return identity_result.get()
+    token = identity_result.set(IdentityResult())
+    try:
+        await tool.invoke(arguments=arguments,
+                          context=FunctionInvocationContext(function=tool, arguments=arguments), skip_parsing=True)
+        return identity_result.get()
+    finally:
+        identity_result.reset(token)  # 別の要求や通常購買へ名前を持ち越さない。
+
+
+def is_identity_request(text: str) -> bool:
+    """OBO検証への明示的な入口。購買文中の「名前」だけでは起動しない。"""
+    normalized = re.sub(r"[\s、。！？!?]+", "", text).casefold()
+    return normalized in {
+        "私は誰", "私は誰ですか", "わたしは誰", "whoami",
+        "私の名前を教えて", "私の名前を教えてください", "私の名前は", "私の名前は何ですか",
+        "obo", "oboフローを実行", "oboフローを実行して", "oboフローを実行してください",
+        "oboで名前を取得して", "oboで名前を取得してください",
+    }
+
+
+def identity_response_text(result: IdentityResult) -> str:
+    if result.status == "SUCCESS":
+        return f"Graph OBOで取得したあなたの表示名は「{result.name}」です。"
+    if result.status == "UNAVAILABLE":
+        return "この環境にはOBO検証用Toolboxが設定されていません。購買支援は利用できます。"
+    return "OBOによる名前取得に失敗しました。時間をおいて再試行してください。購買支援は利用できます。"

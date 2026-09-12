@@ -27,13 +27,4 @@ procurement-devui = "procurement_agent.devui_app:main"
 procurement-hosted = "procurement_agent.hosted_app:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/procurement_agent", "src/trace_pipeline"]
-
-[tool.pytest.ini_options]
-addopts = "-ra"
-testpaths = ["tests"]
-markers = [
-  "integration: local integration tests",
-  "external: requires external credentials or a deployed Foundry resource",
-  "anyio: asynchronous test executed by the AnyIO pytest plugin",
-]
+packages = ["procurement_agent", "trace_pipeline"]

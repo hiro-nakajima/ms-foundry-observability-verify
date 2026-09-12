@@ -1,6 +1,6 @@
 # App Service：旧OAuth版を再利用した購買支援向け変更
 
-更新日: 2026-09-08。稼働入口は **server.py**、UIは元のOAuth版。購買専用procurement.pyを入口としていた構成から戻した。[実設定](../deployment/appservice-settings.md)／[統合ガイド](README.md)を参照。
+更新日: 2026-09-08。稼働入口は **server.py**、UIは元のOAuth版。購買専用procurement.pyを入口としていた構成から戻した。[実設定](../../deployment/appservice-settings.md)／[統合ガイド](../../observability-integration/README.md)を参照。
 
 ## 1. 旧OAuth版から何を変えたか
 
@@ -23,16 +23,16 @@
 
 | ファイル・関数 | 組み込む内容 |
 | --- | --- |
-| [requirements.txt](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/requirements.txt) | MSAL/dotenv、OTel ASGI/HTTPX、Azure Monitor exporter。backendのrequirementsはこのファイルを参照 |
-| [lifespan](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/telemetry.py:55) | Provider/exporter/Resourceのprocess初期化と終了 |
-| [server.py / FastAPI生成](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/server.py) | FastAPI生成時に観測lifespanを接続 |
-| [BrowserBoundary](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/telemetry.py:90)／[Instrumentation](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/telemetry.py:75) | Browser文脈を破棄してからASGI Spanを生成 |
-| [_get_request_user](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/server.py:349)／[_conversation_state_key](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/server.py:392) | 認証済み利用者hashとowner key |
-| [_build_outbound_headers](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/server.py:590)／[_validate_delegated_subject](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/server.py:638) | 選択した認証方式でToken取得、同一利用者確認 |
-| [_get_foundry_config](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/server.py:649) | PROJECT_ENDPOINTとAGENT_NAMEから接続先を読む |
-| [run](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/procurement_flow.py:29) | Hostedを1つ呼ぶ、同一Foundry会話、OTel、metadata |
-| [_stream_response](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/backend/server.py:678) | Responses SSEを既存UIのeventへ変換。consent付きincompleteをpause扱い |
-| [package-procurement.py](/home/hnakajima/work/foundry-procurement-agent/src/webapp-foundry-oauth/scripts/package-procurement.py) | 配布8ファイル＋依存パッケージの許可リスト |
+| [requirements.txt](../../../src/webapp-foundry-oauth/requirements.txt) | MSAL/dotenv、OTel ASGI/HTTPX、Azure Monitor exporter。backendのrequirementsはこのファイルを参照 |
+| [lifespan](../../../src/webapp-foundry-oauth/backend/telemetry.py) | Provider/exporter/Resourceのprocess初期化と終了 |
+| [server.py / FastAPI生成](../../../src/webapp-foundry-oauth/backend/server.py) | FastAPI生成時に観測lifespanを接続 |
+| [BrowserBoundary](../../../src/webapp-foundry-oauth/backend/telemetry.py)／[Instrumentation](../../../src/webapp-foundry-oauth/backend/telemetry.py) | Browser文脈を破棄してからASGI Spanを生成 |
+| [_get_request_user](../../../src/webapp-foundry-oauth/backend/server.py)／[_conversation_state_key](../../../src/webapp-foundry-oauth/backend/server.py) | 認証済み利用者hashとowner key |
+| [_build_outbound_headers](../../../src/webapp-foundry-oauth/backend/server.py)／[_validate_delegated_subject](../../../src/webapp-foundry-oauth/backend/server.py) | 選択した認証方式でToken取得、同一利用者確認 |
+| [_get_foundry_config](../../../src/webapp-foundry-oauth/backend/server.py) | PROJECT_ENDPOINTとAGENT_NAMEから接続先を読む |
+| [run](../../../src/webapp-foundry-oauth/backend/procurement_flow.py) | Hostedを1つ呼ぶ、同一Foundry会話、OTel、metadata |
+| [_stream_response](../../../src/webapp-foundry-oauth/backend/server.py) | Responses SSEを既存UIのeventへ変換。consent付きincompleteをpause扱い |
+| [package-procurement.py](../../../src/webapp-foundry-oauth/scripts/package-procurement.py) | 配布8ファイル＋依存パッケージの許可リスト |
 
 ソース内に残る `_build_outbound_headers()` の「procurement always explicitly selects MI」というdocstringは旧説明である。実際の呼出し元 `procurement_flow.run()` とAzure設定では `refresh_token` を明示選択しており、本書は実行コード・実設定を基準にする。
 
@@ -69,6 +69,6 @@ Webのjob・再開情報は **1workerのメモリ内**。App Serviceの再起動
 
 ## 5. 配布と検証
 
-配布ZIPはstartup.sh、root requirements、server.py、procurement_flow.py、telemetry.py、旧HTML/JS/CSSの8ファイルとLinux/Python 3.13依存を含む。旧購買専用procurement.py／procurement.* UIは参考ソースとして残るが収録しない。Oryx無効設定との組み合わせは[App Service設定](../deployment/appservice-settings.md)を参照。
+配布ZIPはstartup.sh、root requirements、server.py、procurement_flow.py、telemetry.py、旧HTML/JS/CSSの8ファイルとLinux/Python 3.13依存を含む。旧購買専用procurement.py／procurement.* UIは参考ソースとして残るが収録しない。Oryx無効設定との組み合わせは[App Service設定](../../deployment/appservice-settings.md)を参照。
 
-最終全体回帰は234 passed、1 skipped、2 subtests。同梱したWeb依存での回帰は22 passedと2 subtests。実Webから同意後に名前表示を確認し、Web→Hosted→Functions→GraphのTraceも照合済み。Web全購買シナリオは未検証であり、[検証記録](../report/validation-results-2026-09-08-obo.md)で分けて記載する。
+最終全体回帰は234 passed、1 skipped、2 subtests。同梱したWeb依存での回帰は22 passedと2 subtests。実Webから同意後に名前表示を確認し、Web→Hosted→Functions→GraphのTraceも照合済み。Web全購買シナリオは未検証であり、[検証記録](../../report/validation-results-2026-09-08-obo.md)で分けて記載する。

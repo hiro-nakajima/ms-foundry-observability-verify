@@ -1,0 +1,33 @@
+{
+  "case": "OBO-ROUTE-65466af2bea7",
+  "expected_version": "35",
+  "path": "direct-foundry-not-web",
+  "trace_id": "90235856a25d4550bacfb68e2b36b5d5",
+  "turns": [
+    {
+      "turn": 1,
+      "response_id": "caresp_01b83931bee8ce4c00ZKnEpHlSyYWUV4vNHOVgwyRp6F5MnnLb",
+      "status": "incomplete",
+      "output_types": [
+        "oauth_consent_request"
+      ],
+      "name_response": false,
+      "lookup_failed": false,
+      "obsolete_skip_message": false,
+      "text_present": false
+    },
+    {
+      "turn": 2,
+      "response_id": "caresp_01b83931bee8ce4c00u7OXyZXIGZq0ZzhZpKYpwMq8pvBmvdp2",
+      "status": "completed",
+      "output_types": [
+        "message"
+      ],
+      "name_response": false,
+      "lookup_failed": false,
+      "obsolete_skip_message": false,
+      "text_present": true
+    }
+  ],
+  "conversation_id": "conv_01b83931bee8ce4c00yjwc8SuCskaTtnWvEWvrzLfSHpU6AdKY"
+}

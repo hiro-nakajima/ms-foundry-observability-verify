@@ -6,7 +6,7 @@ import procurement_agent.hosted as hosted_module
 
 from procurement_agent.framework import DeterministicChatClient, local_parent_handler
 from procurement_agent.hosted import (
-    FoundryRuntimeSettings, authenticated_applicant_name, build_hosted_bundle,
+    FoundryRuntimeSettings, build_hosted_bundle,
     _execute_hosted_components,
 )
 from procurement_agent.models import (
@@ -173,14 +173,10 @@ async def test_hosted_turn_extracts_request_and_plan_in_one_model_call(valid_req
     assert child_sessions == [None, None]
 
     exposed_session = AgentSession()
-    token = authenticated_applicant_name.set("架空 太郎")
-    try:
-        for message in ("開発用ノートPCを申請", "商品コード LAPTOP-DEV-14 を選びます。", "詳細を入力"):
-            response = await bundle.parent.run(message, session=exposed_session)
-            assert response.text
-        response = await bundle.parent.run("確定", session=exposed_session)
-    finally:
-        authenticated_applicant_name.reset(token)
+    for message in ("開発用ノートPCを申請", "商品コード LAPTOP-DEV-14 を選びます。", "詳細を入力"):
+        response = await bundle.parent.run(message, session=exposed_session)
+        assert response.text
+    response = await bundle.parent.run("確定", session=exposed_session)
     assert response.text.startswith("購買申請案を確定しました")
     exposed_state = load_execution_state(exposed_session)
     assert exposed_state.plan.status.name == "COMPLETED"

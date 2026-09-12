@@ -47,7 +47,7 @@ services:
 
   procurement-parent:
     host: azure.ai.agent
-    project: .
+    project: src/hosted-agent
     uses:
       - ai-project
     kind: hosted

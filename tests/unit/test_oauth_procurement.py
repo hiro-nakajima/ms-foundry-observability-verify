@@ -18,6 +18,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 def principal(oid="synthetic-user"):
     return base64.b64encode(json.dumps({"claims": [
         {"typ": "tid", "val": "synthetic-tenant"}, {"typ": "oid", "val": oid},
+        {"typ": "email", "val": "tester@example.invalid"},
     ]}).encode()).decode()
 
 
@@ -43,10 +44,10 @@ def web(monkeypatch):
     calls, modes, options = [], [], {"mode": "success", "release": False}
 
     async def headers(request, auth_mode="managed_identity"):
-        modes.append((auth_mode, server._get_request_user(request)["id"]))
+        modes.append((auth_mode, server.auth._get_request_user(request)["id"]))
         return {"Authorization": "Bearer TEST-" + auth_mode}
 
-    monkeypatch.setattr(server, "_build_outbound_headers", headers)
+    monkeypatch.setattr(server.auth, "_build_outbound_headers", headers)
 
     async def upstream(request):
         body = json.loads(request.content)
@@ -55,12 +56,12 @@ def web(monkeypatch):
             return httpx.Response(200, json={"id": "conv_" + str(len(calls))})
         mode, output = options["mode"], []
         rid = "resp_procurement_" + str(len(calls))
-        if mode == "hold" and body["metadata"]["app.identity.lookup"] == "true":
+        if mode == "hold":
             while not options["release"]:
                 await asyncio.sleep(.01)
         if mode == "http_error":
             return httpx.Response(401, text="SECRET upstream error")
-        if mode in {"consent", "approval"} and not options.get("consented") and body["metadata"]["app.identity.lookup"] == "true":
+        if mode in {"consent", "approval"} and not options.get("consented"):
             output = ([{"type": "oauth_consent_request", "consent_link": "https://consent.test/login?state=SECRET"}]
                       if mode == "consent" else [{"type": "mcp_approval_request", "id": "approval_1",
                           "server_label": "whoami_func", "name": "whoami", "arguments": "{}"}])
@@ -102,7 +103,8 @@ def test_single_target_delegated_request_and_safe_telemetry(web):
     assert modes == [("refresh_token", "synthetic-user")]
     assert len(calls) == 2 and all("/foundry/proj-default/agents/procurement-parent-agent/" in c["path"] for c in calls)
     body = calls[-1]["body"]
-    assert body["metadata"]["app.identity.lookup"] == "true"
+    assert "app.identity.lookup" not in body["metadata"]
+    assert "app.user.id" not in body["metadata"]
     assert "app.authenticated.display_name" not in body["metadata"]
     assert "previous_response_id" not in body
     span_data = str([(dict(s.attributes), s.events) for s in exporter.get_finished_spans()])
@@ -114,10 +116,10 @@ def test_skip_keeps_same_principal_and_conversation(web):
     client, _, _, calls, modes, _, _ = web
     finish(client, start(client))
     conversation = calls[-1]["body"]["conversation"]
-    job = finish(client, start(client, lookupApplicant=False))
+    job = finish(client, start(client))
     assert job["status"] == "completed" and len(calls) == 3
     assert calls[-1]["body"]["conversation"] == conversation
-    assert calls[-1]["body"]["metadata"]["app.identity.lookup"] == "false"
+    assert "app.identity.lookup" not in calls[-1]["body"]["metadata"]
     assert modes[-1][0] == "refresh_token"
 
 
@@ -137,13 +139,19 @@ def test_continue_replays_original_message_on_same_conversation(web, mode):
     assert client.post("/api/continue", json={"conversationId": "web_1"}).status_code == 409
 
 
-def test_pending_lookup_can_be_skipped(web):
+def test_removed_identity_contract_is_not_accepted(web):
+    client, _, _, _, _, _, _ = web
+    assert start(client, lookupApplicant=True).status_code == 422
+    assert client.post("/api/continue", json={"conversationId": "web_1", "skipIdentity": True}).status_code == 422
+
+
+def test_declined_approval_is_forwarded_to_agent(web):
     client, _, _, calls, _, _, options = web
-    options["mode"] = "consent"
+    options["mode"] = "approval"
     finish(client, start(client))
-    done = finish(client, client.post("/api/continue", json={"conversationId": "web_1", "skipIdentity": True}))
-    assert done["status"] == "completed" and len(calls) == 3
-    assert calls[-1]["body"]["metadata"]["app.identity.lookup"] == "false"
+    options["consented"] = True
+    finish(client, client.post("/api/continue", json={"conversationId": "web_1", "approve": False}))
+    assert calls[-1]["body"]["input"][0] == {"type": "mcp_approval_response", "approve": False, "approval_request_id": "approval_1"}
 
 
 def test_concurrent_turn_rejected_and_cancel_releases_state(web):
@@ -156,12 +164,13 @@ def test_concurrent_turn_rejected_and_cancel_releases_state(web):
     cancelled = client.post(f"/api/jobs/{first.json()['jobId']}/cancel")
     assert cancelled.json()["status"] == "cancelled"
     assert client.delete("/api/conversations/web_1").status_code == 200
-    finish(client, start(client, lookupApplicant=False))
+    options["release"] = True
+    finish(client, start(client))
 
 
 def test_identity_state_is_owner_scoped_and_browser_cannot_supply_name(web):
     client, _, _, _, _, _, _ = web
-    first = finish(client, start(client, lookupApplicant=False))
+    first = finish(client, start(client))
     client.headers["x-ms-client-principal"] = principal("other-user")
     assert client.get(f"/api/jobs/{first['jobId']}").status_code == 404
     assert client.get("/api/conversations/web_1/state").json()["hasPreviousResponse"] is False
@@ -172,12 +181,12 @@ def test_identity_state_is_owner_scoped_and_browser_cannot_supply_name(web):
 def test_browser_trace_is_discarded_and_real_httpx_injects_context(web):
     client, _, _, calls, _, exporter, _ = web
     client.headers.update({"traceparent": "00-" + "a" * 32 + "-" + "b" * 16 + "-01", "baggage": "user.id=forged,email=PRIVATE"})
-    job = finish(client, start(client, lookupApplicant=False))
+    job = finish(client, start(client))
     assert job["traceId"] not in {"a" * 32, "0" * 32}
     user_id = hashlib.sha256(b"synthetic-tenant:synthetic-user").hexdigest()
     for call in calls:
         assert call["headers"]["traceparent"].split("-")[1] == job["traceId"]
-        assert call["headers"]["baggage"] == "user.id=" + user_id
+        assert call["headers"]["baggage"] == "user.id=tester%40example.invalid"
     job_span = next(s for s in exporter.get_finished_spans() if s.name == "web.chat.job")
     assert job_span.parent is not None and job_span.attributes["user.id"] == user_id
 
@@ -194,22 +203,97 @@ def test_delegated_token_subject_audience_and_user_scope(web, bad_claim):
     request = Request({"type": "http", "headers": [(b"x-ms-client-principal", principal().encode())]})
     if bad_claim:
         with pytest.raises(HTTPException):
-            server._validate_delegated_subject(token, request)
+            server.auth._validate_delegated_subject(token, request)
     else:
-        server._validate_delegated_subject(token, request)
+        server.auth._validate_delegated_subject(token, request)
 
 
 def test_token_failure_does_not_change_principal_or_leak_error(web, monkeypatch):
     from fastapi import HTTPException
     client, server, _, calls, _, _, _ = web
-    original = server._build_outbound_headers
+    original = server.auth._build_outbound_headers
 
     async def headers(request, auth_mode):
         if auth_mode != "managed_identity":
             raise HTTPException(401, "PRIVATE token failure")
         return await original(request, auth_mode)
 
-    monkeypatch.setattr(server, "_build_outbound_headers", headers)
+    monkeypatch.setattr(server.auth, "_build_outbound_headers", headers)
     job = finish(client, start(client))
     assert job["status"] == "failed"
     assert calls == [] and "PRIVATE" not in json.dumps(job)
+
+
+@pytest.mark.parametrize("mode,outcome", [("success", "completed"), ("http_error", "failed"),
+                                         ("consent", "oauth_consent_required"),
+                                         ("approval", "mcp_approval_required")])
+def test_job_outcome_and_log_trace_correlation(web, mode, outcome):
+    from opentelemetry.sdk._logs.export import InMemoryLogRecordExporter, SimpleLogRecordProcessor
+    from opentelemetry.trace import StatusCode
+
+    client, server, _, _, _, exporter, options = web
+    logs = InMemoryLogRecordExporter()
+    server.app.state.log_provider.add_log_record_processor(SimpleLogRecordProcessor(logs))
+    options["mode"] = mode
+    job = finish(client, start(client))
+    span = next(s for s in exporter.get_finished_spans() if s.name == "web.chat.job")
+    assert span.attributes["app.operation.outcome"] == outcome
+    assert (span.status.status_code == StatusCode.ERROR) == (mode == "http_error")
+    if mode != "http_error":
+        assert span.attributes["gen_ai.response.id"] == job["responseId"]
+    assert span.attributes["gen_ai.conversation.id"].startswith("conv_")
+    record = next(r.log_record for r in logs.get_finished_logs()
+                  if str(r.log_record.body).startswith("Web job finished:"))
+    assert record.trace_id == span.context.trace_id
+    assert record.span_id == span.context.span_id
+    assert record.attributes["test.case.id"] == job["testCaseId"]
+    data = str([(r.log_record.body, dict(r.log_record.attributes)) for r in logs.get_finished_logs()])
+    for secret in ("SECRET", "PRIVATE", "Bearer", "synthetic-user"):
+        assert secret not in data
+
+
+def test_cancel_has_distinct_outcome(web):
+    client, _, _, _, _, exporter, options = web
+    options["mode"] = "hold"
+    first = start(client)
+    # Wait until the mock upstream is inside the running job.
+    for _ in range(200):
+        if len(web[3]) >= 2:
+            break
+        time.sleep(.01)
+    client.post(f"/api/jobs/{first.json()['jobId']}/cancel")
+    span = next(s for s in exporter.get_finished_spans() if s.name == "web.chat.job")
+    assert span.attributes["app.operation.outcome"] == "cancelled"
+
+
+def test_diagnostics_match_sent_headers_and_exclude_credentials(web):
+    client, _, _, calls, _, _, _ = web
+    job = finish(client, start(client))
+    diagnostic = job["diagnostics"]
+    assert diagnostic["sentHeaders"]["traceparent"] == calls[-1]["headers"]["traceparent"]
+    assert diagnostic["sentHeaders"]["baggage"] == calls[-1]["headers"]["baggage"]
+    assert diagnostic["sentHeaders"]["userId"] == "tester@example.invalid"
+    assert diagnostic["foundryConversationId"] == calls[-1]["body"]["conversation"]
+    assert diagnostic["webConversationId"] == "web_1"
+    assert "Bearer" not in json.dumps(diagnostic) and "Authorization" not in json.dumps(diagnostic)
+    stream = client.get(f"/api/jobs/{job['jobId']}/events").text
+    assert stream.index('"type": "diagnostics"') < stream.index('"type": "done"')
+
+
+def test_missing_email_does_not_invent_baggage(web):
+    client, _, _, calls, _, _, _ = web
+    claims = {"claims": [{"typ": "tid", "val": "synthetic-tenant"}, {"typ": "oid", "val": "synthetic-user"}]}
+    client.headers["x-ms-client-principal"] = base64.b64encode(json.dumps(claims).encode()).decode()
+    job = finish(client, start(client))
+    assert not calls[-1]["headers"].get("baggage")
+    assert not job["diagnostics"]["sentHeaders"].get("userId")
+
+
+def test_diagnostic_header_allowlist():
+    import telemetry
+    response = httpx.Response(200, request=httpx.Request("POST", "https://example.test", headers={
+        "Authorization": "Bearer SECRET", "baggage": "secret=SECRET,user.id=tester%40example.invalid",
+    }))
+    result = {}
+    telemetry.capture_sent_headers(response, result)
+    assert result == {"baggage": "user.id=tester%40example.invalid", "userId": "tester@example.invalid"}

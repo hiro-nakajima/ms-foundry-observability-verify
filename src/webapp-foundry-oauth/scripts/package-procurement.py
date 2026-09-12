@@ -12,6 +12,7 @@ def main():
     root = Path(__file__).resolve().parents[1]
     files = ["startup.sh", "requirements.txt", "backend/server.py",
              "backend/procurement_flow.py", "backend/telemetry.py",
+             "backend/auth.py", "backend/foundry_client.py",
              "backend/static/index.html", "backend/static/app.js", "backend/static/styles.css"]
     # Exclusive creation prevents overwriting user artifacts or a previous package.
     with ZipFile(args.output, "x", ZIP_DEFLATED) as archive:

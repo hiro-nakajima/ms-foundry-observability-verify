@@ -41,7 +41,7 @@ SKU/locationは実resourceと一致する値を明示する。state directoryは
 ## 前提ツール
 
 - Azure CLIで対象tenant/subscriptionへlogin済み
-- Python 3.13のvirtual environmentとroot `requirements.txt`のinstall
+- Python 3.13のvirtual environmentと`src/hosted-agent/requirements.txt`のinstall
 - Foundry SDK操作では`azure-ai-projects` 2.3.0
 - source ZIP deploymentでは`azure-ai-projects` 2.2.0以上
 - Azureへのwrite前にread-only inventoryとRBAC確認
